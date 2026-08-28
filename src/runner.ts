@@ -49,6 +49,13 @@ export interface RunnerDeps {
   graceMs?: number;
   /** Delay between SIGTERM and SIGKILL escalation. */
   killGraceMs?: number;
+  /**
+   * How long a quota/capacity line must sit in the log with NO further log
+   * growth before the run is killed and failed over. A quota line that keeps
+   * appearing while the log still grows is treated as a transient/recovering
+   * state and left to agy's own retry. 0 disables the window (tests).
+   */
+  quotaConfirmMs?: number;
 }
 
 export type ExecFn = (
@@ -225,6 +232,7 @@ export async function runAgy(
   const pollMs = deps.pollMs ?? 1_000;
   const graceMs = deps.graceMs ?? 10_000;
   const killGraceMs = deps.killGraceMs ?? 5_000;
+  const quotaConfirmMs = deps.quotaConfirmMs ?? 20_000;
   const logPath = deps.makeLogPath();
 
   const stdout = await new Promise<string>((resolve, reject) => {
@@ -271,7 +279,10 @@ export async function runAgy(
         req.onProgress?.(elapsed);
 
         const quota = detectQuota(log);
-        if (quota) {
+        if (quota && Date.now() - lastActivityTime > quotaConfirmMs) {
+          // Capacity line present AND the log has been quiet: agy is stuck
+          // retrying a real 429. Kill and fail over. A quota line in a still-
+          // growing log is transient/benign — let agy's own retry run.
           killChild();
           finish(() => reject(new QuotaError(req.model, quota)));
           return;

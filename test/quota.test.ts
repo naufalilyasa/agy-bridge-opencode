@@ -51,6 +51,16 @@ describe("detectQuota", () => {
   it("returns null on a clean log", () => {
     expect(detectQuota("I0613 print mode: sending message\nall good")).toBeNull();
   });
+  it("treats generic runtime errors as NOT quota (no false-positive kill)", () => {
+    const benignLines = [
+      "ERROR: logging before google.Init: E0828 errorreport.go:223] Failed to poll ListExperiments: error getting token source: You are not logged into Antigravity.",
+      "ERROR: logging before google.Init: E0828 agent.go:42] Agent execution terminated due to error: retrying",
+      "ERROR: logging before google.Init: E0828 runner.go:17] Error ID: 7f9a3b1c-4d2e 5f6a-8b7c-9d0e1f2a3b4c",
+    ];
+    for (const line of benignLines) {
+      expect(detectQuota(line)).toBeNull();
+    }
+  });
 });
 
 describe("QuotaError", () => {

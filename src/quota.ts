@@ -5,12 +5,19 @@
  * silently retries until --print-timeout, then exits 0 with empty output.
  * The only reliable signal is the 429 line in its log file, which includes
  * the exact reset time ("Resets in 96h53m25s").
+ *
+ * Only *capacity* signals are matched. Generic runtime errors ("Error ID:",
+ * "Agent execution terminated due to error") are deliberately NOT treated as
+ * quota: agy's glog runtime log is full of benign error-looking lines, and a
+ * false positive kills a healthy run. Those lines are instead surfaced by the
+ * post-run error path (server.ts isTerminatedOrError) as a follow_up recovery
+ * instruction, not as a model failover trigger.
  */
 
 export const DEFAULT_COOLDOWN_SEC = 15 * 60;
 
 const QUOTA_RE =
-  /(?:RESOURCE_EXHAUSTED \(code 429\)|experiencing high traffic|UNAVAILABLE \(code 503\)|model is overloaded|rate limit exceeded|servers are experiencing high traffic|Agent execution terminated due to error|Error ID:)/i;
+  /(?:RESOURCE_EXHAUSTED \(code 429\)|experiencing high traffic|UNAVAILABLE \(code 503\)|model is overloaded|rate limit exceeded)/i;
 const RESET_RE = /Resets in ((?:\d+h)?(?:\d+m)?(?:\d+s)?)\b/;
 
 export interface QuotaInfo {

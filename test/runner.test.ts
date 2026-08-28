@@ -68,6 +68,7 @@ function fakeDeps(opts: FakeOpts = {}) {
     pollMs: 5,
     graceMs: 20,
     killGraceMs: 5,
+    quotaConfirmMs: 0,
   };
 
   return { deps, kills, removed, args: () => capturedArgs };
