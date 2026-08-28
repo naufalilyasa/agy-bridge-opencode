@@ -84,7 +84,12 @@ function fitText(text, maxLen) {
 function unescapeCodeString(str) {
   if (!str || typeof str !== "string") return "";
   let clean = str;
-  if (clean.includes("\\n") || clean.includes('\\"') || clean.includes("\\t") || clean.includes("\\r")) {
+  if (
+    clean.includes("\\n") ||
+    clean.includes('\\"') ||
+    clean.includes("\\t") ||
+    clean.includes("\\r")
+  ) {
     clean = clean
       .replace(/\\r\\n/g, "\n")
       .replace(/\\n/g, "\n")
@@ -141,12 +146,16 @@ function formatLineNum(num, width = 4) {
 
 function isAgyRuntimeError(text) {
   if (!text || typeof text !== "string") return false;
-  return /(?:Agent execution terminated due to error|Error ID:\s*[0-9a-f-]+|experiencing high traffic|RESOURCE_EXHAUSTED \(code 429\)|rate limit exceeded|UNAVAILABLE \(code 503\)|model is overloaded|servers are experiencing high traffic)/i.test(text);
+  return /(?:Agent execution terminated due to error|Error ID:\s*[0-9a-f-]+|experiencing high traffic|RESOURCE_EXHAUSTED \(code 429\)|rate limit exceeded|UNAVAILABLE \(code 503\)|model is overloaded|servers are experiencing high traffic)/i.test(
+    text,
+  );
 }
 
 function isCommandOrBuildError(text) {
   if (!text || typeof text !== "string") return false;
-  return /(?:BUILD FAILED|Compilation error|CompilationWork|Unresolved reference|Syntax error|Argument type mismatch|exited with code [1-9]|FAILURE:)/i.test(text);
+  return /(?:BUILD FAILED|Compilation error|CompilationWork|Unresolved reference|Syntax error|Argument type mismatch|exited with code [1-9]|FAILURE:)/i.test(
+    text,
+  );
 }
 
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -228,9 +237,23 @@ function renderBottomBar(width) {
     isIdle = false;
     const remainingSec = Math.ceil((scheduledUntilMs - now) / 1000);
     const frame = SPINNER[spinnerIdx % SPINNER.length];
-    return "  " + C.yellow + C.bold + frame + " ⏳ [WAITING SCHEDULE] " + C.reset + 
-           C.white + scheduledPrompt + C.reset + " " + 
-           C.cyan + "(" + remainingSec + "s tersisa)" + C.reset;
+    return (
+      "  " +
+      C.yellow +
+      C.bold +
+      frame +
+      " ⏳ [WAITING SCHEDULE] " +
+      C.reset +
+      C.white +
+      scheduledPrompt +
+      C.reset +
+      " " +
+      C.cyan +
+      "(" +
+      remainingSec +
+      "s tersisa)" +
+      C.reset
+    );
   }
 
   const timeSinceLastActivity = now - lastActivityTime;
@@ -239,12 +262,34 @@ function renderBottomBar(width) {
   }
 
   if (isIdle) {
-    return "  " + C.dim + "💤 Menunggu delegasi/perintah agy berikutnya... (" + Math.floor(timeSinceLastActivity / 1000) + "s idle)" + C.reset;
+    return (
+      "  " +
+      C.dim +
+      "💤 Menunggu delegasi/perintah agy berikutnya... (" +
+      Math.floor(timeSinceLastActivity / 1000) +
+      "s idle)" +
+      C.reset
+    );
   }
 
   const elapsed = Math.floor((now - startTime) / 1000);
   const frame = SPINNER[spinnerIdx % SPINNER.length];
-  return "  " + C.cyan + frame + C.reset + " " + C.bold + lastStatusText + C.reset + " " + C.dim + "(" + elapsed + "s)" + C.reset;
+  return (
+    "  " +
+    C.cyan +
+    frame +
+    C.reset +
+    " " +
+    C.bold +
+    lastStatusText +
+    C.reset +
+    " " +
+    C.dim +
+    "(" +
+    elapsed +
+    "s)" +
+    C.reset
+  );
 }
 
 function redrawUI() {
@@ -260,8 +305,10 @@ function redrawUI() {
   let buf = "\x1b[?25l\x1b[H"; // Hide cursor and move to (1,1)
 
   // 1. Top Headers (2 Columns)
-  const leftHeader = C.bgBlue + C.white + C.bold + padLine("  📜 AGY ACTIVITY LOG", leftWidth) + C.reset;
-  const rightHeader = C.bgCyan + C.black + C.bold + padLine("  ℹ️ MONITOR & STATS", sidebarWidth) + C.reset;
+  const leftHeader =
+    C.bgBlue + C.white + C.bold + padLine("  📜 AGY ACTIVITY LOG", leftWidth) + C.reset;
+  const rightHeader =
+    C.bgCyan + C.black + C.bold + padLine("  ℹ️ MONITOR & STATS", sidebarWidth) + C.reset;
   buf += leftHeader + C.gray + "│" + C.reset + rightHeader + "\n";
 
   // Top Border
@@ -273,9 +320,10 @@ function redrawUI() {
   const estOutputTokens = Math.round(totalOutputChars / 4);
   const estTotalTokens = estPromptTokens + estThinkingTokens + estOutputTokens;
 
-  const folderName = currentSession.projectDir && currentSession.projectDir !== "(Unbound session)" 
-    ? path.basename(currentSession.projectDir) 
-    : "Unbound";
+  const folderName =
+    currentSession.projectDir && currentSession.projectDir !== "(Unbound session)"
+      ? path.basename(currentSession.projectDir)
+      : "Unbound";
 
   const sizeKb = Math.round(currentSession.size / 1024);
   const sizeDisplay = sizeKb > 1024 ? (sizeKb / 1024).toFixed(1) + " MB" : sizeKb + " KB";
@@ -289,10 +337,39 @@ function redrawUI() {
     " " + C.dim + "📄 LogSize: " + C.white + sizeDisplay + C.reset,
     C.gray + " " + "─".repeat(Math.max(4, sidebarWidth - 3)) + C.reset,
     " " + C.yellow + C.bold + "📊 EST. TOKENS (~ch/4):" + C.reset,
-    "  " + C.dim + "• Prompt   :" + C.reset + " " + C.white + formatTokenCount(estPromptTokens) + C.reset,
-    "  " + C.dim + "• Thinking :" + C.reset + " " + C.magenta + formatTokenCount(estThinkingTokens) + C.reset,
-    "  " + C.dim + "• Output   :" + C.reset + " " + C.green + formatTokenCount(estOutputTokens) + C.reset,
-    "  " + C.dim + "• Total    :" + C.reset + " " + C.yellow + C.bold + formatTokenCount(estTotalTokens) + C.reset,
+    "  " +
+      C.dim +
+      "• Prompt   :" +
+      C.reset +
+      " " +
+      C.white +
+      formatTokenCount(estPromptTokens) +
+      C.reset,
+    "  " +
+      C.dim +
+      "• Thinking :" +
+      C.reset +
+      " " +
+      C.magenta +
+      formatTokenCount(estThinkingTokens) +
+      C.reset,
+    "  " +
+      C.dim +
+      "• Output   :" +
+      C.reset +
+      " " +
+      C.green +
+      formatTokenCount(estOutputTokens) +
+      C.reset,
+    "  " +
+      C.dim +
+      "• Total    :" +
+      C.reset +
+      " " +
+      C.yellow +
+      C.bold +
+      formatTokenCount(estTotalTokens) +
+      C.reset,
     C.gray + " " + "─".repeat(Math.max(4, sidebarWidth - 3)) + C.reset,
     " " + C.yellow + C.bold + "⌨️  KEYBINDINGS:" + C.reset,
     "  " + C.yellow + "[s]" + C.reset + " Ganti Sesi",
@@ -318,22 +395,34 @@ function redrawUI() {
   for (let i = 0; i < vHeight; i++) {
     const leftText = i < visibleLogSlice.length ? visibleLogSlice[i] : "";
     const rightText = i < sidebarLines.length ? sidebarLines[i] : "";
-    buf += padLine(leftText, leftWidth) + C.gray + "│" + C.reset + padLine(rightText, sidebarWidth) + "\n";
+    buf +=
+      padLine(leftText, leftWidth) +
+      C.gray +
+      "│" +
+      C.reset +
+      padLine(rightText, sidebarWidth) +
+      "\n";
   }
 
   // 4. Bottom Divider & Status Bar
   buf += C.gray + "━".repeat(width) + C.reset + "\n";
-  
-  const scrollStatus = scrollOffset > 0 
-    ? C.yellow + C.bold + ` [SCROLL: +${scrollOffset} baris ke atas | 'G' ke bawah]` + C.reset
-    : C.green + " [LIVE]" + C.reset;
+
+  const scrollStatus =
+    scrollOffset > 0
+      ? C.yellow + C.bold + ` [SCROLL: +${scrollOffset} baris ke atas | 'G' ke bawah]` + C.reset
+      : C.green + " [LIVE]" + C.reset;
 
   buf += padLine(renderBottomBar(width - 30) + scrollStatus, width);
 
   process.stdout.write(buf);
 }
 
-function formatDiffWithLineNumbers(targetContent, replacementContent, startLine = 1, maxLines = Infinity) {
+function formatDiffWithLineNumbers(
+  targetContent,
+  replacementContent,
+  startLine = 1,
+  maxLines = Infinity,
+) {
   const tWidth = getTerminalWidth();
   const maxAllowedColWidth = Math.max(16, Math.floor((tWidth - 22) / 2));
   const cleanTarget = unescapeCodeString(targetContent);
@@ -353,10 +442,48 @@ function formatDiffWithLineNumbers(targetContent, replacementContent, startLine 
 
   let output = "";
   // Top border
-  output += C.gray + "    ┌──────┬" + "─".repeat(colWidth + 2) + "┬──────┬" + "─".repeat(colWidth + 2) + "┐" + C.reset + "\n";
+  output +=
+    C.gray +
+    "    ┌──────┬" +
+    "─".repeat(colWidth + 2) +
+    "┬──────┬" +
+    "─".repeat(colWidth + 2) +
+    "┐" +
+    C.reset +
+    "\n";
   // Column Header
-  output += C.gray + "    │" + C.bold + " LINE " + C.gray + "│ " + C.red + C.bold + "ORIGINAL (-)".padEnd(colWidth, " ") + C.gray + " │" + C.bold + " LINE " + C.gray + "│ " + C.green + C.bold + "MODIFIED (+)".padEnd(colWidth, " ") + C.gray + " │" + C.reset + "\n";
-  output += C.gray + "    ├──────┼" + "─".repeat(colWidth + 2) + "┼──────┼" + "─".repeat(colWidth + 2) + "┤" + C.reset + "\n";
+  output +=
+    C.gray +
+    "    │" +
+    C.bold +
+    " LINE " +
+    C.gray +
+    "│ " +
+    C.red +
+    C.bold +
+    "ORIGINAL (-)".padEnd(colWidth, " ") +
+    C.gray +
+    " │" +
+    C.bold +
+    " LINE " +
+    C.gray +
+    "│ " +
+    C.green +
+    C.bold +
+    "MODIFIED (+)".padEnd(colWidth, " ") +
+    C.gray +
+    " │" +
+    C.reset +
+    "\n";
+  output +=
+    C.gray +
+    "    ├──────┼" +
+    "─".repeat(colWidth + 2) +
+    "┼──────┼" +
+    "─".repeat(colWidth + 2) +
+    "┤" +
+    C.reset +
+    "\n";
 
   let renderedVisualRows = 0;
 
@@ -399,21 +526,69 @@ function formatDiffWithLineNumbers(targetContent, replacementContent, startLine 
         }
       }
 
-      output += C.gray + "    │" + leftColor + " " + leftNum + " " + C.gray + "│ " + leftColor + leftContent + C.gray + " │" + rightColor + " " + rightNum + " " + C.gray + "│ " + rightColor + rightContent + C.gray + " │" + C.reset + "\n";
+      output +=
+        C.gray +
+        "    │" +
+        leftColor +
+        " " +
+        leftNum +
+        " " +
+        C.gray +
+        "│ " +
+        leftColor +
+        leftContent +
+        C.gray +
+        " │" +
+        rightColor +
+        " " +
+        rightNum +
+        " " +
+        C.gray +
+        "│ " +
+        rightColor +
+        rightContent +
+        C.gray +
+        " │" +
+        C.reset +
+        "\n";
     }
 
     if (renderedVisualRows >= maxLines) {
       const remainingLines = totalLogicalLines - k - 1;
       if (remainingLines > 0) {
         const moreText = `... (${remainingLines} baris lainnya)`;
-        output += C.gray + "    ├──────┴" + "─".repeat(colWidth + 2) + "┴──────┴" + "─".repeat(colWidth + 2) + "┤" + C.reset + "\n";
-        output += C.gray + "    │ " + C.dim + moreText.padEnd(colWidth * 2 + 15, " ") + C.gray + " │" + C.reset + "\n";
+        output +=
+          C.gray +
+          "    ├──────┴" +
+          "─".repeat(colWidth + 2) +
+          "┴──────┴" +
+          "─".repeat(colWidth + 2) +
+          "┤" +
+          C.reset +
+          "\n";
+        output +=
+          C.gray +
+          "    │ " +
+          C.dim +
+          moreText.padEnd(colWidth * 2 + 15, " ") +
+          C.gray +
+          " │" +
+          C.reset +
+          "\n";
       }
       break;
     }
   }
 
-  output += C.gray + "    └──────┴" + "─".repeat(colWidth + 2) + "┴──────┴" + "─".repeat(colWidth + 2) + "┘" + C.reset + "\n";
+  output +=
+    C.gray +
+    "    └──────┴" +
+    "─".repeat(colWidth + 2) +
+    "┴──────┴" +
+    "─".repeat(colWidth + 2) +
+    "┘" +
+    C.reset +
+    "\n";
   return output;
 }
 
@@ -441,14 +616,36 @@ function formatCodePreviewWithLineNumbers(code, startLine = 1, maxLines = Infini
       const lineNo = s === 0 ? formatLineNum(sLine + k, 4) : "    ";
       const prefix = s === 0 ? "+ " : "  ";
       const lineText = (prefix + chunks[s]).padEnd(contentWidth, " ");
-      output += C.gray + "    │" + C.green + " " + lineNo + " " + C.gray + "│ " + C.green + lineText + C.gray + "│" + C.reset + "\n";
+      output +=
+        C.gray +
+        "    │" +
+        C.green +
+        " " +
+        lineNo +
+        " " +
+        C.gray +
+        "│ " +
+        C.green +
+        lineText +
+        C.gray +
+        "│" +
+        C.reset +
+        "\n";
     }
     if (renderedVisualRows >= maxLines) {
       const remaining = lines.length - k - 1;
       if (remaining > 0) {
         const moreText = `... (${remaining} baris lainnya)`;
         output += C.gray + "    ├──────┴" + "─".repeat(contentWidth + 2) + "┤" + C.reset + "\n";
-        output += C.gray + "    │ " + C.dim + moreText.padEnd(contentWidth + 8, " ") + C.gray + "│" + C.reset + "\n";
+        output +=
+          C.gray +
+          "    │ " +
+          C.dim +
+          moreText.padEnd(contentWidth + 8, " ") +
+          C.gray +
+          "│" +
+          C.reset +
+          "\n";
       }
       break;
     }
@@ -483,9 +680,18 @@ function formatBashBox(cmd) {
   let output = "";
   const headerTitle = " 💻 [BASH EXECUTION] ";
   const headerDashes = Math.max(2, maxInner - headerTitle.length);
-  output += C.cyan + C.bold + "  ╭──" + headerTitle + "─".repeat(headerDashes) + "╮" + C.reset + "\n";
+  output +=
+    C.cyan + C.bold + "  ╭──" + headerTitle + "─".repeat(headerDashes) + "╮" + C.reset + "\n";
   for (const l of lines) {
-    output += C.cyan + "  │ " + C.yellow + fitText(l, maxInner).padEnd(maxInner, " ") + C.cyan + " │" + C.reset + "\n";
+    output +=
+      C.cyan +
+      "  │ " +
+      C.yellow +
+      fitText(l, maxInner).padEnd(maxInner, " ") +
+      C.cyan +
+      " │" +
+      C.reset +
+      "\n";
   }
   output += C.cyan + "  ╰" + "─".repeat(maxInner + 2) + "╯" + C.reset + "\n";
   return output;
@@ -691,7 +897,9 @@ function renderMarkdown(mdText, maxInner) {
     }
 
     // Markdown Table lines
-    const isTableRow = trimmed.startsWith("|") && (trimmed.endsWith("|") || (trimmed.match(/\|/g) || []).length >= 2);
+    const isTableRow =
+      trimmed.startsWith("|") &&
+      (trimmed.endsWith("|") || (trimmed.match(/\|/g) || []).length >= 2);
     if (isTableRow) {
       inTable = true;
       const cells = trimmed
@@ -706,19 +914,27 @@ function renderMarkdown(mdText, maxInner) {
 
     // Headings
     if (trimmed.startsWith("#### ")) {
-      output.push("\n  " + C.white + C.bold + "▫ " + renderInlineMarkdown(trimmed.slice(5)) + C.reset);
+      output.push(
+        "\n  " + C.white + C.bold + "▫ " + renderInlineMarkdown(trimmed.slice(5)) + C.reset,
+      );
       continue;
     }
     if (trimmed.startsWith("### ")) {
-      output.push("\n  " + C.yellow + C.bold + "▸ " + renderInlineMarkdown(trimmed.slice(4)) + C.reset);
+      output.push(
+        "\n  " + C.yellow + C.bold + "▸ " + renderInlineMarkdown(trimmed.slice(4)) + C.reset,
+      );
       continue;
     }
     if (trimmed.startsWith("## ")) {
-      output.push("\n  " + C.cyan + C.bold + "🔹 " + renderInlineMarkdown(trimmed.slice(3)) + C.reset);
+      output.push(
+        "\n  " + C.cyan + C.bold + "🔹 " + renderInlineMarkdown(trimmed.slice(3)) + C.reset,
+      );
       continue;
     }
     if (trimmed.startsWith("# ")) {
-      output.push("\n  " + C.magenta + C.bold + "🔷 " + renderInlineMarkdown(trimmed.slice(2)) + C.reset);
+      output.push(
+        "\n  " + C.magenta + C.bold + "🔷 " + renderInlineMarkdown(trimmed.slice(2)) + C.reset,
+      );
       continue;
     }
 
@@ -805,11 +1021,15 @@ function renderStep(step) {
     // 1. User Prompt
     if (step.type === "USER_INPUT" && step.content) {
       isCompleted = false;
-      const clean = String(step.content).replace(/<USER_REQUEST>|<\/USER_REQUEST>/g, "").trim();
+      const clean = String(step.content)
+        .replace(/<USER_REQUEST>|<\/USER_REQUEST>/g, "")
+        .trim();
       const headerTitle = " 👤 [USER TASK] ";
       const headerDashes = Math.max(2, maxInner - headerTitle.length);
 
-      console.log(C.blue + C.bold + "  ╭──" + headerTitle + "─".repeat(headerDashes) + "╮" + C.reset);
+      console.log(
+        C.blue + C.bold + "  ╭──" + headerTitle + "─".repeat(headerDashes) + "╮" + C.reset,
+      );
       const rawLines = clean.split("\n");
       for (const rawLine of rawLines) {
         if (!rawLine.trim()) {
@@ -818,224 +1038,366 @@ function renderStep(step) {
         }
         const wrapped = wrapLine(rawLine, maxInner);
         for (const w of wrapped) {
-          console.log(C.blue + "  │ " + C.white + C.bold + w.padEnd(maxInner, " ") + C.blue + " │" + C.reset);
+          console.log(
+            C.blue + "  │ " + C.white + C.bold + w.padEnd(maxInner, " ") + C.blue + " │" + C.reset,
+          );
         }
       }
       console.log(C.blue + "  ╰" + "─".repeat(maxInner + 2) + "╯" + C.reset + "\n");
     }
 
-  // 2. Fatal Agy / Model Runtime Error Interception
-  const fullText = [
-    typeof step.content === "string" ? step.content : "",
-    typeof step.error === "string" ? step.error : "",
-    typeof step.error_details === "string" ? step.error_details : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+    // 2. Fatal Agy / Model Runtime Error Interception
+    const fullText = [
+      typeof step.content === "string" ? step.content : "",
+      typeof step.error === "string" ? step.error : "",
+      typeof step.error_details === "string" ? step.error_details : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
 
-  if (isAgyRuntimeError(fullText)) {
-    console.log("  " + C.bgRed + C.white + C.bold + "  🚨 [AGY RUNTIME ERROR / TERMINATED]  " + C.reset);
-    for (const l of fullText.split("\n")) {
-      if (l.trim()) {
-        const chunks = wrapLine(l, maxInner - 4);
-        for (const chunk of chunks) {
-          console.log("    " + C.red + chunk + C.reset);
+    if (isAgyRuntimeError(fullText)) {
+      console.log(
+        "  " + C.bgRed + C.white + C.bold + "  🚨 [AGY RUNTIME ERROR / TERMINATED]  " + C.reset,
+      );
+      for (const l of fullText.split("\n")) {
+        if (l.trim()) {
+          const chunks = wrapLine(l, maxInner - 4);
+          for (const chunk of chunks) {
+            console.log("    " + C.red + chunk + C.reset);
+          }
         }
       }
+      console.log();
+      console.log(C.dim + "─".repeat(tWidth) + C.reset);
+      console.log(
+        "  " +
+          C.yellow +
+          C.bold +
+          "⚠️  [PERLU RETRY / FOLLOW UP] Terjadi kendala runtime/server pada proses agy." +
+          C.reset,
+      );
+      console.log(
+        "  " +
+          C.dim +
+          "   Koneksi/sesi ini akan dilanjutkan otomatis oleh agent dengan follow_up." +
+          C.reset +
+          "\n",
+      );
+      isCompleted = false;
+      stopSpinner();
+      return;
     }
-    console.log();
-    console.log(C.dim + "─".repeat(tWidth) + C.reset);
-    console.log("  " + C.yellow + C.bold + "⚠️  [PERLU RETRY / FOLLOW UP] Terjadi kendala runtime/server pada proses agy." + C.reset);
-    console.log("  " + C.dim + "   Koneksi/sesi ini akan dilanjutkan otomatis oleh agent dengan follow_up." + C.reset + "\n");
-    isCompleted = false;
-    stopSpinner();
-    return;
-  }
 
-  // 3. System Message / Background Task Completed or Failed
-  if (step.type === "SYSTEM_MESSAGE" && step.content) {
-    const raw = unescapeCodeString(step.content).trim();
-    scheduledUntilMs = 0;
-    activeBackgroundTask = null;
+    // 3. System Message / Background Task Completed or Failed
+    if (step.type === "SYSTEM_MESSAGE" && step.content) {
+      const raw = unescapeCodeString(step.content).trim();
+      scheduledUntilMs = 0;
+      activeBackgroundTask = null;
 
-    if (raw.includes("exited with code 0")) {
-      console.log("  " + C.green + C.bold + "⚡ [TASK SUCCESS]" + C.reset + " " + C.dim + "Background task exited with code 0." + C.reset + "\n");
-    } else if (raw.includes("exited with code") || isCommandOrBuildError(raw)) {
-      console.log("  " + C.yellow + C.bold + "⚠️  [COMMAND FINISHED WITH ERROR]" + C.reset);
-      const lines = raw.split("\n");
+      if (raw.includes("exited with code 0")) {
+        console.log(
+          "  " +
+            C.green +
+            C.bold +
+            "⚡ [TASK SUCCESS]" +
+            C.reset +
+            " " +
+            C.dim +
+            "Background task exited with code 0." +
+            C.reset +
+            "\n",
+        );
+      } else if (raw.includes("exited with code") || isCommandOrBuildError(raw)) {
+        console.log("  " + C.yellow + C.bold + "⚠️  [COMMAND FINISHED WITH ERROR]" + C.reset);
+        const lines = raw.split("\n");
+        for (const l of lines) {
+          if (!l.trim()) continue;
+          const chunks = wrapLine(l, maxInner - 4);
+          for (const chunk of chunks) {
+            console.log("    " + C.yellow + chunk + C.reset);
+          }
+        }
+        console.log();
+      } else if (raw.includes("finished with result") || raw.includes("completed")) {
+        console.log(
+          "  " +
+            C.green +
+            C.bold +
+            "⚡ [TASK FINISHED]" +
+            C.reset +
+            " " +
+            C.dim +
+            "Background task completed." +
+            C.reset +
+            "\n",
+        );
+      }
+    }
+
+    // 4. Model Thinking
+    if (step.thinking && typeof step.thinking === "string") {
+      const cleanThinking = step.thinking.trim().replace(/\*\*/g, "");
+      const lines = cleanThinking.split("\n");
+      console.log("  " + C.magenta + C.bold + "🧠 [Thinking]" + C.reset);
       for (const l of lines) {
         if (!l.trim()) continue;
         const chunks = wrapLine(l, maxInner - 4);
         for (const chunk of chunks) {
-          console.log("    " + C.yellow + chunk + C.reset);
-        }
-      }
-      console.log();
-    } else if (raw.includes("finished with result") || raw.includes("completed")) {
-      console.log("  " + C.green + C.bold + "⚡ [TASK FINISHED]" + C.reset + " " + C.dim + "Background task completed." + C.reset + "\n");
-    }
-  }
-
-  // 4. Model Thinking
-  if (step.thinking && typeof step.thinking === "string") {
-    const cleanThinking = step.thinking.trim().replace(/\*\*/g, "");
-    const lines = cleanThinking.split("\n");
-    console.log("  " + C.magenta + C.bold + "🧠 [Thinking]" + C.reset);
-    for (const l of lines) {
-      if (!l.trim()) continue;
-      const chunks = wrapLine(l, maxInner - 4);
-      for (const chunk of chunks) {
-        console.log("    " + C.dim + chunk + C.reset);
-      }
-    }
-    console.log();
-  }
-
-  // 5. Assistant Commentary before Tool Calls
-  const hasToolCalls = Array.isArray(step.tool_calls) && step.tool_calls.length > 0;
-  if (step.type === "PLANNER_RESPONSE" && step.content && hasToolCalls) {
-    const cleanMsg = String(step.content).trim();
-    if (cleanMsg) {
-      console.log("  " + C.cyan + C.bold + "💬 [Assistant]" + C.reset);
-      console.log(renderMarkdown(cleanMsg, maxInner));
-      console.log();
-    }
-  }
-
-  // 6. Tool Calls
-  if (hasToolCalls) {
-    isCompleted = false;
-    for (const tc of step.tool_calls) {
-      const name = tc.name;
-      const args = tc.args || {};
-
-      switch (name) {
-        case "schedule": {
-          const sec = parseInt(args.DurationSeconds || args.duration_seconds || "60", 10);
-          const p = String(args.Prompt || args.prompt || "Waiting for task");
-          scheduledUntilMs = Date.now() + sec * 1000;
-          scheduledPrompt = p;
-          console.log("  " + C.yellow + C.bold + "⏳ [SCHEDULE TIMER]" + C.reset + " " + C.white + p + " " + C.cyan + "(" + sec + "s)" + C.reset);
-          break;
-        }
-
-        case "write_to_file": {
-          const file = args.TargetFile || args.target_file || "unknown";
-          const relPath = path.relative(process.cwd(), file);
-          console.log("  " + C.green + C.bold + "📝 [WRITE FILE]" + C.reset + " " + C.white + C.bold + relPath + C.reset);
-          if (args.CodeContent) {
-            process.stdout.write(formatCodePreviewWithLineNumbers(args.CodeContent, 1));
-          }
-          break;
-        }
-
-        case "replace_file_content": {
-          const file = args.TargetFile || args.target_file || "unknown";
-          const relPath = path.relative(process.cwd(), file);
-          const sLine = args.StartLine || 1;
-          console.log("  " + C.yellow + C.bold + "✏️  [DIFF EDIT]" + C.reset + " " + C.white + C.bold + relPath + C.reset + C.dim + " (Line " + sLine + ")" + C.reset);
-          process.stdout.write(formatDiffWithLineNumbers(args.TargetContent, args.ReplacementContent, sLine));
-          break;
-        }
-
-        case "run_command": {
-          const cmd = args.CommandLine || args.command || "";
-          activeBackgroundTask = cmd;
-          process.stdout.write(formatBashBox(cmd));
-          break;
-        }
-
-        case "view_file": {
-          const file = args.AbsolutePath || args.file || "";
-          const relPath = path.relative(process.cwd(), file);
-          const sLine = args.StartLine ? " (L" + args.StartLine + "-" + (args.EndLine || "") + ")" : "";
-          console.log("  " + C.blue + C.bold + "🔍 [VIEW FILE]" + C.reset + " " + C.dim + relPath + sLine + C.reset);
-          break;
-        }
-
-        case "grep_search":
-        case "find_by_name": {
-          const query = args.Query || args.Pattern || "";
-          console.log("  " + C.blue + C.bold + "🔎 [SEARCH]" + C.reset + " " + name + " -> " + C.cyan + "\"" + query + "\"" + C.reset);
-          break;
-        }
-
-        default: {
-          console.log("  " + C.blue + C.bold + "🔧 [" + name + "]" + C.reset + " " + C.dim + JSON.stringify(args) + C.reset);
-          break;
-        }
-      }
-      console.log();
-      startSpinner(name === "schedule" ? "Menunggu timer/background task..." : "Menjalankan tool: " + name + "...");
-      return;
-    }
-  }
-
-  // 7. Generic / Tool Output
-  if (step.type === "GENERIC" && step.content) {
-    const raw = unescapeCodeString(step.content).trim();
-    if (raw) {
-      const lines = raw.split("\n");
-      if (isAgyRuntimeError(raw)) {
-        console.log("  " + C.red + C.bold + "🚨 [SERVER WARNING / ERROR]" + C.reset);
-        for (const l of lines) {
-          const chunks = wrapLine(l, maxInner - 4);
-          for (const chunk of chunks) {
-            console.log("    " + C.yellow + chunk + C.reset);
-          }
-        }
-      } else if (isCommandOrBuildError(raw)) {
-        console.log("  " + C.yellow + C.bold + "❌ [BUILD / COMMAND ERROR OUTPUT]" + C.reset);
-        for (const l of lines) {
-          if (!l.trim()) {
-            console.log();
-            continue;
-          }
-          const chunks = wrapLine(l, maxInner - 4);
-          for (const chunk of chunks) {
-            console.log("    " + C.yellow + chunk + C.reset);
-          }
-        }
-      } else {
-        for (let i = 0; i < lines.length; i++) {
-          const l = lines[i];
-          if (!l.trim()) {
-            console.log();
-            continue;
-          }
-          const chunks = wrapLine(l, maxInner - 14);
-          for (let j = 0; j < chunks.length; j++) {
-            const prefix = i === 0 && j === 0 ? "  " + C.dim + "↳ [Output] " : "             ";
-            console.log(prefix + C.white + chunks[j] + C.reset);
-          }
+          console.log("    " + C.dim + chunk + C.reset);
         }
       }
       console.log();
     }
-  }
 
-  // 8. Final Planner Response / Assistant Output
-  if (step.type === "PLANNER_RESPONSE" && step.content && !hasToolCalls) {
-    console.log("  " + C.green + C.bold + "💬 [Assistant Response]" + C.reset);
-    console.log(renderMarkdown(step.content, maxInner));
-    console.log();
+    // 5. Assistant Commentary before Tool Calls
+    const hasToolCalls = Array.isArray(step.tool_calls) && step.tool_calls.length > 0;
+    if (step.type === "PLANNER_RESPONSE" && step.content && hasToolCalls) {
+      const cleanMsg = String(step.content).trim();
+      if (cleanMsg) {
+        console.log("  " + C.cyan + C.bold + "💬 [Assistant]" + C.reset);
+        console.log(renderMarkdown(cleanMsg, maxInner));
+        console.log();
+      }
+    }
 
-    const hasActiveWait = (scheduledUntilMs > Date.now()) || Boolean(activeBackgroundTask);
-    if (hasActiveWait) {
+    // 6. Tool Calls
+    if (hasToolCalls) {
       isCompleted = false;
-      startSpinner(scheduledUntilMs > Date.now() ? "Menunggu jadwal timer..." : "Menunggu background task selesai...");
+      for (const tc of step.tool_calls) {
+        const name = tc.name;
+        const args = tc.args || {};
+
+        switch (name) {
+          case "schedule": {
+            const sec = parseInt(args.DurationSeconds || args.duration_seconds || "60", 10);
+            const p = String(args.Prompt || args.prompt || "Waiting for task");
+            scheduledUntilMs = Date.now() + sec * 1000;
+            scheduledPrompt = p;
+            console.log(
+              "  " +
+                C.yellow +
+                C.bold +
+                "⏳ [SCHEDULE TIMER]" +
+                C.reset +
+                " " +
+                C.white +
+                p +
+                " " +
+                C.cyan +
+                "(" +
+                sec +
+                "s)" +
+                C.reset,
+            );
+            break;
+          }
+
+          case "write_to_file": {
+            const file = args.TargetFile || args.target_file || "unknown";
+            const relPath = path.relative(process.cwd(), file);
+            console.log(
+              "  " +
+                C.green +
+                C.bold +
+                "📝 [WRITE FILE]" +
+                C.reset +
+                " " +
+                C.white +
+                C.bold +
+                relPath +
+                C.reset,
+            );
+            if (args.CodeContent) {
+              process.stdout.write(formatCodePreviewWithLineNumbers(args.CodeContent, 1));
+            }
+            break;
+          }
+
+          case "replace_file_content": {
+            const file = args.TargetFile || args.target_file || "unknown";
+            const relPath = path.relative(process.cwd(), file);
+            const sLine = args.StartLine || 1;
+            console.log(
+              "  " +
+                C.yellow +
+                C.bold +
+                "✏️  [DIFF EDIT]" +
+                C.reset +
+                " " +
+                C.white +
+                C.bold +
+                relPath +
+                C.reset +
+                C.dim +
+                " (Line " +
+                sLine +
+                ")" +
+                C.reset,
+            );
+            process.stdout.write(
+              formatDiffWithLineNumbers(args.TargetContent, args.ReplacementContent, sLine),
+            );
+            break;
+          }
+
+          case "run_command": {
+            const cmd = args.CommandLine || args.command || "";
+            activeBackgroundTask = cmd;
+            process.stdout.write(formatBashBox(cmd));
+            break;
+          }
+
+          case "view_file": {
+            const file = args.AbsolutePath || args.file || "";
+            const relPath = path.relative(process.cwd(), file);
+            const sLine = args.StartLine
+              ? " (L" + args.StartLine + "-" + (args.EndLine || "") + ")"
+              : "";
+            console.log(
+              "  " +
+                C.blue +
+                C.bold +
+                "🔍 [VIEW FILE]" +
+                C.reset +
+                " " +
+                C.dim +
+                relPath +
+                sLine +
+                C.reset,
+            );
+            break;
+          }
+
+          case "grep_search":
+          case "find_by_name": {
+            const query = args.Query || args.Pattern || "";
+            console.log(
+              "  " +
+                C.blue +
+                C.bold +
+                "🔎 [SEARCH]" +
+                C.reset +
+                " " +
+                name +
+                " -> " +
+                C.cyan +
+                '"' +
+                query +
+                '"' +
+                C.reset,
+            );
+            break;
+          }
+
+          default: {
+            console.log(
+              "  " +
+                C.blue +
+                C.bold +
+                "🔧 [" +
+                name +
+                "]" +
+                C.reset +
+                " " +
+                C.dim +
+                JSON.stringify(args) +
+                C.reset,
+            );
+            break;
+          }
+        }
+        console.log();
+        startSpinner(
+          name === "schedule"
+            ? "Menunggu timer/background task..."
+            : "Menjalankan tool: " + name + "...",
+        );
+        return;
+      }
+    }
+
+    // 7. Generic / Tool Output
+    if (step.type === "GENERIC" && step.content) {
+      const raw = unescapeCodeString(step.content).trim();
+      if (raw) {
+        const lines = raw.split("\n");
+        if (isAgyRuntimeError(raw)) {
+          console.log("  " + C.red + C.bold + "🚨 [SERVER WARNING / ERROR]" + C.reset);
+          for (const l of lines) {
+            const chunks = wrapLine(l, maxInner - 4);
+            for (const chunk of chunks) {
+              console.log("    " + C.yellow + chunk + C.reset);
+            }
+          }
+        } else if (isCommandOrBuildError(raw)) {
+          console.log("  " + C.yellow + C.bold + "❌ [BUILD / COMMAND ERROR OUTPUT]" + C.reset);
+          for (const l of lines) {
+            if (!l.trim()) {
+              console.log();
+              continue;
+            }
+            const chunks = wrapLine(l, maxInner - 4);
+            for (const chunk of chunks) {
+              console.log("    " + C.yellow + chunk + C.reset);
+            }
+          }
+        } else {
+          for (let i = 0; i < lines.length; i++) {
+            const l = lines[i];
+            if (!l.trim()) {
+              console.log();
+              continue;
+            }
+            const chunks = wrapLine(l, maxInner - 14);
+            for (let j = 0; j < chunks.length; j++) {
+              const prefix = i === 0 && j === 0 ? "  " + C.dim + "↳ [Output] " : "             ";
+              console.log(prefix + C.white + chunks[j] + C.reset);
+            }
+          }
+        }
+        console.log();
+      }
+    }
+
+    // 8. Final Planner Response / Assistant Output
+    if (step.type === "PLANNER_RESPONSE" && step.content && !hasToolCalls) {
+      console.log("  " + C.green + C.bold + "💬 [Assistant Response]" + C.reset);
+      console.log(renderMarkdown(step.content, maxInner));
+      console.log();
+
+      const hasActiveWait = scheduledUntilMs > Date.now() || Boolean(activeBackgroundTask);
+      if (hasActiveWait) {
+        isCompleted = false;
+        startSpinner(
+          scheduledUntilMs > Date.now()
+            ? "Menunggu jadwal timer..."
+            : "Menunggu background task selesai...",
+        );
+        return;
+      }
+
+      console.log(C.dim + "─".repeat(tWidth) + C.reset);
+      console.log(
+        "  " +
+          C.bgGreen +
+          C.white +
+          C.bold +
+          "  ✨ [SELESAI] Tugas agy telah selesai dengan sukses!  " +
+          C.reset,
+      );
+      console.log(
+        "  " +
+          C.dim +
+          "Sesi siap untuk tugas berikutnya (gunakan follow_up atau delegasi baru)." +
+          C.reset +
+          "\n",
+      );
+      isCompleted = true;
+      stopSpinner();
       return;
     }
 
-    console.log(C.dim + "─".repeat(tWidth) + C.reset);
-    console.log("  " + C.bgGreen + C.white + C.bold + "  ✨ [SELESAI] Tugas agy telah selesai dengan sukses!  " + C.reset);
-    console.log("  " + C.dim + "Sesi siap untuk tugas berikutnya (gunakan follow_up atau delegasi baru)." + C.reset + "\n");
-    isCompleted = true;
-    stopSpinner();
-    return;
-  }
-
-  startSpinner("agy sedang memproses langkah berikutnya...");
+    startSpinner("agy sedang memproses langkah berikutnya...");
   } finally {
     console.log = origLog;
   }
@@ -1052,15 +1414,17 @@ function detectProjectDirFromTranscript(transcriptPath) {
     const bytesRead = fs.readSync(fd, buf, 0, 16384, 0);
     fs.closeSync(fd);
     const chunk = buf.slice(0, bytesRead).toString("utf8");
-    
+
     // Look for path patterns in tool call arguments
-    const match = chunk.match(/"(?:Cwd|SearchDirectory|SearchPath|AbsolutePath|DirectoryPath)":\s*"\\?"(\/[^"\\]+)/);
+    const match = chunk.match(
+      /"(?:Cwd|SearchDirectory|SearchPath|AbsolutePath|DirectoryPath)":\s*"\\?"(\/[^"\\]+)/,
+    );
     if (match && match[1]) {
       let p = match[1];
       while (p && p !== "/" && p !== os.homedir()) {
         if (
-          fs.existsSync(path.join(p, ".git")) || 
-          fs.existsSync(path.join(p, "settings.gradle.kts")) || 
+          fs.existsSync(path.join(p, ".git")) ||
+          fs.existsSync(path.join(p, "settings.gradle.kts")) ||
           fs.existsSync(path.join(p, "settings.gradle")) ||
           fs.existsSync(path.join(p, "package.json"))
         ) {
@@ -1078,11 +1442,19 @@ function detectProjectDirFromTranscript(transcriptPath) {
 
 function getAllSessions() {
   const brainDir = path.join(os.homedir(), ".gemini", "antigravity-cli", "brain");
-  const sessionsFile = path.join(os.homedir(), ".gemini", "antigravity-cli", "cache", "last_conversations.json");
+  const sessionsFile = path.join(
+    os.homedir(),
+    ".gemini",
+    "antigravity-cli",
+    "cache",
+    "last_conversations.json",
+  );
 
   let cwdMap = {};
   if (fs.existsSync(sessionsFile)) {
-    try { cwdMap = JSON.parse(fs.readFileSync(sessionsFile, "utf8")); } catch(e) {}
+    try {
+      cwdMap = JSON.parse(fs.readFileSync(sessionsFile, "utf8"));
+    } catch (e) {}
   }
 
   const convToCwd = {};
@@ -1102,7 +1474,8 @@ function getAllSessions() {
     if (fs.existsSync(transcript)) {
       try {
         const stat = fs.statSync(transcript);
-        const project = convToCwd[convId] || detectProjectDirFromTranscript(transcript) || "(Unbound session)";
+        const project =
+          convToCwd[convId] || detectProjectDirFromTranscript(transcript) || "(Unbound session)";
         list.push({
           id: convId,
           projectDir: project,
@@ -1110,7 +1483,7 @@ function getAllSessions() {
           mtime: stat.mtimeMs,
           size: stat.size,
         });
-      } catch(e) {}
+      } catch (e) {}
     }
   }
 
@@ -1144,8 +1517,21 @@ function drawSessionSelector() {
   const line = "━".repeat(width);
 
   let buf = "\x1b[?25l\x1b[2J\x1b[H"; // Clear screen & move to (1,1)
-  buf += C.bgBlue + C.white + C.bold + padLine("  📋 PILIH SESI AGY UNTUK DIMONITOR", width) + C.reset + "\n";
-  buf += padLine("  " + C.dim + "Gunakan panah [↑/↓] atau angka [1-9], tekan [Enter] untuk pilih, [Esc] batal." + C.reset, width) + "\n";
+  buf +=
+    C.bgBlue +
+    C.white +
+    C.bold +
+    padLine("  📋 PILIH SESI AGY UNTUK DIMONITOR", width) +
+    C.reset +
+    "\n";
+  buf +=
+    padLine(
+      "  " +
+        C.dim +
+        "Gunakan panah [↑/↓] atau angka [1-9], tekan [Enter] untuk pilih, [Esc] batal." +
+        C.reset,
+      width,
+    ) + "\n";
   buf += C.gray + line + C.reset + "\n";
 
   const maxItems = getMaxDisplaySessions();
@@ -1154,20 +1540,46 @@ function drawSessionSelector() {
   displayList.forEach((s, idx) => {
     const isSelected = idx === selectCursorIdx;
     const isCurrent = currentSession && currentSession.id === s.id;
-    const badge = isCurrent ? C.green + " [AKTIF]" + C.reset : (idx === 0 ? C.cyan + " [TERBARU]" + C.reset : "");
+    const badge = isCurrent
+      ? C.green + " [AKTIF]" + C.reset
+      : idx === 0
+        ? C.cyan + " [TERBARU]" + C.reset
+        : "";
     const timeStr = new Date(s.mtime).toLocaleTimeString();
-    const folderName = s.projectDir && s.projectDir !== "(Unbound session)" ? path.basename(s.projectDir) : "Unbound";
+    const folderName =
+      s.projectDir && s.projectDir !== "(Unbound session)"
+        ? path.basename(s.projectDir)
+        : "Unbound";
 
-    const prefix = isSelected ? C.yellow + C.bold + " 👉 [" + (idx + 1) + "] " : C.gray + "    [" + (idx + 1) + "] ";
-    const idText = isSelected ? C.yellow + C.bold + s.id.slice(0, 8) + "..." + C.reset : C.cyan + s.id.slice(0, 8) + "..." + C.reset;
-    const nameText = isSelected ? C.white + C.bold + "(" + folderName + ")" + C.reset : C.white + "(" + folderName + ")" + C.reset;
+    const prefix = isSelected
+      ? C.yellow + C.bold + " 👉 [" + (idx + 1) + "] "
+      : C.gray + "    [" + (idx + 1) + "] ";
+    const idText = isSelected
+      ? C.yellow + C.bold + s.id.slice(0, 8) + "..." + C.reset
+      : C.cyan + s.id.slice(0, 8) + "..." + C.reset;
+    const nameText = isSelected
+      ? C.white + C.bold + "(" + folderName + ")" + C.reset
+      : C.white + "(" + folderName + ")" + C.reset;
 
     const row1 = prefix + idText + " " + nameText + badge;
     buf += padLine(row1, width) + "\n";
 
-    const folderDisplay = s.projectDir !== "(Unbound session)" ? fitText(s.projectDir, Math.max(20, width - 35)) : "(Unbound session)";
+    const folderDisplay =
+      s.projectDir !== "(Unbound session)"
+        ? fitText(s.projectDir, Math.max(20, width - 35))
+        : "(Unbound session)";
     const sizeKb = Math.round(s.size / 1024);
-    const row2 = "       " + C.dim + "📁 " + folderDisplay + "  │  🕒 " + timeStr + " (" + sizeKb + " KB)" + C.reset;
+    const row2 =
+      "       " +
+      C.dim +
+      "📁 " +
+      folderDisplay +
+      "  │  🕒 " +
+      timeStr +
+      " (" +
+      sizeKb +
+      " KB)" +
+      C.reset;
     buf += padLine(row2, width) + "\n";
   });
 
@@ -1179,7 +1591,9 @@ function switchSession(newSession) {
   stopSpinner();
 
   if (activeFileFd) {
-    try { fs.closeSync(activeFileFd); } catch (e) {}
+    try {
+      fs.closeSync(activeFileFd);
+    } catch (e) {}
     activeFileFd = null;
   }
 
@@ -1206,7 +1620,9 @@ function switchSession(newSession) {
 function cleanupAndExit(code = 0) {
   stopSpinner();
   if (activeFileFd) {
-    try { fs.closeSync(activeFileFd); } catch (e) {}
+    try {
+      fs.closeSync(activeFileFd);
+    } catch (e) {}
     activeFileFd = null;
   }
   process.stdout.write("\x1b[?1000l\x1b[?1006l\x1b[?1049l\x1b[?25h\n");
@@ -1217,7 +1633,9 @@ function cleanupAndExit(code = 0) {
 async function main() {
   const sessions = getAllSessions();
   if (sessions.length === 0) {
-    console.error(C.red + "Tidak ditemukan sesi agy apapun di ~/.gemini/antigravity-cli/brain/" + C.reset);
+    console.error(
+      C.red + "Tidak ditemukan sesi agy apapun di ~/.gemini/antigravity-cli/brain/" + C.reset,
+    );
     process.exit(1);
   }
 

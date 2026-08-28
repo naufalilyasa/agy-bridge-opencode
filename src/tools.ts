@@ -34,15 +34,7 @@ export function resolveSkillContent(skillName: string, cwd: string): string | nu
       norm,
       "SKILL.md",
     ),
-    path.join(
-      os.homedir(),
-      "agy-bridge",
-      "oh-my-openagent",
-      ".agents",
-      "skills",
-      norm,
-      "SKILL.md",
-    ),
+    path.join(os.homedir(), "agy-bridge", "oh-my-openagent", ".agents", "skills", norm, "SKILL.md"),
   ];
 
   for (const p of candidates) {
@@ -70,13 +62,21 @@ function skillDescription(p: string): string {
     const endIdx = raw.indexOf("---", 3);
     if (endIdx === -1) return "";
     const m = raw.slice(0, endIdx).match(/^description:\s*(.+)$/im);
-    return m ? m[1].trim().replace(/^["']|["']$/g, "").slice(0, 120) : "";
+    return m
+      ? m[1]
+          .trim()
+          .replace(/^["']|["']$/g, "")
+          .slice(0, 120)
+      : "";
   } catch {
     return "";
   }
 }
 
-export function listAvailableSkills(cwd: string, exclude: string[] = []): { name: string; description: string }[] {
+export function listAvailableSkills(
+  cwd: string,
+  exclude: string[] = [],
+): { name: string; description: string }[] {
   const roots = [
     path.join(cwd, ".agents", "skills"),
     path.join(cwd, ".opencode", "skills"),
@@ -511,10 +511,7 @@ export const TOOLS: ToolDef[] = [
       question: z.string().describe("What you want to know about these files."),
       ...commonShape,
     },
-    chain: [
-      "Gemini 3.7 Flash (High)",
-      "Claude Sonnet 4.6 (Thinking)",
-    ],
+    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
     timeoutSec: 300,
     buildPrompt(args, cwd) {
       const files = resolveFiles(args.files as string[], cwd);
@@ -536,10 +533,7 @@ export const TOOLS: ToolDef[] = [
         .describe("What to find, e.g. 'when was the auth middleware refactored and why'."),
       ...commonShape,
     },
-    chain: [
-      "Gemini 3.7 Flash (High)",
-      "Claude Sonnet 4.6 (Thinking)",
-    ],
+    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
     timeoutSec: 180,
     buildPrompt(args) {
       return (
@@ -559,10 +553,7 @@ export const TOOLS: ToolDef[] = [
       query: z.string().describe("What to look up on the web."),
       ...commonShape,
     },
-    chain: [
-      "Gemini 3.7 Flash (High)",
-      "Claude Sonnet 4.6 (Thinking)",
-    ],
+    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
     timeoutSec: 120,
     buildPrompt(args) {
       return `Look up on the web: ${args.query}\n\nInclude source URLs for key claims. ${OUTPUT_RULES}`;
@@ -586,10 +577,7 @@ export const TOOLS: ToolDef[] = [
       focus: z.string().optional().describe("Optional focus area, e.g. 'security', 'concurrency'."),
       ...commonShape,
     },
-    chain: [
-      "Gemini 3.7 Flash (High)",
-      "Claude Sonnet 4.6 (Thinking)",
-    ],
+    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
     timeoutSec: 300,
     buildPrompt(args, cwd) {
       const files = args.files as string[] | undefined;
@@ -655,10 +643,7 @@ export const TOOLS: ToolDef[] = [
         .describe("Instruction to persist new findings to agentmemory upon finishing."),
       ...commonShape,
     },
-    chain: [
-      "Gemini 3.7 Flash (High)",
-      "Claude Sonnet 4.6 (Thinking)",
-    ],
+    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
     timeoutSec: 600,
     buildPrompt(args) {
       const q = (args.instruction as string) || (args.question as string);
@@ -673,7 +658,8 @@ export const TOOLS: ToolDef[] = [
 
       if (args.load_memories) {
         const mems = Array.isArray(args.load_memories) ? args.load_memories : [args.load_memories];
-        prompt += `\n\n## RECALL MEMORY DIRECTIVE — MANDATORY\nYou MUST query \`agentmemory\` via \`memory_recall\` BEFORE starting any work, for:\n` +
+        prompt +=
+          `\n\n## RECALL MEMORY DIRECTIVE — MANDATORY\nYou MUST query \`agentmemory\` via \`memory_recall\` BEFORE starting any work, for:\n` +
           mems.map((m: string) => `- "${m}"`).join("\n") +
           `\nIf tools are unavailable or zero results, state "MEMORY RECALL: 0 results" explicitly in your final answer.`;
       }
@@ -738,19 +724,15 @@ export const TOOLS: ToolDef[] = [
       expected_outcome: z
         .string()
         .optional()
-        .describe("Expected deliverable, success criteria, or acceptance test (Section 2: EXPECTED OUTCOME)."),
-      outcome: z
-        .string()
-        .optional()
-        .describe("Alias for expected_outcome."),
+        .describe(
+          "Expected deliverable, success criteria, or acceptance test (Section 2: EXPECTED OUTCOME).",
+        ),
+      outcome: z.string().optional().describe("Alias for expected_outcome."),
       required_tools: z
         .array(z.string())
         .optional()
         .describe("Explicit tool whitelist (Section 3: REQUIRED TOOLS)."),
-      tools: z
-        .array(z.string())
-        .optional()
-        .describe("Alias for required_tools."),
+      tools: z.array(z.string()).optional().describe("Alias for required_tools."),
       must_do: z
         .array(z.string())
         .optional()
@@ -758,19 +740,22 @@ export const TOOLS: ToolDef[] = [
       requirements: z
         .array(z.string())
         .optional()
-        .describe("Specific constraints, rules, or test commands that must be satisfied (alias for must_do)."),
+        .describe(
+          "Specific constraints, rules, or test commands that must be satisfied (alias for must_do).",
+        ),
       must_not_do: z
         .array(z.string())
         .optional()
-        .describe("Forbidden actions, anti-patterns, or architectural boundaries (Section 5: MUST NOT DO)."),
-      forbidden: z
-        .array(z.string())
-        .optional()
-        .describe("Alias for must_not_do."),
+        .describe(
+          "Forbidden actions, anti-patterns, or architectural boundaries (Section 5: MUST NOT DO).",
+        ),
+      forbidden: z.array(z.string()).optional().describe("Alias for must_not_do."),
       context: z
         .string()
         .optional()
-        .describe("Relevant background context, error messages, or file hints (Section 6: CONTEXT)."),
+        .describe(
+          "Relevant background context, error messages, or file hints (Section 6: CONTEXT).",
+        ),
       skills: z
         .array(z.string())
         .optional()
@@ -792,7 +777,10 @@ export const TOOLS: ToolDef[] = [
           z.string(),
           z.boolean(),
           z.object({
-            type: z.string().optional().describe("Memory type (architecture, testing, bugfix, pattern, lesson)"),
+            type: z
+              .string()
+              .optional()
+              .describe("Memory type (architecture, testing, bugfix, pattern, lesson)"),
             concepts: z.array(z.string()).optional().describe("Tags/concepts to index"),
             project: z.string().optional().describe("Project name"),
             summary: z.string().optional().describe("Description of what to save"),
@@ -804,10 +792,7 @@ export const TOOLS: ToolDef[] = [
         ),
       ...commonShape,
     },
-    chain: [
-      "Gemini 3.7 Flash (High)",
-      "Claude Sonnet 4.6 (Thinking)",
-    ],
+    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
     timeoutSec: 600,
     buildPrompt(args, cwd) {
       const task = (args.task as string) || (args.prompt as string);

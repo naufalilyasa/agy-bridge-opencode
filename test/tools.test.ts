@@ -115,7 +115,9 @@ describe("prompt templates", () => {
       "/repo",
     );
     expect(pGit).toContain("[DELEGATED AGENT ROLE: OMO_GIT_MASTER]");
-    expect(pGit).toContain("Create atomic conventional commits for task 18 and clean branch history");
+    expect(pGit).toContain(
+      "Create atomic conventional commits for task 18 and clean branch history",
+    );
 
     const pOracle = get("delegate").buildPrompt(
       {
@@ -199,11 +201,21 @@ describe("prompt templates", () => {
 
     expect(p).toContain("[DELEGATED AGENT ROLE: QA_TEST_ENGINEER]");
     expect(p).toContain("## 1. TASK / OBJECTIVE\nRefactor AuthService token refresh mechanism");
-    expect(p).toContain("## 2. EXPECTED OUTCOME\nClean token rotation, all unit tests passing, zero regression");
-    expect(p).toContain("## 3. REQUIRED TOOLS (WHITELIST)\n- view_file\n- replace_file_content\n- run_command");
-    expect(p).toContain("## 4. MUST DO (MANDATORY REQUIREMENTS)\n- Preserve backward compatibility\n- Run test suite before completing");
-    expect(p).toContain("## 5. MUST NOT DO (FORBIDDEN ACTIONS)\n- Never use `any` type casting\n- Do not modify files outside auth/");
-    expect(p).toContain("## 6. CONTEXT & BACKGROUND\nLegacy token expiry is 3600s. See file auth/TokenManager.kt:45");
+    expect(p).toContain(
+      "## 2. EXPECTED OUTCOME\nClean token rotation, all unit tests passing, zero regression",
+    );
+    expect(p).toContain(
+      "## 3. REQUIRED TOOLS (WHITELIST)\n- view_file\n- replace_file_content\n- run_command",
+    );
+    expect(p).toContain(
+      "## 4. MUST DO (MANDATORY REQUIREMENTS)\n- Preserve backward compatibility\n- Run test suite before completing",
+    );
+    expect(p).toContain(
+      "## 5. MUST NOT DO (FORBIDDEN ACTIONS)\n- Never use `any` type casting\n- Do not modify files outside auth/",
+    );
+    expect(p).toContain(
+      "## 6. CONTEXT & BACKGROUND\nLegacy token expiry is 3600s. See file auth/TokenManager.kt:45",
+    );
   });
 
   it("delegate injects skill instructions into prompt when skills array or skill is specified", () => {
@@ -245,7 +257,9 @@ describe("prompt templates", () => {
     expect(p).toContain("- Type: architecture");
     expect(p).toContain("- Concepts: room-management, repository-pattern");
     expect(p).toContain("- Project: reiwa-access");
-    expect(p).toContain("- Summary: Documented Tuya Room Bean to domain Room model mapper structure");
+    expect(p).toContain(
+      "- Summary: Documented Tuya Room Bean to domain Room model mapper structure",
+    );
   });
 
   it("follow_up supports instruction alias and context", () => {

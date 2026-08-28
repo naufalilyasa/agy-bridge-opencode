@@ -79,7 +79,9 @@ export function createToolHandler(
         const entries = Object.entries(map);
         if (entries.length === 0) {
           return {
-            content: [{ type: "text", text: "[agy-bridge] No recorded Antigravity sessions found." }],
+            content: [
+              { type: "text", text: "[agy-bridge] No recorded Antigravity sessions found." },
+            ],
           };
         }
 
@@ -111,7 +113,9 @@ export function createToolHandler(
           lines.push(`- **${sessionId}** ${isCurrent ? "👉 *(CURRENT PROJECT)*" : ""}`);
           lines.push(`  - **Project Directory**: \`${projPath}\``);
           lines.push(`  - **Last Active**: ${lastActive} (${totalSteps})`);
-          lines.push(`  - **Resume Command**: \`follow_up(session_id: "${sessionId}", question: "...")\``);
+          lines.push(
+            `  - **Resume Command**: \`follow_up(session_id: "${sessionId}", question: "...")\``,
+          );
           lines.push("");
         }
 

@@ -47,8 +47,7 @@ export function detectQuota(log: string): QuotaInfo | null {
         log.toLowerCase().includes("error id:")
       ? 60
       : undefined;
-  const resetText =
-    resetSeconds !== undefined ? reset || formatDuration(resetSeconds) : undefined;
+  const resetText = resetSeconds !== undefined ? reset || formatDuration(resetSeconds) : undefined;
   return { resetText, resetSeconds };
 }
 
