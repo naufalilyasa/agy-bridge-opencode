@@ -142,11 +142,6 @@ function findProjectSession(ss: AgySession[]): AgySession | null {
   );
 }
 
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
-  return String(n);
-}
 function fmtSize(b: number): string {
   const k = b / 1024;
   return k > 1024 ? (k / 1024).toFixed(1) + " MB" : k.toFixed(0) + " KB";
@@ -345,31 +340,42 @@ async function main() {
   vCtxBar.add(vCtxBarTxt);
   sidebar.add(vCtxBar);
 
-  const vQuota5h = addSbRow("• 5h Quota:", "#4ade80");
-  const vQuota5hBar = new BoxRenderable(renderer, { width: "100%", height: 1 });
-  const vQuota5hBarTxt = new TextRenderable(renderer, {
+  const vQuotaG5h = addSbRow("• Gemini 5h:", "#4ade80");
+  const vQuotaG5hBar = new BoxRenderable(renderer, { width: "100%", height: 1 });
+  const vQuotaG5hBarTxt = new TextRenderable(renderer, {
     content: "  [░░░░░░░░░░░░] --%",
     fg: "#94a3b8",
   });
-  vQuota5hBar.add(vQuota5hBarTxt);
-  sidebar.add(vQuota5hBar);
+  vQuotaG5hBar.add(vQuotaG5hBarTxt);
+  sidebar.add(vQuotaG5hBar);
 
-  const vQuotaWk = addSbRow("• Wk Quota:", "#fbbf24");
-  const vQuotaWkBar = new BoxRenderable(renderer, { width: "100%", height: 1 });
-  const vQuotaWkBarTxt = new TextRenderable(renderer, {
+  const vQuotaGWk = addSbRow("• Gemini Wk:", "#fbbf24");
+  const vQuotaGWkBar = new BoxRenderable(renderer, { width: "100%", height: 1 });
+  const vQuotaGWkBarTxt = new TextRenderable(renderer, {
     content: "  [░░░░░░░░░░░░] --%",
     fg: "#94a3b8",
   });
-  vQuotaWkBar.add(vQuotaWkBarTxt);
-  sidebar.add(vQuotaWkBar);
+  vQuotaGWkBar.add(vQuotaGWkBarTxt);
+  sidebar.add(vQuotaGWkBar);
 
-  addDiv();
-  addSbLabel("📊 EST. TOKENS (~ch/4)");
-  const vPrompt = addSbRow("• Prompt:", "#e2e8f0");
-  const vThink = addSbRow("• Thinking:", "#c084fc");
-  const vOut = addSbRow("• Output:", "#4ade80");
-  const vTotal = addSbRow("• Total:", "#fbbf24");
-  const vCost = addSbRow("• Est. Cost:", "#38bdf8");
+  const vQuotaC5h = addSbRow("• Claude 5h:", "#4ade80");
+  const vQuotaC5hBar = new BoxRenderable(renderer, { width: "100%", height: 1 });
+  const vQuotaC5hBarTxt = new TextRenderable(renderer, {
+    content: "  [░░░░░░░░░░░░] --%",
+    fg: "#94a3b8",
+  });
+  vQuotaC5hBar.add(vQuotaC5hBarTxt);
+  sidebar.add(vQuotaC5hBar);
+
+  const vQuotaCWk = addSbRow("• Claude Wk:", "#fbbf24");
+  const vQuotaCWkBar = new BoxRenderable(renderer, { width: "100%", height: 1 });
+  const vQuotaCWkBarTxt = new TextRenderable(renderer, {
+    content: "  [░░░░░░░░░░░░] --%",
+    fg: "#94a3b8",
+  });
+  vQuotaCWkBar.add(vQuotaCWkBarTxt);
+  sidebar.add(vQuotaCWkBar);
+
   addDiv();
   addSbLabel("⌨️  KEYBINDINGS");
   addSbKey("↑/↓/k/j", "Scroll log");
@@ -394,9 +400,6 @@ async function main() {
   let activeFileFd: number | null = null;
   let spinnerIdx = 0,
     spinnerTimer: ReturnType<typeof setInterval> | null = null;
-  let totalPromptChars = 0,
-    totalThinkingChars = 0,
-    totalOutputChars = 0;
   let isLive = true;
   let scheduledUntilMs = 0;
   let scheduledPrompt = "";
@@ -440,6 +443,19 @@ async function main() {
       else color = "#4ade80";
     }
     return { bar, color };
+  }
+
+  function renderQuota(valueRow: TextRenderable, barTxt: TextRenderable, q: AgyQuota | undefined) {
+    if (q) {
+      valueRow.content = `${q.percentRemaining}% left`;
+      const m = makeMeterBar(q.percentRemaining, 12, true);
+      barTxt.content = m.bar;
+      barTxt.fg = m.color as any;
+    } else {
+      valueRow.content = "—";
+      barTxt.content = "  [░░░░░░░░░░░░] --%";
+      barTxt.fg = "#6b7280" as any;
+    }
   }
 
   function fetchLiveQuotaAsync(onDone?: () => void) {
@@ -569,48 +585,23 @@ async function main() {
     vCtxBarTxt.content = ctxMeter.bar;
     vCtxBarTxt.fg = ctxMeter.color as any;
 
-    const isClaude =
-      model.toLowerCase().includes("claude") ||
-      model.toLowerCase().includes("sonnet") ||
-      model.toLowerCase().includes("gpt");
-    const targetCat = isClaude ? "Claude and GPT models" : "Gemini Models";
-    const q5h = liveQuotas.find((q) => q.category === targetCat && q.period.includes("Five Hour"));
-    const qWk = liveQuotas.find((q) => q.category === targetCat && q.period.includes("Weekly"));
+    const qG5h = liveQuotas.find(
+      (q) => q.category === "Gemini Models" && q.period.includes("Five Hour"),
+    );
+    const qGWk = liveQuotas.find(
+      (q) => q.category === "Gemini Models" && q.period.includes("Weekly"),
+    );
+    const qC5h = liveQuotas.find(
+      (q) => q.category === "Claude and GPT models" && q.period.includes("Five Hour"),
+    );
+    const qCWk = liveQuotas.find(
+      (q) => q.category === "Claude and GPT models" && q.period.includes("Weekly"),
+    );
 
-    if (q5h) {
-      vQuota5h.content = `${q5h.percentRemaining}% left`;
-      const m5h = makeMeterBar(q5h.percentRemaining, 12, true);
-      vQuota5hBarTxt.content = m5h.bar;
-      vQuota5hBarTxt.fg = m5h.color as any;
-    } else {
-      vQuota5h.content = "—";
-      vQuota5hBarTxt.content = "  [░░░░░░░░░░░░] --%";
-      vQuota5hBarTxt.fg = "#6b7280" as any;
-    }
-
-    if (qWk) {
-      vQuotaWk.content = `${qWk.percentRemaining}% left`;
-      const mWk = makeMeterBar(qWk.percentRemaining, 12, true);
-      vQuotaWkBarTxt.content = mWk.bar;
-      vQuotaWkBarTxt.fg = mWk.color as any;
-    } else {
-      vQuotaWk.content = "—";
-      vQuotaWkBarTxt.content = "  [░░░░░░░░░░░░] --%";
-      vQuotaWkBarTxt.fg = "#6b7280" as any;
-    }
-
-    const pt = Math.round(totalPromptChars / 4);
-    const tt = Math.round(totalThinkingChars / 4);
-    const ot = Math.round(totalOutputChars / 4);
-    vPrompt.content = fmtTokens(pt);
-    vThink.content = fmtTokens(tt);
-    vOut.content = fmtTokens(ot);
-    vTotal.content = fmtTokens(pt + tt + ot);
-
-    const inRate = isClaude ? 3.0 : 0.15;
-    const outRate = isClaude ? 15.0 : 0.6;
-    const estDollar = (pt / 1_000_000) * inRate + ((tt + ot) / 1_000_000) * outRate;
-    vCost.content = `$${estDollar.toFixed(2)}`;
+    renderQuota(vQuotaG5h, vQuotaG5hBarTxt, qG5h);
+    renderQuota(vQuotaGWk, vQuotaGWkBarTxt, qGWk);
+    renderQuota(vQuotaC5h, vQuotaC5hBarTxt, qC5h);
+    renderQuota(vQuotaCWk, vQuotaCWkBarTxt, qCWk);
 
     if (!isSelectingSession && !isViewingContext) updateLiveLabel();
   }
@@ -799,9 +790,6 @@ async function main() {
     for (const c of children) scrollBox.remove(c);
   }
   function resetCounters() {
-    totalPromptChars = 0;
-    totalThinkingChars = 0;
-    totalOutputChars = 0;
     stepCount = 0;
     userPromptCount = 0;
     plannerResponseCount = 0;
@@ -962,7 +950,6 @@ async function main() {
       step.content &&
       ["USER_INPUT", "GENERIC", "SYSTEM_MESSAGE", "CHECKPOINT"].includes(step.type)
     ) {
-      totalPromptChars += String(step.content).length;
       if (typeof step.content === "string" && step.content.includes("Model Selection")) {
         const match = step.content.match(
           /setting `Model Selection`.*?\bto\s+([^<\n]+?)(?:\.\s|\.\n|\.<|$)/i,
@@ -972,15 +959,6 @@ async function main() {
           updateSidebar();
         }
       }
-    }
-    if (step.thinking && typeof step.thinking === "string") {
-      totalThinkingChars += step.thinking.length;
-    }
-    if (step.tool_calls && Array.isArray(step.tool_calls)) {
-      totalOutputChars += JSON.stringify(step.tool_calls).length;
-    }
-    if (step.type === "PLANNER_RESPONSE" && step.content) {
-      totalOutputChars += String(step.content).length;
     }
 
     // Step counters & live context load in memory
@@ -1485,35 +1463,6 @@ async function main() {
       },
     ]);
 
-    // Card 3: Cumulative Session Tokens
-    const pt = Math.round(totalPromptChars / 4);
-    const tt = Math.round(totalThinkingChars / 4);
-    const ot = Math.round(totalOutputChars / 4);
-    const isClaude =
-      model.toLowerCase().includes("claude") || model.toLowerCase().includes("sonnet");
-    const inRate = isClaude ? 3.0 : 0.15;
-    const outRate = isClaude ? 15.0 : 0.6;
-    const estDollar = (pt / 1_000_000) * inRate + ((tt + ot) / 1_000_000) * outRate;
-
-    addContextCard("CUMULATIVE SESSION TOKENS (~chars / 4)", [
-      {
-        label: "Prompt Input:",
-        value: `${fmtTokens(pt)} tokens (${totalPromptChars.toLocaleString()} chars)`,
-        valFg: "#e2e8f0",
-      },
-      {
-        label: "Thinking / CoT:",
-        value: `${fmtTokens(tt)} tokens (${totalThinkingChars.toLocaleString()} chars)`,
-        valFg: "#c084fc",
-      },
-      {
-        label: "Tool Output & Gen:",
-        value: `${fmtTokens(ot)} tokens (${totalOutputChars.toLocaleString()} chars)`,
-        valFg: "#4ade80",
-      },
-      { label: "Total Lifetime:", value: `${fmtTokens(pt + tt + ot)} tokens`, valFg: "#fbbf24" },
-    ]);
-
     // Card 4: Live Server Subscription Quota (/usage)
     const quotaRows = liveQuotas.map((q) => {
       const cat = q.category.replace(" models", "").replace(" Models", "");
@@ -1531,18 +1480,11 @@ async function main() {
       };
     });
 
-    quotaRows.push(
-      {
-        label: "Est. API Reference Cost:",
-        value: `$${estDollar.toFixed(2)} (Simple estimate)`,
-        valFg: "#38bdf8",
-      },
-      {
-        label: "Quota Limit Status:",
-        value: "✅ Normal (Active subscription / No 429 throttle)",
-        valFg: "#22c55e",
-      },
-    );
+    quotaRows.push({
+      label: "Quota Limit Status:",
+      value: "✅ Normal (Active subscription / No 429 throttle)",
+      valFg: "#22c55e",
+    });
 
     addContextCard("LIVE SUBSCRIPTION QUOTA (/usage)", quotaRows);
 
