@@ -153,6 +153,14 @@ The installer establishes configuration across several target directories:
 | **Live Monitor (TUI)** | `bin/agy-live.ts`                    | alias `agy-live2` (runs via `bun`)                                                                | `%USERPROFILE%\.local\bin\agy-live2.cmd` (bun shim)                                                                                               |
 | **Merge Script**     | `scripts/merge-opencode-config.mjs`    | (used by installer, not installed)                                                                 | (used by installer, not installed)                                                                                                                 |
 | **Delegation Skill** | `SKILL.md`                             | `~/.gemini/config/skills/agy-delegation/SKILL.md`                                                  | `%USERPROFILE%\.gemini\config\skills\agy-delegation\SKILL.md`                                                                                      |
+| **agy CLI MCP**      | `config/agy-cli-mcp-config.json.example` | `~/.gemini/config/mcp_config.json` (5 servers: agentmemory, context7, mobile-mcp, codegraph, XcodeBuildMCP) | `%USERPROFILE%\.gemini\config\mcp_config.json`                                                                                             |
+| **agy CLI Hooks**    | `config/agy-cli-hooks.json.example`    | `~/.gemini/config/hooks.json` (cc-safety-net PreToolUse)                                            | `%USERPROFILE%\.gemini\config\hooks.json`                                                                                                          |
+| **agy CLI Protocol** | `config/agy-cli-gemini.md.example`     | `~/.gemini/config/GEMINI.md` (Caveman + Ponytail engineering protocol)                              | `%USERPROFILE%\.gemini\config\GEMINI.md`                                                                                                           |
+| **Machine-specific (example only, never auto-activated)** | `config/agy-cli-config.json.example`<br>`config/agy-cli-settings.json.example` | `~/.gemini/config/config.json.example`<br>`~/.gemini/config/settings.json.example`                  | `%USERPROFILE%\.gemini\config\config.json.example`<br>`%USERPROFILE%\.gemini\config\settings.json.example`                                          |
+
+> **Note on machine-specific files**: `mcp_config.json`, `hooks.json` and `GEMINI.md` are generic and installed as-is (`.new` fallback if they already exist). `config.json` (contains `remoteControlHostname`) and the agy CLI `settings.json` (contains `trustedWorkspaces`, a per-machine permission allowlist and the default model) are **machine-specific** — the installer only copies them as `.example` references. Rename + edit them yourself:
+> - `config.json.example` → set your hostname, rename to `config.json`.
+> - `settings.json.example` → add your trusted project paths to `trustedWorkspaces`, extend `permissions.allow`, set `model` to an `agy models` entry, rename to `settings.json` (lives in `~/.gemini/antigravity-cli/`).
 
 ---
 
@@ -186,6 +194,31 @@ Copy `config/omo.jsonc.example` to `~/.omo/omo.jsonc`:
 mkdir -p ~/.omo
 cp config/omo.jsonc.example ~/.omo/omo.jsonc
 ```
+
+### Step 3b: Configure agy CLI Runtime (MCP Servers, Hooks, Protocol)
+
+The agy CLI reads its own MCP servers, safety hooks, and engineering protocol from `~/.gemini/config/`. These are generic and safe to install as-is:
+
+```bash
+# MCP servers (agentmemory, context7, mobile-mcp, codegraph, XcodeBuildMCP)
+cp config/agy-cli-mcp-config.json.example ~/.gemini/config/mcp_config.json
+
+# Safety hook (cc-safety-net PreToolUse guard)
+cp config/agy-cli-hooks.json.example ~/.gemini/config/hooks.json
+
+# Engineering protocol (Caveman + Ponytail)
+cp config/agy-cli-gemini.md.example ~/.gemini/config/GEMINI.md
+```
+
+**ANDROID_HOME**: The mobile-mcp entry in `mcp_config.json` contains `{{ANDROID_HOME}}`. The installer auto-detects it; if doing manual install, set it explicitly:
+```bash
+# macOS default:
+sed -i '' 's|{{ANDROID_HOME}}|/Users/yourname/Library/Android/sdk|g' ~/.gemini/config/mcp_config.json
+```
+
+**Machine-specific configs** (not auto-installed, reference only):
+- `config/agy-cli-config.json.example` → review `remoteControlHostname`, rename to `config.json`.
+- `config/agy-cli-settings.json.example` → add your project paths to `trustedWorkspaces`, extend `permissions.allow`, set `model` to an `agy models` entry, rename to `settings.json` (lives in `~/.gemini/antigravity-cli/`).
 
 ### Step 4: Register MCP Server in OpenCode
 
@@ -270,6 +303,14 @@ opencode
 
 OpenCode will initialize OMO orchestrators (Sisyphus, Hephaestus, Prometheus, Atlas) connected to the `agy-bridge` MCP server.
 
+### 5. Verify agy CLI Runtime Configs
+
+```bash
+ls ~/.gemini/config/mcp_config.json ~/.gemini/config/hooks.json ~/.gemini/config/GEMINI.md
+```
+
+Expected: all three exist. `mcp_config.json` should contain the 5 MCP servers (agentmemory, context7, mobile-mcp, codegraph, XcodeBuildMCP) with a resolved `ANDROID_HOME` (no leftover `{{ANDROID_HOME}}` placeholder unless you opted out of the mobile-mcp SDK detection). Restart the agy CLI session so the new MCP servers load.
+
 ---
 
 ## 7. Mode Switching (`agy-bridge-toggle`)
@@ -350,7 +391,13 @@ curl -fsSL https://raw.githubusercontent.com/sshahzaiib/agy-bridge/main/CLAUDE.m
 ### 4. Existing Configuration Notice (`.new` files)
 
 - **Symptom**: Installer prints `[WARN] Configuration already exists: ... Wrote updated template to: ...new`.
-- **Explanation**: `opencode.jsonc` is **merged** automatically by `merge-opencode-config.mjs` (pins OMO plugin, injects agy-bridge MCP block, preserves everything else). The other configs (`omo.jsonc`, `agy_bridge.jsonc`) are not auto-merged — they're written as `.new` next to your existing file. If you see `.new` warnings, open both files and merge the agy-bridge entries into your active configuration.
+- **Explanation**: `opencode.jsonc` is **merged** automatically by `merge-opencode-config.mjs` (pins OMO plugin, injects agy-bridge MCP block, preserves everything else). The other configs (`omo.jsonc`, `agy_bridge.jsonc`, `mcp_config.json`, `hooks.json`, `GEMINI.md`) are not auto-merged — they're written as `.new` next to your existing file. If you see `.new` warnings, open both files and merge the agy-bridge entries into your active configuration.
+
+### 4b. `{{ANDROID_HOME}}` placeholder left in `mcp_config.json`
+
+- **Symptom**: agy CLI fails to start the `mobile-mcp` server; the `mcp_config.json` still contains the literal `{{ANDROID_HOME}}`.
+- **Cause**: Installer could not detect an Android SDK (`ANDROID_HOME` env, `~/Library/Android/sdk`, `~/Android/Sdk`, `%LOCALAPPDATA%\Android\Sdk`).
+- **Solution**: Set the absolute SDK path manually (e.g. `sed -i '' 's|{{ANDROID_HOME}}|/Users/yourname/Library/Android/sdk|g' ~/.gemini/config/mcp_config.json`), or set `ANDROID_HOME` and re-run the installer.
 
 ### 5. Windows Path Formatting
 

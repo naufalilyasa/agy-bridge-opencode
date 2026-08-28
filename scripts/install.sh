@@ -170,6 +170,75 @@ else
 fi
 
 # ------------------------------------------------------------------------------
+# Install Component 2c: agy CLI runtime configs (mcp_config.json, hooks.json,
+# GEMINI.md) so the Antigravity CLI gets the same MCP servers, safety hook and
+# engineering protocol as the reference laptop. Generic files: auto-installed
+# with .new fallback. Machine-specific files (config.json hostname, agy CLI
+# settings.json): copied as .example ONLY — do NOT auto-activate.
+# ------------------------------------------------------------------------------
+
+# Detect ANDROID_HOME for the mobile-mcp entry (default: macOS/Linux SDK path)
+ANDROID_HOME_DETECTED="${ANDROID_HOME:-}"
+if [ -z "${ANDROID_HOME_DETECTED}" ] && [ -d "${HOME}/Library/Android/sdk" ]; then
+  ANDROID_HOME_DETECTED="${HOME}/Library/Android/sdk"
+elif [ -z "${ANDROID_HOME_DETECTED}" ] && [ -d "${HOME}/Android/Sdk" ]; then
+  ANDROID_HOME_DETECTED="${HOME}/Android/Sdk"
+fi
+
+install_generic_agy_cli_config() {
+  local SRC="$1"; local DST="$2"; local LABEL="$3"
+  if [ ! -f "${SRC}" ]; then
+    log_warn "Source file not found: ${SRC}"
+    return 1
+  fi
+  if [ -f "${DST}" ]; then
+    cp "${SRC}" "${DST}.new"
+    log_warn "${LABEL} already exists: ${DST}"
+    log_info "Wrote updated template to: ${DST}.new — review and merge manually."
+    return 0
+  fi
+  cp "${SRC}" "${DST}"
+  log_ok "Created ${LABEL}: ${DST}"
+  return 0
+}
+
+MCP_SRC="${REPO_DIR}/config/agy-cli-mcp-config.json.example"
+MCP_DST="${GEMINI_CONFIG_DIR}/mcp_config.json"
+if [ -f "${MCP_SRC}" ]; then
+  if [ -z "${ANDROID_HOME_DETECTED}" ]; then
+    log_warn "ANDROID_HOME not detected — '{{ANDROID_HOME}}' left in mobile-mcp entry."
+    log_warn "Set it manually in ${MCP_DST} if you need the mobile-mcp server."
+    install_generic_agy_cli_config "${MCP_SRC}" "${MCP_DST}" "agy CLI MCP config"
+  else
+    MCP_TMP="$(mktemp)"
+    sed "s|{{ANDROID_HOME}}|${ANDROID_HOME_DETECTED}|g" "${MCP_SRC}" > "${MCP_TMP}"
+    install_generic_agy_cli_config "${MCP_TMP}" "${MCP_DST}" "agy CLI MCP config"
+    rm -f "${MCP_TMP}"
+  fi
+else
+  log_warn "Source file not found: ${MCP_SRC}"
+fi
+
+install_generic_agy_cli_config \
+  "${REPO_DIR}/config/agy-cli-hooks.json.example" \
+  "${GEMINI_CONFIG_DIR}/hooks.json" \
+  "agy CLI hooks (cc-safety-net)"
+
+install_generic_agy_cli_config \
+  "${REPO_DIR}/config/agy-cli-gemini.md.example" \
+  "${GEMINI_CONFIG_DIR}/GEMINI.md" \
+  "agy CLI GEMINI.md protocol"
+
+# Machine-specific: ship as reference only, never auto-activate.
+cp "${REPO_DIR}/config/agy-cli-config.json.example" "${GEMINI_CONFIG_DIR}/config.json.example" 2>/dev/null \
+  && log_ok "Reference template: ${GEMINI_CONFIG_DIR}/config.json.example (edit remoteControlHostname, rename to config.json)" \
+  || log_warn "config/agy-cli-config.json.example not found"
+
+cp "${REPO_DIR}/config/agy-cli-settings.json.example" "${GEMINI_CONFIG_DIR}/settings.json.example" 2>/dev/null \
+  && log_ok "Reference template: ${GEMINI_CONFIG_DIR}/settings.json.example (add trustedWorkspaces + permissions, rename to settings.json)" \
+  || log_warn "config/agy-cli-settings.json.example not found"
+
+# ------------------------------------------------------------------------------
 # Install Component 3: OMO Configuration (omo.jsonc)
 # ------------------------------------------------------------------------------
 OMO_SRC="${REPO_DIR}/config/omo.jsonc.example"

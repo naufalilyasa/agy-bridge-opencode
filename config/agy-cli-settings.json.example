@@ -1,0 +1,33 @@
+{
+  "allowNonWorkspaceAccess": true,
+  "model": "{{AGY_DEFAULT_MODEL}}",
+  "permissions": {
+    "allow": [
+      "command(git status)",
+      "command(git diff)",
+      "command(git log)",
+      "command(git add)",
+      "command(git commit)",
+      "command(git push origin main)",
+      "command(git remote)",
+      "command(git show)",
+      "command(git ls-files)",
+      "command(git check-ignore)",
+      "command(grep)",
+      "command(ls)",
+      "command(which)",
+      "command(cat)",
+      "command(echo)",
+      "command(npx)",
+      "mcp(agentmemory/memory_save)",
+      "mcp(agentmemory/memory_recall)"
+    ]
+  },
+  "statusLine": {
+    "type": "",
+    "command": "",
+    "enabled": true
+  },
+  "toolPermission": "always-proceed",
+  "trustedWorkspaces": []
+}

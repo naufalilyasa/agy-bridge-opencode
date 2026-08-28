@@ -1,0 +1,5 @@
+{
+  "userSettings": {
+    "remoteControlHostname": "{{REMOTE_CONTROL_HOSTNAME}}"
+  }
+}

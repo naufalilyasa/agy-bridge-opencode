@@ -197,6 +197,77 @@ if (Test-Path $SkillSrc) {
 }
 
 # ------------------------------------------------------------------------------
+# Install Component 2c: agy CLI runtime configs (mcp_config.json, hooks.json,
+# GEMINI.md) so the Antigravity CLI gets the same MCP servers, safety hook and
+# engineering protocol as the reference laptop. Generic files: auto-installed
+# with .new fallback. Machine-specific files (config.json hostname, agy CLI
+# settings.json): copied as .example ONLY — do NOT auto-activate.
+# ------------------------------------------------------------------------------
+$AndroidHome = $env:ANDROID_HOME
+if ([string]::IsNullOrEmpty($AndroidHome)) {
+    $SdkCandidates = @(
+        (Join-Path $env:LOCALAPPDATA "Android\Sdk"),
+        (Join-Path $env:USERPROFILE "AppData\Local\Android\Sdk")
+    )
+    foreach ($Candidate in $SdkCandidates) {
+        if (Test-Path $Candidate) { $AndroidHome = $Candidate; break }
+    }
+}
+
+function Install-GenericAgyCliConfig {
+    param([string]$Src, [string]$Dst, [string]$Label)
+    if (-not (Test-Path $Src)) {
+        Log-Warn "Source file not found: $Src"
+        return $false
+    }
+    if (Test-Path $Dst) {
+        Copy-Item -Path $Src -Destination "$Dst.new" -Force
+        Log-Warn "${Label} already exists: $Dst"
+        Log-Info "Wrote updated template to: $Dst.new — review and merge manually."
+    } else {
+        Copy-Item -Path $Src -Destination $Dst -Force
+        Log-Ok "Created ${Label}: $Dst"
+    }
+    return $true
+}
+
+$McpSrc = Join-Path $RepoDir "config\agy-cli-mcp-config.json.example"
+$McpDst = Join-Path $GeminiConfigDir "mcp_config.json"
+if (Test-Path $McpSrc) {
+    if ([string]::IsNullOrEmpty($AndroidHome)) {
+        Log-Warn "ANDROID_HOME not detected — '{{ANDROID_HOME}}' left in mobile-mcp entry."
+        Log-Warn "Set it manually in $McpDst if you need the mobile-mcp server."
+        Install-GenericAgyCliConfig -Src $McpSrc -Dst $McpDst -Label "agy CLI MCP config"
+    } else {
+        $McpContent = (Get-Content -Raw -Path $McpSrc) -replace '\{\{ANDROID_HOME\}\}', $AndroidHome
+        $McpTmp = Join-Path $env:TEMP "agy-cli-mcp-config.json"
+        Set-Content -Path $McpTmp -Value $McpContent -NoNewline -Encoding UTF8
+        Install-GenericAgyCliConfig -Src $McpTmp -Dst $McpDst -Label "agy CLI MCP config"
+        Remove-Item -Path $McpTmp -Force -ErrorAction SilentlyContinue
+    }
+} else {
+    Log-Warn "Source file not found: $McpSrc"
+}
+
+Install-GenericAgyCliConfig -Src (Join-Path $RepoDir "config\agy-cli-hooks.json.example") -Dst (Join-Path $GeminiConfigDir "hooks.json") -Label "agy CLI hooks (cc-safety-net)"
+Install-GenericAgyCliConfig -Src (Join-Path $RepoDir "config\agy-cli-gemini.md.example") -Dst (Join-Path $GeminiConfigDir "GEMINI.md") -Label "agy CLI GEMINI.md protocol"
+
+$ConfigExampleSrc = Join-Path $RepoDir "config\agy-cli-config.json.example"
+if (Test-Path $ConfigExampleSrc) {
+    Copy-Item -Path $ConfigExampleSrc -Destination (Join-Path $GeminiConfigDir "config.json.example") -Force
+    Log-Ok "Reference template: $(Join-Path $GeminiConfigDir 'config.json.example') (edit remoteControlHostname, rename to config.json)"
+} else {
+    Log-Warn "Source file not found: $ConfigExampleSrc"
+}
+$SettingsExampleSrc = Join-Path $RepoDir "config\agy-cli-settings.json.example"
+if (Test-Path $SettingsExampleSrc) {
+    Copy-Item -Path $SettingsExampleSrc -Destination (Join-Path $GeminiConfigDir "settings.json.example") -Force
+    Log-Ok "Reference template: $(Join-Path $GeminiConfigDir 'settings.json.example') (add trustedWorkspaces + permissions, rename to settings.json)"
+} else {
+    Log-Warn "Source file not found: $SettingsExampleSrc"
+}
+
+# ------------------------------------------------------------------------------
 # Install Component 3: OMO Configuration (omo.jsonc)
 # ------------------------------------------------------------------------------
 $OmoSrc = Join-Path $RepoDir "config\omo.jsonc.example"

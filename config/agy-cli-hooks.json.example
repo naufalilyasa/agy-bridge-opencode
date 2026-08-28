@@ -1,0 +1,15 @@
+{
+  "cc-safety-net": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y cc-safety-net hook --agy-cli",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
