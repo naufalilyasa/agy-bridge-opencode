@@ -89,6 +89,12 @@ function toOffOmo(s) {
 
 const cmd = process.argv[2];
 if (cmd === "status") {
+  if (!fs.existsSync(OC) || !fs.existsSync(OMO)) {
+    console.log(`opencode.jsonc exists: ${fs.existsSync(OC)}`);
+    console.log(`omo.jsonc exists     : ${fs.existsSync(OMO)}`);
+    console.log("STATE: UNINITIALIZED (run installer first)");
+    process.exit(0);
+  }
   const oc = ocEnabled(read(OC));
   const omo = omoLooksOn(read(OMO));
   const snapOk = fs.existsSync(SNAP);
@@ -103,30 +109,44 @@ if (cmd === "status") {
         : "STATE: MIXED — run 'on' or 'off' to normalize",
   );
 } else if (cmd === "off") {
-  if (ocEnabled(read(OC)) !== false) {
+  if (fs.existsSync(OC) && ocEnabled(read(OC)) !== false) {
     writeBak(OC);
     fs.writeFileSync(OC, setOc(read(OC), "false"));
     console.log("opencode.jsonc: agy-bridge MCP disabled");
   } else console.log("opencode.jsonc: already off");
-  if (!fs.existsSync(SNAP)) {
+  if (!fs.existsSync(SNAP) && fs.existsSync(OMO)) {
     fs.mkdirSync(SNAP_DIR, { recursive: true });
     fs.writeFileSync(SNAP, read(OMO));
     console.log("ON-state snapshot saved");
   } else console.log("ON snapshot kept (already exists)");
-  writeBak(OMO);
-  fs.writeFileSync(OMO, toOffOmo(read(OMO)));
-  console.log("omo.jsonc: gating rules stripped, native agents re-enabled, whitelist dropped");
+  if (fs.existsSync(OMO)) {
+    writeBak(OMO);
+    fs.writeFileSync(OMO, toOffOmo(read(OMO)));
+    console.log("omo.jsonc: gating rules stripped, native agents re-enabled, whitelist dropped");
+  }
   console.log("\nRestart OpenCode sessions to apply.");
 } else if (cmd === "on") {
-  if (!fs.existsSync(SNAP)) throw new Error(`No ON snapshot at ${SNAP}. Cannot restore.`);
-  if (ocEnabled(read(OC)) !== true) {
+  if (!fs.existsSync(SNAP)) {
+    if (fs.existsSync(OMO) && omoLooksOn(read(OMO))) {
+      fs.mkdirSync(SNAP_DIR, { recursive: true });
+      fs.writeFileSync(SNAP, read(OMO));
+      console.log("Seeded ON-state snapshot from current omo.jsonc");
+    } else {
+      throw new Error(
+        `No ON snapshot at ${SNAP}. Please run installer or configure omo.jsonc first.`,
+      );
+    }
+  }
+  if (fs.existsSync(OC) && ocEnabled(read(OC)) !== true) {
     writeBak(OC);
     fs.writeFileSync(OC, setOc(read(OC), "true"));
     console.log("opencode.jsonc: agy-bridge MCP enabled");
   } else console.log("opencode.jsonc: already on");
-  writeBak(OMO);
-  fs.copyFileSync(SNAP, OMO);
-  console.log("omo.jsonc: restored ON state from snapshot");
+  if (fs.existsSync(OMO)) {
+    writeBak(OMO);
+    fs.copyFileSync(SNAP, OMO);
+    console.log("omo.jsonc: restored ON state from snapshot");
+  }
   console.log("\nRestart OpenCode sessions to apply.");
 } else {
   console.log("usage: agy-bridge-toggle <on|off|status>");

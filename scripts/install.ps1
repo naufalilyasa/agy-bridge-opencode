@@ -157,7 +157,7 @@ if (Test-Path $GuardSrc) {
 }
 
 # ------------------------------------------------------------------------------
-# Install Component 2: Model Routing Config (agy_bridge.jsonc)
+# Install Component 2a: Model Routing Config (agy_bridge.jsonc)
 # ------------------------------------------------------------------------------
 $RolesSrc = Join-Path $RepoDir "config\agy_bridge.jsonc.example"
 $RolesDst = Join-Path $GeminiConfigDir "agy_bridge.jsonc"
@@ -175,6 +175,25 @@ if (Test-Path $RolesSrc) {
     }
 } else {
     Log-Error "Source file not found: $RolesSrc"
+}
+
+# ------------------------------------------------------------------------------
+# Install Component 2b: agy-delegation SKILL.md (so agy-bridge MCP injects it
+# into every delegate prompt via listAvailableSkills scanning
+# ~/.gemini/config/skills/<name>/SKILL.md)
+# ------------------------------------------------------------------------------
+$SkillSrc = Join-Path $RepoDir "SKILL.md"
+$SkillDst = Join-Path $GeminiConfigDir "skills\agy-delegation\SKILL.md"
+
+if (Test-Path $SkillSrc) {
+    $SkillDir = Split-Path -Parent $SkillDst
+    if (-not (Test-Path $SkillDir)) {
+        New-Item -ItemType Directory -Force -Path $SkillDir | Out-Null
+    }
+    Copy-Item -Path $SkillSrc -Destination $SkillDst -Force
+    Log-Ok "Installed agy-delegation skill: $SkillDst"
+} else {
+    Log-Error "Source file not found: $SkillSrc"
 }
 
 # ------------------------------------------------------------------------------
@@ -199,29 +218,40 @@ if (Test-Path $OmoSrc) {
 }
 
 # ------------------------------------------------------------------------------
-# Install Component 4: OpenCode Config with Path Placeholder Replacement
+# Install Component 4: OpenCode Config — MERGE, never override.
+# Existing config is surgically updated: plugin[] pins oh-my-openagent@4.19.4
+# + guard plugin, mcp{} gains the agy-bridge server. User's own entries,
+# providers, API keys, etc. are preserved untouched.
 # ------------------------------------------------------------------------------
 $OpenCodeSrc = Join-Path $RepoDir "config\opencode.jsonc.example"
 $OpenCodeDst = Join-Path $OpenCodeConfigDir "opencode.jsonc"
+$MergeScript = Join-Path $RepoDir "scripts\merge-opencode-config.mjs"
 
-if (Test-Path $OpenCodeSrc) {
-    $TemplateContent = Get-Content -Raw -Path $OpenCodeSrc -Encoding UTF8
-    $ResolvedContent = $TemplateContent.Replace('{{AGY_BRIDGE_DIR}}', $RepoDirJson).Replace('{{AGY_PATH}}', $AgyPathJson)
-
-    if (Test-Path $OpenCodeDst) {
-        $OpenCodeNew = "$OpenCodeDst.new"
-        Set-Content -Path $OpenCodeNew -Value $ResolvedContent -Encoding UTF8
-        Log-Warn "Configuration already exists: $OpenCodeDst"
-        Log-Info "Wrote resolved configuration to: $OpenCodeNew"
-        Log-Info "Merge Instructions:"
-        Log-Info "  1. Add the 'agy-bridge' MCP entry from $OpenCodeNew into your 'mcp' block in $OpenCodeDst."
-        Log-Info "  2. Ensure './plugins/agy-delegate-guard.js' is included in your 'plugin' array."
+if (Test-Path $OpenCodeDst) {
+    if (Test-Path $MergeScript) {
+        & node $MergeScript $OpenCodeDst $RepoDirJson $AgyPathJson
+        if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 2) {
+            Log-Warn "Merge script failed (exit $LASTEXITCODE) — writing resolved example to $OpenCodeDst.new"
+            $TemplateContent = Get-Content -Raw -Path $OpenCodeSrc -Encoding UTF8
+            $ResolvedContent = $TemplateContent.Replace('{{AGY_BRIDGE_DIR}}', $RepoDirJson).Replace('{{AGY_PATH}}', $AgyPathJson)
+            Set-Content -Path "$OpenCodeDst.new" -Value $ResolvedContent -Encoding UTF8
+            Log-Info "Review and merge $OpenCodeDst.new manually if needed."
+        }
     } else {
-        Set-Content -Path $OpenCodeDst -Value $ResolvedContent -Encoding UTF8
-        Log-Ok "Created OpenCode config with resolved paths: $OpenCodeDst"
+        Log-Warn "Merge script not found ($MergeScript) — writing $OpenCodeDst.new for manual review"
+        $TemplateContent = Get-Content -Raw -Path $OpenCodeSrc -Encoding UTF8
+        $ResolvedContent = $TemplateContent.Replace('{{AGY_BRIDGE_DIR}}', $RepoDirJson).Replace('{{AGY_PATH}}', $AgyPathJson)
+        Set-Content -Path "$OpenCodeDst.new" -Value $ResolvedContent -Encoding UTF8
     }
 } else {
-    Log-Error "Source file not found: $OpenCodeSrc"
+    if (Test-Path $OpenCodeSrc) {
+        $TemplateContent = Get-Content -Raw -Path $OpenCodeSrc -Encoding UTF8
+        $ResolvedContent = $TemplateContent.Replace('{{AGY_BRIDGE_DIR}}', $RepoDirJson).Replace('{{AGY_PATH}}', $AgyPathJson)
+        Set-Content -Path $OpenCodeDst -Value $ResolvedContent -Encoding UTF8
+        Log-Ok "Created OpenCode config with resolved paths: $OpenCodeDst"
+    } else {
+        Log-Error "Source file not found: $OpenCodeSrc"
+    }
 }
 
 # ------------------------------------------------------------------------------
@@ -270,6 +300,17 @@ if (Test-Path $LiveRunner) {
     Log-Ok "Installed agy-live CLI runner: $LocalBinDir\agy-live.cmd"
 }
 
+# 6. agy-live2 shortcut (OpenTUI monitor — requires bun)
+$LiveTui = Join-Path $RepoDir "bin\agy-live.ts"
+if (Test-Path $LiveTui) {
+    $Live2CmdContent = "@echo off`r`nbun `"$LiveTui`" %*"
+    Set-Content -Path (Join-Path $LocalBinDir "agy-live2.cmd") -Value $Live2CmdContent -Encoding ASCII
+
+    $Live2Ps1Content = "& bun `"$LiveTui`" `$args"
+    Set-Content -Path (Join-Path $LocalBinDir "agy-live2.ps1") -Value $Live2Ps1Content -Encoding UTF8
+    Log-Ok "Installed agy-live2 OpenTUI runner: $LocalBinDir\agy-live2.cmd (requires bun)"
+}
+
 Log-Ok "Installed shortcuts: agy-bridge-on, agy-bridge-off, agy-bridge-status in $LocalBinDir"
 
 # ------------------------------------------------------------------------------
@@ -282,11 +323,34 @@ if ($EnvPath -notlike "*$LocalBinDir*") {
     Log-Warn "  [Environment]::SetEnvironmentVariable('PATH', `"`$EnvPath;$LocalBinDir`", 'User')"
 }
 
-# Check build artifact status
+# Build the MCP bundle if missing (npm ci && npm run build)
 $DistIndex = Join-Path $RepoDir "dist\index.js"
 if (-not (Test-Path $DistIndex)) {
-    Log-Warn "Build artifact '$DistIndex' was not detected."
-    Log-Warn "Before launching OpenCode or MCP sessions, run: npm run build (or bun run build)"
+    Log-Info "Build artifact 'dist/index.js' not found — building..."
+    Push-Location $RepoDir
+    try {
+        & npm ci
+        & npm run build
+    } finally {
+        Pop-Location
+    }
+    if (-not (Test-Path $DistIndex)) {
+        Log-Warn "npm build failed — run 'npm ci && npm run build' in $RepoDir manually"
+    }
+}
+if (-not (Test-Path $DistIndex)) {
+    Log-Warn "Build artifact '$DistIndex' still missing. MCP server won't start until built."
+}
+
+# Seed the ON-state snapshot so agy-bridge-on works right after install
+$SnapDir = Join-Path $OmoConfigDir ".agy-toggle"
+$SnapFile = Join-Path $SnapDir "omo.jsonc.on-snapshot"
+if ((Test-Path $OmoDst) -and (-not (Test-Path $SnapFile))) {
+    if (-not (Test-Path $SnapDir)) {
+        New-Item -ItemType Directory -Force -Path $SnapDir | Out-Null
+    }
+    Copy-Item -Path $OmoDst -Destination $SnapFile -Force
+    Log-Ok "Seeded ON-state snapshot for agy-bridge-toggle"
 }
 
 Log-Ok "agy-bridge installation and setup completed successfully."

@@ -133,7 +133,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# Install Component 2: Model Routing Config (agy_bridge.jsonc)
+# Install Component 2a: Model Routing Config (agy_bridge.jsonc)
 # ------------------------------------------------------------------------------
 ROLES_SRC="${REPO_DIR}/config/agy_bridge.jsonc.example"
 ROLES_DST="${GEMINI_CONFIG_DIR}/agy_bridge.jsonc"
@@ -151,6 +151,22 @@ if [ -f "${ROLES_SRC}" ]; then
   fi
 else
   log_error "Source file not found: ${ROLES_SRC}"
+fi
+
+# ------------------------------------------------------------------------------
+# Install Component 2b: agy-delegation SKILL.md (so agy-bridge MCP injects it
+# into every delegate prompt via listAvailableSkills scanning
+# ~/.gemini/config/skills/<name>/SKILL.md)
+# ------------------------------------------------------------------------------
+SKILL_SRC="${REPO_DIR}/SKILL.md"
+SKILL_DST="${GEMINI_CONFIG_DIR}/skills/agy-delegation/SKILL.md"
+
+if [ -f "${SKILL_SRC}" ]; then
+  mkdir -p "$(dirname "${SKILL_DST}")"
+  cp "${SKILL_SRC}" "${SKILL_DST}"
+  log_ok "Installed agy-delegation skill: ${SKILL_DST}"
+else
+  log_error "Source file not found: ${SKILL_SRC}"
 fi
 
 # ------------------------------------------------------------------------------
@@ -175,34 +191,46 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# Install Component 4: OpenCode Config with Path Placeholder Replacement
+# Install Component 4: OpenCode Config — MERGE, never override.
+# Existing config is surgically updated: plugin[] pins oh-my-openagent@4.19.4
+# + guard plugin, mcp{} gains the agy-bridge server. User's own entries,
+# providers, API keys, etc. are preserved untouched.
 # ------------------------------------------------------------------------------
 OPENCODE_SRC="${REPO_DIR}/config/opencode.jsonc.example"
 OPENCODE_DST="${OPENCODE_CONFIG_DIR}/opencode.jsonc"
+MERGE_SCRIPT="${REPO_DIR}/scripts/merge-opencode-config.mjs"
 
-if [ -f "${OPENCODE_SRC}" ]; then
-  TEMP_OPENCODE="$(mktemp)"
-
-  sed \
-    -e "s|{{AGY_BRIDGE_DIR}}|${REPO_DIR}|g" \
-    -e "s|{{AGY_PATH}}|${AGY_BIN_PATH}|g" \
-    "${OPENCODE_SRC}" > "${TEMP_OPENCODE}"
-
-  if [ -f "${OPENCODE_DST}" ]; then
-    OPENCODE_NEW="${OPENCODE_DST}.new"
-    cp "${TEMP_OPENCODE}" "${OPENCODE_NEW}"
-    rm -f "${TEMP_OPENCODE}"
-    log_warn "Configuration already exists: ${OPENCODE_DST}"
-    log_info "Wrote resolved configuration to: ${OPENCODE_NEW}"
-    log_info "Merge Instructions:"
-    log_info "  1. Add the 'agy-bridge' MCP entry from ${OPENCODE_NEW} into your 'mcp' block in ${OPENCODE_DST}."
-    log_info "  2. Ensure './plugins/agy-delegate-guard.js' is included in your 'plugin' array."
+if [ -f "${OPENCODE_DST}" ]; then
+  if [ -f "${MERGE_SCRIPT}" ]; then
+    set +e
+    node "${MERGE_SCRIPT}" "${OPENCODE_DST}" "${REPO_DIR}" "${AGY_BIN_PATH}"
+    RC=$?
+    set -e
+    if [ "${RC}" -ne 0 ] && [ "${RC}" -ne 2 ]; then
+      log_warn "Merge script failed (exit ${RC}) — writing resolved example to ${OPENCODE_DST}.new"
+      sed \
+        -e "s|{{AGY_BRIDGE_DIR}}|${REPO_DIR}|g" \
+        -e "s|{{AGY_PATH}}|${AGY_BIN_PATH}|g" \
+        "${OPENCODE_SRC}" > "${OPENCODE_DST}.new"
+      log_info "Review and merge ${OPENCODE_DST}.new manually if needed."
+    fi
   else
-    mv "${TEMP_OPENCODE}" "${OPENCODE_DST}"
-    log_ok "Created OpenCode config with resolved paths: ${OPENCODE_DST}"
+    log_warn "Merge script not found (${MERGE_SCRIPT}) — writing ${OPENCODE_DST}.new for manual review"
+    sed \
+      -e "s|{{AGY_BRIDGE_DIR}}|${REPO_DIR}|g" \
+      -e "s|{{AGY_PATH}}|${AGY_BIN_PATH}|g" \
+      "${OPENCODE_SRC}" > "${OPENCODE_DST}.new"
   fi
 else
-  log_error "Source file not found: ${OPENCODE_SRC}"
+  if [ -f "${OPENCODE_SRC}" ]; then
+    sed \
+      -e "s|{{AGY_BRIDGE_DIR}}|${REPO_DIR}|g" \
+      -e "s|{{AGY_PATH}}|${AGY_BIN_PATH}|g" \
+      "${OPENCODE_SRC}" > "${OPENCODE_DST}"
+    log_ok "Created OpenCode config with resolved paths: ${OPENCODE_DST}"
+  else
+    log_error "Source file not found: ${OPENCODE_SRC}"
+  fi
 fi
 
 # ------------------------------------------------------------------------------
@@ -222,21 +250,24 @@ if [ -f "${TOGGLE_SRC}" ]; then
   # 2. agy-bridge-on shortcut
   cat << 'EOF' > "${LOCAL_BIN_DIR}/agy-bridge-on"
 #!/usr/bin/env bash
-exec agy-bridge-toggle on "$@"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "${DIR}/agy-bridge-toggle" on "$@"
 EOF
   chmod +x "${LOCAL_BIN_DIR}/agy-bridge-on"
 
   # 3. agy-bridge-off shortcut
   cat << 'EOF' > "${LOCAL_BIN_DIR}/agy-bridge-off"
 #!/usr/bin/env bash
-exec agy-bridge-toggle off "$@"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "${DIR}/agy-bridge-toggle" off "$@"
 EOF
   chmod +x "${LOCAL_BIN_DIR}/agy-bridge-off"
 
   # 4. agy-bridge-status shortcut
   cat << 'EOF' > "${LOCAL_BIN_DIR}/agy-bridge-status"
 #!/usr/bin/env bash
-exec agy-bridge-toggle status "$@"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "${DIR}/agy-bridge-toggle" status "$@"
 EOF
   chmod +x "${LOCAL_BIN_DIR}/agy-bridge-status"
 
@@ -257,6 +288,17 @@ EOF
   log_ok "Installed agy-live CLI runner: ${LOCAL_BIN_DIR}/agy-live"
 fi
 
+# 6. agy-live2 shortcut (OpenTUI monitor — requires bun)
+LIVE_TUI="${REPO_DIR}/bin/agy-live.ts"
+if [ -f "${LIVE_TUI}" ]; then
+  cat << EOF > "${LOCAL_BIN_DIR}/agy-live2"
+#!/usr/bin/env bash
+exec bun "${LIVE_TUI}" "\$@"
+EOF
+  chmod +x "${LOCAL_BIN_DIR}/agy-live2"
+  log_ok "Installed agy-live2 OpenTUI runner: ${LOCAL_BIN_DIR}/agy-live2 (requires bun)"
+fi
+
 # ------------------------------------------------------------------------------
 # Verification & PATH Advisory
 # ------------------------------------------------------------------------------
@@ -269,10 +311,24 @@ case ":${PATH}:" in
     ;;
 esac
 
-# Check build artifact status
+# Build the MCP bundle if missing (npm ci && npm run build)
 if [ ! -f "${REPO_DIR}/dist/index.js" ]; then
-  log_warn "Build artifact '${REPO_DIR}/dist/index.js' was not detected."
-  log_warn "Before launching OpenCode or MCP sessions, run: npm run build (or bun run build)"
+  log_info "Build artifact 'dist/index.js' not found — building..."
+  if command -v npm >/dev/null 2>&1; then
+    (cd "${REPO_DIR}" && npm ci && npm run build) || log_warn "npm build failed — run 'npm ci && npm run build' in ${REPO_DIR} manually"
+  else
+    log_warn "npm not found — run 'npm ci && npm run build' in ${REPO_DIR} manually"
+  fi
+fi
+if [ ! -f "${REPO_DIR}/dist/index.js" ]; then
+  log_warn "Build artifact '${REPO_DIR}/dist/index.js' still missing. MCP server won't start until built."
+fi
+
+# Seed the ON-state snapshot so `agy-bridge-on` works right after install
+if [ -f "${OMO_DST}" ] && [ ! -f "${OMO_CONFIG_DIR}/.agy-toggle/omo.jsonc.on-snapshot" ]; then
+  mkdir -p "${OMO_CONFIG_DIR}/.agy-toggle"
+  cp "${OMO_DST}" "${OMO_CONFIG_DIR}/.agy-toggle/omo.jsonc.on-snapshot"
+  log_ok "Seeded ON-state snapshot for agy-bridge-toggle"
 fi
 
 log_ok "agy-bridge installation and setup completed successfully."

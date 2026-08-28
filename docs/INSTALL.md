@@ -100,10 +100,14 @@ irm https://opencode.ai/install.ps1 | iex
 
 ```bash
 # 1. Clone repository (if not already cloned)
-git clone https://github.com/sshahzaiib/agy-bridge.git
+git clone https://github.com/naufalilyasa/agy-bridge-opencode.git
 cd agy-bridge
 
-# 2. Run automated installer
+# 2. Install dependencies & build the MCP bundle
+npm ci
+npm run build
+
+# 3. Run automated installer
 ./scripts/install.sh
 ```
 
@@ -111,18 +115,25 @@ cd agy-bridge
 
 ```powershell
 # 1. Clone repository (if not already cloned)
-git clone https://github.com/sshahzaiib/agy-bridge.git
+git clone https://github.com/naufalilyasa/agy-bridge-opencode.git
 cd agy-bridge
 
-# 2. Run automated installer
+# 2. Install dependencies & build the MCP bundle
+npm ci
+npm run build
+
+# 3. Run automated installer
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
+> Note: The installers also build `dist/index.js` automatically when it is missing, so steps 2/3 above are only required when you want to control the build yourself.
+
 ### Safety and Idempotency Guarantees
 
-- **No Silent Overwrites**: If configuration files (`opencode.jsonc`, `omo.jsonc`, `agy_bridge.jsonc`) already exist at the target path, the installer writes a `.new` file (e.g. `opencode.jsonc.new`) and prints clear manual merge instructions.
+- **Never Overrides an Existing `opencode.jsonc`**: If you already have an OpenCode config, the installer **merges** into it with `scripts/merge-opencode-config.mjs` — it only pins `oh-my-openagent@4.19.4` in `plugin[]`, adds `./plugins/agy-delegate-guard.js`, and injects the `agy-bridge` MCP server block into `mcp{}`. Your own entries, providers, and API keys are preserved untouched (a timestamped backup is still written). `omo.jsonc` / `agy_bridge.jsonc` follow the same non-destructive rule: existing files get a `.new` template + merge instructions instead of being overwritten.
 - **Timestamped Backups**: Existing plugin scripts (such as `agy-delegate-guard.js`) are backed up with a timestamp prefix (`.bak.<YYYYMMDD_HHMMSS>`) before being updated.
 - **Path Resolution**: Placeholders `{{AGY_BRIDGE_DIR}}` and `{{AGY_PATH}}` in `opencode.jsonc.example` are automatically resolved to exact absolute filesystem paths.
+- **Skill Injection**: `SKILL.md` (the `agy-delegation` skill) is copied to `~/.gemini/config/skills/agy-delegation/SKILL.md` so agy-bridge MCP auto-injects it into every `delegate` prompt.
 
 ---
 
@@ -139,6 +150,9 @@ The installer establishes configuration across several target directories:
 | **Toggle Utility**   | `scripts/agy-bridge-toggle`            | `~/.local/bin/agy-bridge-toggle`                                                                  | `%USERPROFILE%\.local\bin\agy-bridge-toggle.cmd`                                                                                                  |
 | **Toggle Shortcuts** | `scripts/install.sh` generated         | `~/.local/bin/agy-bridge-on`<br>`~/.local/bin/agy-bridge-off`<br>`~/.local/bin/agy-bridge-status` | `%USERPROFILE%\.local\bin\agy-bridge-on.cmd`<br>`%USERPROFILE%\.local\bin\agy-bridge-off.cmd`<br>`%USERPROFILE%\.local\bin\agy-bridge-status.cmd` |
 | **Live Monitor**     | `bin/agy-live-runner.js`               | `~/.local/bin/agy-live`                                                                           | `%USERPROFILE%\.local\bin\agy-live.cmd`                                                                                                           |
+| **Live Monitor (TUI)** | `bin/agy-live.ts`                    | alias `agy-live2` (runs via `bun`)                                                                | `%USERPROFILE%\.local\bin\agy-live2.cmd` (bun shim)                                                                                               |
+| **Merge Script**     | `scripts/merge-opencode-config.mjs`    | (used by installer, not installed)                                                                 | (used by installer, not installed)                                                                                                                 |
+| **Delegation Skill** | `SKILL.md`                             | `~/.gemini/config/skills/agy-delegation/SKILL.md`                                                  | `%USERPROFILE%\.gemini\config\skills\agy-delegation\SKILL.md`                                                                                      |
 
 ---
 
@@ -335,8 +349,8 @@ curl -fsSL https://raw.githubusercontent.com/sshahzaiib/agy-bridge/main/CLAUDE.m
 
 ### 4. Existing Configuration Notice (`.new` files)
 
-- **Symptom**: Installer outputs `[WARN] Configuration already exists: ... Wrote updated template to: ...new`.
-- **Solution**: The installer never overwrites your customized settings. Open both files and merge the `agy-bridge` MCP block or `plugins` array into your active configuration.
+- **Symptom**: Installer prints `[WARN] Configuration already exists: ... Wrote updated template to: ...new`.
+- **Explanation**: `opencode.jsonc` is **merged** automatically by `merge-opencode-config.mjs` (pins OMO plugin, injects agy-bridge MCP block, preserves everything else). The other configs (`omo.jsonc`, `agy_bridge.jsonc`) are not auto-merged — they're written as `.new` next to your existing file. If you see `.new` warnings, open both files and merge the agy-bridge entries into your active configuration.
 
 ### 5. Windows Path Formatting
 

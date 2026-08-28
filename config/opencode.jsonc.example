@@ -96,7 +96,7 @@
       "npm": "@ai-sdk/openai-compatible",
       "options": {
         "baseURL": "https://opencode.ai/zen/v1",
-        "apiKey": "{env:OPCODEZEN_API_KEY}",
+        "apiKey": "{env:OPENCODEZEN_API_KEY}",
       },
       "models": {
         "deepseek-v4-flash-free": {
