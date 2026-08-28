@@ -20,6 +20,19 @@ describe("parseModels", () => {
       "Claude Opus 4.6 (Thinking)",
     ]);
   });
+
+  it("extracts both slug IDs and display names from tab-separated agy output", () => {
+    const raw = `Fetching available models...
+gemini-3.7-flash-high\tGemini 3.7 Flash (High)
+claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
+`;
+    expect(parseModels(raw)).toEqual([
+      "gemini-3.7-flash-high",
+      "Gemini 3.7 Flash (High)",
+      "claude-sonnet-4-6",
+      "Claude Sonnet 4.6 (Thinking)",
+    ]);
+  });
 });
 
 describe("ModelRegistry.resolve", () => {

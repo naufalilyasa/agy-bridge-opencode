@@ -5,3 +5,12 @@ dist/
 package/
 docs/*
 !docs/multi-client-support.md
+
+# vendored OMO source (embedded git repo) — not part of agy-bridge source
+oh-my-openagent/
+
+# OMO runtime session state
+.omo/
+
+# scratch QA scripts
+.qa-*.ts

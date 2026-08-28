@@ -16,6 +16,8 @@ const cfg: Config = {
   timeoutExplicit: false,
   perToolTimeouts: {},
   maxOutputChars: 100,
+  idleTimeoutSec: 90,
+  roleModels: {},
   defaultModel: undefined,
   skipPermissions: true,
   sandbox: false,

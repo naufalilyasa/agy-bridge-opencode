@@ -1,8 +1,18 @@
 export function parseModels(output: string): string[] {
-  return output
-    .split("\n")
-    .map((l) => l.trim().replace(/\s*\(current\)$/, ""))
-    .filter((l) => l.length > 0);
+  const models: string[] = [];
+  const lines = output.split("\n");
+  for (const raw of lines) {
+    let l = raw.trim().replace(/\s*\(current\)$/, "");
+    if (!l || l.startsWith("Fetching")) continue;
+    if (l.includes("\t")) {
+      const [id, name] = l.split("\t").map((s) => s.trim());
+      if (id && !models.includes(id)) models.push(id);
+      if (name && !models.includes(name)) models.push(name);
+    } else {
+      if (!models.includes(l)) models.push(l);
+    }
+  }
+  return models;
 }
 
 export interface ResolveOptions {

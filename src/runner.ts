@@ -18,6 +18,8 @@ export interface RunRequest {
   timeoutSec?: number;
   /** MCP cancellation signal — kills the agy process when aborted. */
   signal?: AbortSignal;
+  /** Optional progress callback for MCP progress notifications keepalive. */
+  onProgress?: (elapsedSec: number) => void;
 }
 
 export interface RunResult {
@@ -167,14 +169,61 @@ export function truncate(text: string, max: number): { text: string; truncated: 
   };
 }
 
+export function extractLastAction(log: string): string | undefined {
+  if (!log) return undefined;
+  const lines = log.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    if (line.includes("run_command") || line.includes("CommandLine")) {
+      const match = /CommandLine["']?\s*:\s*["']([^"'\\]+)/i.exec(line);
+      return match ? `💻 [BASH] ${match[1].slice(0, 30)}` : "💻 [BASH] Running command...";
+    }
+    if (line.includes("replace_file_content") || line.includes("TargetFile")) {
+      const match = /TargetFile["']?\s*:\s*["']([^"'\\]+)/i.exec(line);
+      return match ? `✏️ [DIFF] ${path.basename(match[1])}` : "✏️ [DIFF] Editing file...";
+    }
+    if (line.includes("write_to_file")) {
+      const match = /TargetFile["']?\s*:\s*["']([^"'\\]+)/i.exec(line);
+      return match ? `📝 [WRITE] ${path.basename(match[1])}` : "📝 [WRITE] Writing file...";
+    }
+    if (line.includes("view_file")) {
+      const match = /AbsolutePath["']?\s*:\s*["']([^"'\\]+)/i.exec(line);
+      return match ? `🔍 [READ] ${path.basename(match[1])}` : "🔍 [READ] Reading file...";
+    }
+    if (line.includes("grep_search") || line.includes("find_by_name")) {
+      const match = /(?:Query|Pattern)["']?\s*:\s*["']([^"'\\]+)/i.exec(line);
+      return match ? `🔎 [SEARCH] ${match[1].slice(0, 25)}` : "🔎 [SEARCH] Searching...";
+    }
+    if (line.includes("schedule")) {
+      return "⏳ [SCHEDULE] Waiting timer/task...";
+    }
+    if (line.includes("thinking") || line.includes("Thinking")) {
+      return "🧠 Thinking...";
+    }
+  }
+  return undefined;
+}
+
+export class IdleStallError extends Error {
+  constructor(
+    public readonly model: string | undefined,
+    public readonly idleSeconds: number,
+  ) {
+    super(`agy process stalled (no activity for ${idleSeconds}s).`);
+    this.name = "IdleStallError";
+  }
+}
+
 export async function runAgy(
   req: RunRequest,
   cfg: Config,
   deps: RunnerDeps = defaultDeps,
 ): Promise<RunResult> {
   const timeoutSec = req.timeoutSec ?? cfg.timeoutSec;
-  const pollMs = deps.pollMs ?? 1000;
-  const graceMs = deps.graceMs ?? 15_000;
+  const pollMs = deps.pollMs ?? 1_000;
+  const graceMs = deps.graceMs ?? 10_000;
   const killGraceMs = deps.killGraceMs ?? 5_000;
   const logPath = deps.makeLogPath();
 
@@ -201,16 +250,37 @@ export async function runAgy(
       fn();
     };
 
+    const startTime = Date.now();
+    let lastActivityTime = Date.now();
+    let lastLogLength = 0;
+    const idleTimeoutMs = cfg.idleTimeoutSec * 1000;
+
     const poller = setInterval(async () => {
       if (polling || settled) return;
       polling = true;
       try {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
         const log = await deps.readLog(logPath);
         if (settled) return; // settled during the async read — don't kill a finished run
+
+        if (log.length > lastLogLength) {
+          lastLogLength = log.length;
+          lastActivityTime = Date.now();
+        }
+
+        req.onProgress?.(elapsed);
+
         const quota = detectQuota(log);
         if (quota) {
           killChild();
           finish(() => reject(new QuotaError(req.model, quota)));
+          return;
+        }
+
+        if (Date.now() - lastActivityTime > idleTimeoutMs) {
+          killChild();
+          finish(() => reject(new IdleStallError(req.model, cfg.idleTimeoutSec)));
+          return;
         }
       } finally {
         polling = false;
@@ -259,24 +329,28 @@ export async function runAgy(
         return;
       }
       const out = child.stdout().trim();
+      const stderr = child.stderr().trim();
+      const combined = (out + "\n" + stderr).trim();
+      const logContent = await deps.readLog(logPath);
+      const quota = detectQuota(combined) || detectQuota(logContent);
+
+      if (quota) {
+        finish(() => reject(new QuotaError(req.model, quota)));
+        return;
+      }
+
       if (code !== 0) {
-        const stderr = child.stderr().trim();
         finish(() =>
           reject(new Error(stderr ? `agy failed: ${stderr}` : `agy exited with code ${code}.`)),
         );
         return;
       }
       if (!out) {
-        // agy swallows quota errors and exits 0 with empty output after its
-        // print-timeout — check the log before reporting anything as success.
-        const quota = detectQuota(await deps.readLog(logPath));
         finish(() =>
           reject(
-            quota
-              ? new QuotaError(req.model, quota)
-              : new Error(
-                  "agy returned empty output (likely hit its print-timeout without a response).",
-                ),
+            new Error(
+              "agy returned empty output (likely hit its print-timeout without a response).",
+            ),
           ),
         );
         return;

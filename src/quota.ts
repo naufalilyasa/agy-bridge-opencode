@@ -9,7 +9,8 @@
 
 export const DEFAULT_COOLDOWN_SEC = 15 * 60;
 
-const QUOTA_RE = /RESOURCE_EXHAUSTED \(code 429\)/;
+const QUOTA_RE =
+  /(?:RESOURCE_EXHAUSTED \(code 429\)|experiencing high traffic|UNAVAILABLE \(code 503\)|model is overloaded|rate limit exceeded|servers are experiencing high traffic|Agent execution terminated due to error|Error ID:)/i;
 const RESET_RE = /Resets in ((?:\d+h)?(?:\d+m)?(?:\d+s)?)\b/;
 
 export interface QuotaInfo {
@@ -38,8 +39,17 @@ export function formatDuration(totalSeconds: number): string {
 export function detectQuota(log: string): QuotaInfo | null {
   if (!QUOTA_RE.test(log)) return null;
   const reset = RESET_RE.exec(log)?.[1];
-  const resetSeconds = reset ? parseResetDuration(reset) : undefined;
-  return { resetText: resetSeconds !== undefined ? reset : undefined, resetSeconds };
+  const resetSeconds = reset
+    ? parseResetDuration(reset)
+    : log.toLowerCase().includes("high traffic") ||
+        log.toLowerCase().includes("overloaded") ||
+        log.toLowerCase().includes("terminated due to error") ||
+        log.toLowerCase().includes("error id:")
+      ? 60
+      : undefined;
+  const resetText =
+    resetSeconds !== undefined ? reset || formatDuration(resetSeconds) : undefined;
+  return { resetText, resetSeconds };
 }
 
 export class QuotaError extends Error {
@@ -51,8 +61,8 @@ export class QuotaError extends Error {
     info: QuotaInfo,
   ) {
     const who = model ?? "agy's default model";
-    const when = info.resetText ? ` Quota resets in ${info.resetText}.` : "";
-    super(`Quota exhausted for ${who} (RESOURCE_EXHAUSTED 429).${when}`);
+    const when = info.resetText ? ` Resets in ${info.resetText}.` : "";
+    super(`Quota or capacity limit for ${who} (RESOURCE_EXHAUSTED/TRAFFIC).${when}`);
     this.name = "QuotaError";
     this.resetSeconds = info.resetSeconds;
     this.resetText = info.resetText;

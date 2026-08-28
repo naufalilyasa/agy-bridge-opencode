@@ -5,10 +5,12 @@
   "mcpName": "io.github.sshahzaiib/agy-bridge",
   "type": "module",
   "bin": {
-    "agy-bridge": "dist/index.js"
+    "agy-bridge": "dist/index.js",
+    "agy-live": "bin/agy-live-runner.js"
   },
   "files": [
     "dist",
+    "bin",
     "CLAUDE.md",
     "SKILL.md",
     "README.md",
@@ -19,6 +21,7 @@
   },
   "scripts": {
     "build": "tsup",
+    "live": "bun bin/agy-live.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
@@ -41,6 +44,7 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
+    "@opentui/core": "^0.5.4",
     "zod": "^3.24.0"
   },
   "devDependencies": {

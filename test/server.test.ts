@@ -10,15 +10,17 @@ const cfg: Config = {
   agyPath: "agy",
   timeoutSec: 600,
   timeoutExplicit: false,
+  idleTimeoutSec: 90,
   perToolTimeouts: {},
   maxOutputChars: 50_000,
   defaultModel: undefined,
+  roleModels: {},
   skipPermissions: true,
   sandbox: false,
   onFailure: "fallback",
 };
 
-const LISTING = "Gemini 3.5 Flash (Medium)\nGemini 3.5 Flash (High)\nGemini 3.1 Pro (High)\n";
+const LISTING = "Gemini 3.7 Flash (High)\nClaude Sonnet 4.6 (Thinking)\n";
 
 const LOG_429 =
   "E0613 log.go:398] agent executor error: RESOURCE_EXHAUSTED (code 429): " +
@@ -83,17 +85,17 @@ describe("createToolHandler", () => {
     const res = await handlerFor("delegate", f)({ prompt: "do x" });
     const text = (res.content[0] as { text: string }).text;
     expect(text).toContain("the answer");
-    expect(text).toContain("Gemini 3.5 Flash (High)");
+    expect(text).toContain("Gemini 3.7 Flash (High)");
     expect(text).toContain("sess-1");
     expect(f.runs[0].args).toContain("--model");
   });
 
-  it("follow_up passes --conversation and no --model", async () => {
+  it("follow_up passes --conversation and resolves model chain", async () => {
     const f = fakeDeps();
     await handlerFor("follow_up", f)({ session_id: "abc", question: "more?" });
     expect(f.runs[0].args).toContain("--conversation");
     expect(f.runs[0].args).toContain("abc");
-    expect(f.runs[0].args).not.toContain("--model");
+    expect(f.runs[0].args).toContain("--model");
   });
 
   it("uses the per-tool timeout for --print-timeout", async () => {
@@ -132,37 +134,37 @@ describe("createToolHandler", () => {
   });
 
   it("fails over to the next chain model on quota exhaustion", async () => {
-    const f = fakeDeps(["Gemini 3.5 Flash (Medium)"]);
+    const f = fakeDeps(["Gemini 3.7 Flash (High)"]);
     const res = await handlerFor("web_lookup", f)({ query: "docs" });
     const text = (res.content[0] as { text: string }).text;
     expect(res.isError).toBeUndefined();
     expect(f.runs).toHaveLength(2);
-    expect(f.modelOf(f.runs[0])).toBe("Gemini 3.5 Flash (Medium)");
-    expect(f.modelOf(f.runs[1])).toBe("Gemini 3.5 Flash (High)");
+    expect(f.modelOf(f.runs[0])).toBe("Gemini 3.7 Flash (High)");
+    expect(f.modelOf(f.runs[1])).toBe("Claude Sonnet 4.6 (Thinking)");
     expect(text).toContain("the answer");
-    expect(text).toContain("model: Gemini 3.5 Flash (High)");
-    expect(text).toMatch(/failover.*Gemini 3.5 Flash \(Medium\).*quota/i);
+    expect(text).toContain("model: Claude Sonnet 4.6 (Thinking)");
+    expect(text).toMatch(/failover.*Gemini 3.7 Flash \(High\).*quota/i);
   });
 
   it("skips cooled-down models on subsequent calls without spawning them", async () => {
-    const f = fakeDeps(["Gemini 3.5 Flash (Medium)"]);
+    const f = fakeDeps(["Gemini 3.7 Flash (High)"]);
     const cooldowns = new CooldownRegistry();
     const handler = handlerFor("web_lookup", f, {}, cooldowns);
     await handler({ query: "first" });
     expect(f.runs).toHaveLength(2);
     await handler({ query: "second" });
     expect(f.runs).toHaveLength(3);
-    expect(f.modelOf(f.runs[2])).toBe("Gemini 3.5 Flash (High)");
+    expect(f.modelOf(f.runs[2])).toBe("Claude Sonnet 4.6 (Thinking)");
   });
 
   it("errors with reset times when every chain model is quota-exhausted", async () => {
-    const f = fakeDeps(["Gemini 3.5 Flash (Medium)", "Gemini 3.5 Flash (High)"]);
+    const f = fakeDeps(["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"]);
     const res = await handlerFor("web_lookup", f)({ query: "docs" });
     expect(res.isError).toBe(true);
     const text = (res.content[0] as { text: string }).text;
     expect(text).toMatch(/quota/i);
-    expect(text).toContain("Gemini 3.5 Flash (Medium)");
-    expect(text).toContain("Gemini 3.5 Flash (High)");
+    expect(text).toContain("Gemini 3.7 Flash (High)");
+    expect(text).toContain("Claude Sonnet 4.6 (Thinking)");
     expect(text).toContain("4h24m");
   });
 
@@ -197,5 +199,31 @@ describe("createToolHandler", () => {
     const res = await handlerFor("delegate", f)({ prompt: "x" }, { signal: ac.signal });
     expect(res.isError).toBe(true);
     expect((res.content[0] as { text: string }).text).toMatch(/cancelled/i);
+  });
+
+  it("selects Claude Sonnet first for deep reasoning role (oracle)", async () => {
+    const f = fakeDeps();
+    const handler = handlerFor("delegate", f);
+    await handler({ role: "oracle", task: "Adversarial plan review" });
+    expect(f.runs).toHaveLength(1);
+    expect(f.modelOf(f.runs[0])).toBe("Claude Sonnet 4.6 (Thinking)");
+  });
+
+  it("selects Gemini Flash first for fast execution role (git-master)", async () => {
+    const f = fakeDeps();
+    const handler = handlerFor("delegate", f);
+    await handler({ role: "git-master", task: "Create atomic commit" });
+    expect(f.runs).toHaveLength(1);
+    expect(f.modelOf(f.runs[0])).toBe("Gemini 3.7 Flash (High)");
+  });
+
+  it("allows cfg.roleModels to override the default model chain for a role", async () => {
+    const f = fakeDeps();
+    const handler = handlerFor("delegate", f, {
+      roleModels: { oracle: ["Gemini 3.7 Flash (High)"] },
+    });
+    await handler({ role: "oracle", task: "Adversarial plan review" });
+    expect(f.runs).toHaveLength(1);
+    expect(f.modelOf(f.runs[0])).toBe("Gemini 3.7 Flash (High)");
   });
 });

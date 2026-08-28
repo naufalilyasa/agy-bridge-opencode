@@ -1,5 +1,6 @@
+import * as path from "node:path";
 import { describe, it, expect } from "vitest";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, stripJsonComments } from "../src/config.js";
 
 describe("loadConfig", () => {
   it("returns defaults for empty env", () => {
@@ -8,9 +9,11 @@ describe("loadConfig", () => {
       agyPath: "agy",
       timeoutSec: 1200,
       timeoutExplicit: false,
+      idleTimeoutSec: 90,
       perToolTimeouts: {},
       maxOutputChars: 50_000,
       defaultModel: undefined,
+      roleModels: {},
       skipPermissions: true,
       sandbox: false,
       onFailure: "fallback",
@@ -21,6 +24,7 @@ describe("loadConfig", () => {
     const c = loadConfig({
       AGY_PATH: "/opt/agy",
       AGY_TIMEOUT: "300",
+      AGY_IDLE_TIMEOUT: "45",
       AGY_MAX_OUTPUT_CHARS: "1000",
       AGY_DEFAULT_MODEL: "Gemini 3.1 Pro (High)",
       AGY_SKIP_PERMISSIONS: "false",
@@ -29,6 +33,7 @@ describe("loadConfig", () => {
     expect(c.agyPath).toBe("/opt/agy");
     expect(c.timeoutSec).toBe(300);
     expect(c.timeoutExplicit).toBe(true);
+    expect(c.idleTimeoutSec).toBe(45);
     expect(c.maxOutputChars).toBe(1000);
     expect(c.defaultModel).toBe("Gemini 3.1 Pro (High)");
     expect(c.skipPermissions).toBe(false);
@@ -58,5 +63,39 @@ describe("loadConfig", () => {
 
   it("treats unknown AGY_ON_FAILURE values as fallback", () => {
     expect(loadConfig({ AGY_ON_FAILURE: "explode" }).onFailure).toBe("fallback");
+  });
+
+  it("parses per-role AGY_ROLE_MODEL_<ROLE> overrides", () => {
+    const c = loadConfig({
+      AGY_ROLE_MODEL_ORACLE: "Claude Sonnet 4.6 (Thinking),Gemini 3.7 Flash (High)",
+      AGY_ROLE_MODEL_GIT_MASTER: "Gemini 3.7 Flash (High)",
+    });
+    expect(c.roleModels).toEqual({
+      oracle: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
+      "git-master": ["Gemini 3.7 Flash (High)"],
+    });
+  });
+
+  it("loads config from AGY_CONFIG_PATH JSON file", () => {
+    const c = loadConfig({
+      AGY_CONFIG_PATH: path.resolve(__dirname, "../agy.config.json.example"),
+    });
+    expect(c.defaultModel).toBe("gemini-3.7-flash-high");
+    expect(c.roleModels.oracle).toEqual(["claude-sonnet-4-6", "gemini-3.7-flash-high"]);
+    expect(c.roleModels["git-master"]).toEqual(["gemini-3.7-flash-high", "claude-sonnet-4-6"]);
+  });
+
+  it("handles JSON with single-line and multi-line comments", () => {
+    const jsonc = `
+      // Top-level comment
+      {
+        /* Block comment */
+        "defaultModel": "gemini-3.7-flash-high", // trailing comment
+        "timeoutSec": 300
+      }
+    `;
+    const c = JSON.parse(stripJsonComments(jsonc));
+    expect(c.defaultModel).toBe("gemini-3.7-flash-high");
+    expect(c.timeoutSec).toBe(300);
   });
 });
