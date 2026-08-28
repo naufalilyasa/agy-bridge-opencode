@@ -8,6 +8,39 @@ const OUTPUT_RULES =
   "Cite file:line for every code-level finding. " +
   "Respond ONLY in English, regardless of the language of this prompt or any user context.";
 
+const CATEGORY_CONTEXT: Record<string, string> = {
+  engineering: `You are working on an ENGINEERING task.
+Execution mindset: direct action, minimal overhead. Write code, verify it runs, and report exact file:line results.`,
+  architecture: `You are working on an ARCHITECTURE task.
+Reasoning mindset: weigh trade-offs, name unstated assumptions, and propose the minimal design that satisfies the goal. Back every recommendation with evidence.`,
+  quality: `You are working on a QUALITY task.
+Critique mindset: hunt for real flaws — bugs, edge cases, security issues, performance traps, and unstated assumptions. Rank findings by severity and justify each. No padding, no praise.`,
+  security: `You are working on a SECURITY task.
+Adversarial mindset: prove exploitability before claiming a finding, calibrate severity by actual risk, and never assume an attack surface is safe.`,
+  research: `You are working on a RESEARCH task.
+Investigation mindset: gather evidence across code and docs, verify claims, and report findings with sources and commit hashes where relevant.`,
+  product: `You are working on a PRODUCT task.
+Outcome mindset: focus on user value and acceptance criteria, ground decisions in the stated goal, and keep scope tight.`,
+};
+
+function isFastModel(model: string | undefined): boolean {
+  return !!model && /flash|compact|mini|nano|fast/i.test(model);
+}
+
+function buildCallerWarning(firstModel: string | undefined): string {
+  const model = firstModel || "a compact model";
+  return (
+    `THIS TASK USES ${/^[aeiou]/i.test(firstModel || "a") ? "AN" : "A"} ${model}.\n` +
+    `The executing model is optimized for speed over depth. Your prompt must be EXHAUSTIVELY EXPLICIT:\n` +
+    `- State the goal and acceptance criteria in one line.\n` +
+    `- Give numbered, atomic MUST DO steps with explicit file paths.\n` +
+    `- List MUST NOT DO boundaries and why each matters.\n` +
+    `- Define the exact expected output and how it will be verified.\n` +
+    `Do not rely on the model to infer scope, infer steps, or fill gaps.`
+  );
+}
+
+
 export function resolveFiles(files: string[], cwd: string): string[] {
   return files.map((f) => (path.isAbsolute(f) ? f : path.resolve(cwd, f)));
 }
@@ -831,6 +864,12 @@ export const TOOLS: ToolDef[] = [
               focus: ["High-quality implementation", "Verification with builds/tests"],
             }
           : OMO_ROLES["git-master"]);
+      const roleCategory = roleDef.category;
+      const roleFirstModel =
+        roleDef.chain?.[0] ??
+        (roleCategory === "quality" || roleCategory === "security"
+          ? "Claude Sonnet 4.6 (Thinking)"
+          : "Gemini 3.7 Flash (High)");
 
       const expectedOutcome = (args.expected_outcome as string) || (args.outcome as string);
       const reqTools = (args.required_tools as string[]) || (args.tools as string[]);
@@ -877,6 +916,15 @@ export const TOOLS: ToolDef[] = [
       ) {
         let p = `[DELEGATED AGENT ROLE: ${roleDef.title}]\n`;
         p += `Mission: ${roleDef.mission}\n\n`;
+
+        const categoryContext = CATEGORY_CONTEXT[roleCategory];
+        if (categoryContext) {
+          p += `<Category_Context>\n${categoryContext}\n</Category_Context>\n\n`;
+        }
+
+        if (isFastModel(roleFirstModel)) {
+          p += `<Caller_Warning>\n${buildCallerWarning(roleFirstModel)}\n</Caller_Warning>\n\n`;
+        }
 
         p += `## 1. TASK / OBJECTIVE\n${task}\n\n`;
 
@@ -980,6 +1028,12 @@ export const TOOLS: ToolDef[] = [
         p += `- No Placeholders: Write complete, functional code without TODOs or stubbed logic.\n`;
         p += `- Quality Verification: Run the relevant build or test commands to ensure clean execution.\n`;
         p += `- Deliverables: Provide a structured summary of completed work with exact file:line citations.\n\n`;
+
+        p += `## EXECUTION DISCIPLINE — MANDATORY\n`;
+        p += `- Execute directly: do the work yourself with file/shell tools. Do NOT delegate to another agent, do NOT return a plan-only response, and do NOT ask clarifying questions when the task is executable now.\n`;
+        p += `- Verify, don't assume: after any change, run the relevant build/test/lint command and report the actual result — not an expectation.\n`;
+        p += `- Anti-optimism checkpoint: before declaring completion, re-read the MUST DO list and confirm each item is genuinely satisfied with evidence (file:line, command output). If any item is unverified, say so explicitly.\n`;
+        p += `- Scope discipline: touch only what the task requires. Do not refactor unrelated code, add speculative abstractions, or expand scope unprompted.\n\n`;
         p += OUTPUT_RULES;
         return p;
       }

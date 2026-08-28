@@ -94,6 +94,25 @@ describe("prompt templates", () => {
     expect(p).toContain("EXECUTION PROTOCOL");
   });
 
+  it("delegate injects OMO-native parity blocks (Category_Context, Caller_Warning for fast roles, EXECUTION DISCIPLINE)", () => {
+    const pFast = get("delegate").buildPrompt(
+      { role: "git-master", task: "Commit staged changes atomically" },
+      "/repo",
+    );
+    expect(pFast).toContain("<Category_Context>");
+    expect(pFast).toContain("<Caller_Warning>");
+    expect(pFast).toContain("EXECUTION DISCIPLINE");
+    expect(pFast).toContain("Execute directly");
+
+    const pCritic = get("delegate").buildPrompt(
+      { role: "oracle", task: "Critique the plan" },
+      "/repo",
+    );
+    expect(pCritic).toContain("<Category_Context>");
+    expect(pCritic).not.toContain("<Caller_Warning>");
+    expect(pCritic).toContain("EXECUTION DISCIPLINE");
+  });
+
   it("delegate supports visual-engineering role", () => {
     const p = get("delegate").buildPrompt(
       {
