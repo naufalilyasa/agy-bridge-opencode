@@ -338,7 +338,51 @@ The `agy-bridge-toggle` utility allows seamless toggling between full `agy-bridg
 
 ---
 
-## 8. Live Telemetry (`agy-live`)
+## 8. Uninstalling
+
+Run the matching uninstaller from the repo to remove everything `install.sh` /
+`install.ps1` added:
+
+```bash
+# macOS / Linux
+bash scripts/uninstall.sh
+
+# Windows (PowerShell 5.1+)
+powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
+```
+
+### What It Removes
+
+| Component | Location |
+| :-------- | :------- |
+| Delegate guard plugin | `~/.config/opencode/plugins/agy-delegate-guard.js` |
+| Model routing config | `~/.gemini/config/agy_bridge.jsonc` |
+| agy-delegation skill | `~/.gemini/config/skills/agy-delegation/` |
+| agy CLI runtime configs | `~/.gemini/config/{mcp_config.json,hooks.json,GEMINI.md}` + `.example` files |
+| OMO config + snapshot | `~/.omo/omo.jsonc` + `~/.omo/.agy-toggle/` |
+| opencode.jsonc merge | restored from the timestamped `opencode.jsonc.backup-*` the merge script created |
+| CLI shims | `~/.local/bin/{agy-bridge-toggle,agy-bridge-on,agy-bridge-off,agy-bridge-status,agy-live,agy-live2}` |
+
+### Safety Guarantees
+
+- **Never deletes pre-existing user configs.** If the installer found a file
+  already in place, it wrote a `*.new` template and left the original
+  untouched — uninstall removes only that `*.new` artifact, never the original.
+- **opencode.jsonc is restored from backup**, not force-edited. If no backup
+  exists (e.g. you edited it manually after install), the uninstaller skips it
+  and prints exactly which entries to remove by hand.
+- The Antigravity CLI itself (`agy`), Node.js, Bun, and the repo clone are
+  **not** removed — they are shared tools you may want for other projects.
+  Optional cleanup: `rm ~/.local/bin/agy` and delete the repo directory.
+
+### After Uninstall
+
+1. Restart OpenCode sessions to drop the `agy-bridge` MCP server.
+2. If `~/.zshrc` still lists `agy-bridge-*` aliases, remove those lines.
+
+---
+
+## 9. Live Telemetry (`agy-live`)
 
 `agy-live` is a Terminal UI built with OpenTUI and Bun that monitors subagent delegations in real time.
 
@@ -355,7 +399,7 @@ agy-live
 
 ---
 
-## 9. Alternative MCP Clients (Claude Code)
+## 10. Alternative MCP Clients (Claude Code)
 
 To use `agy-bridge` directly within Claude Code instead of or in addition to OpenCode:
 
@@ -370,7 +414,7 @@ curl -fsSL https://raw.githubusercontent.com/sshahzaiib/agy-bridge/main/CLAUDE.m
 
 ---
 
-## 10. Troubleshooting and Diagnostics
+## 11. Troubleshooting and Diagnostics
 
 ### 1. `agy` command not found
 
