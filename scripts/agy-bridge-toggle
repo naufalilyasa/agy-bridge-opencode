@@ -1,0 +1,135 @@
+#!/usr/bin/env node
+// agy-bridge-toggle: switch OpenCode+OMO between agy-bridge mode (ON) and pure mode (OFF).
+// OFF = disable agy MCP, empty prompt_append gating rules, re-enable native agents,
+//       drop sisyphus tool whitelist. ON = restore from snapshot.
+// Usage: agy-bridge-toggle <on|off|status>
+// Shortcut wrappers: agy-bridge-on, agy-bridge-off, agy-bridge-status
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+
+const OC = path.join(os.homedir(), ".config/opencode/opencode.jsonc");
+const OMO = path.join(os.homedir(), ".omo/omo.jsonc");
+const SNAP_DIR = path.join(os.homedir(), ".omo/.agy-toggle");
+const SNAP = path.join(SNAP_DIR, "omo.jsonc.on-snapshot");
+
+const read = (p) => fs.readFileSync(p, "utf8");
+const writeBak = (p) => {
+  fs.mkdirSync(SNAP_DIR, { recursive: true });
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  fs.copyFileSync(p, path.join(SNAP_DIR, `${path.basename(p)}.pre-${ts}`));
+};
+
+function ocEnabled(s) {
+  const i = s.indexOf('"agy-bridge"');
+  if (i === -1) return null;
+  const seg = s.slice(i, i + 600);
+  const m = seg.match(/"enabled":\s*(true|false)/);
+  return m ? m[1] === "true" : null;
+}
+
+function setOc(s, on) {
+  const i = s.indexOf('"agy-bridge"');
+  if (i === -1) throw new Error("agy-bridge block not found in opencode.jsonc");
+  const head = s.slice(0, i);
+  let seg = s.slice(i);
+  const before = seg;
+  seg = seg.replace(/("enabled":\s*)(true|false)/, `$1${on}`);
+  if (seg === before) throw new Error("enabled flag not found near agy-bridge");
+  return head + seg;
+}
+
+function omoLooksOn(s) {
+  return (
+    /"prompt_append": "(?!.")[^"]{10,}/.test(s) &&
+    !/"disabled_agents": \[\s*\]/.test(s.slice(0, s.indexOf("_migrations")))
+  );
+}
+
+function toOffOmo(s) {
+  // 1. Empty every prompt_append value (format-preserving, idempotent)
+  s = s.replace(/^(\s*"prompt_append": ").*(",?)$/gm, "$1$2");
+  // 2. disabled_agents -> []
+  s = s.replace(/("disabled_agents":\s*)\[[^\]]*\]/, "$1[]");
+  // 3. Remove sisyphus tools whitelist block ("tools": { ... }) after "sisyphus": {
+  const si = s.indexOf('"sisyphus"');
+  if (si !== -1) {
+    const ti = s.indexOf('"tools"', si);
+    const agentEnd = (() => {
+      let d = 0;
+      for (let k = si; k < s.length; k++) {
+        if (s[k] === "{") d++;
+        else if (s[k] === "}") {
+          d--;
+          if (d === 0) return k;
+        }
+      }
+      return -1;
+    })();
+    if (ti !== -1 && ti < agentEnd) {
+      let d = 0,
+        end = -1;
+      for (let k = s.indexOf("{", ti); k < s.length; k++) {
+        if (s[k] === "{") d++;
+        else if (s[k] === "}") {
+          d--;
+          if (d === 0) {
+            end = k;
+            break;
+          }
+        }
+      }
+      if (end !== -1) {
+        s = s.slice(0, ti).replace(/[ \t]+$/, "") + s.slice(end + 1).replace(/^\s*,/, "");
+      }
+    }
+  }
+  return s;
+}
+
+const cmd = process.argv[2];
+if (cmd === "status") {
+  const oc = ocEnabled(read(OC));
+  const omo = omoLooksOn(read(OMO));
+  const snapOk = fs.existsSync(SNAP);
+  console.log(`mcp.agy-bridge.enabled : ${oc}`);
+  console.log(`omo gating rules       : ${omo ? "present" : "stripped"}`);
+  console.log(`ON snapshot available  : ${snapOk}`);
+  console.log(
+    oc === true && omo
+      ? "STATE: ON"
+      : oc === false && !omo
+        ? "STATE: OFF"
+        : "STATE: MIXED — run 'on' or 'off' to normalize",
+  );
+} else if (cmd === "off") {
+  if (ocEnabled(read(OC)) !== false) {
+    writeBak(OC);
+    fs.writeFileSync(OC, setOc(read(OC), "false"));
+    console.log("opencode.jsonc: agy-bridge MCP disabled");
+  } else console.log("opencode.jsonc: already off");
+  if (!fs.existsSync(SNAP)) {
+    fs.mkdirSync(SNAP_DIR, { recursive: true });
+    fs.writeFileSync(SNAP, read(OMO));
+    console.log("ON-state snapshot saved");
+  } else console.log("ON snapshot kept (already exists)");
+  writeBak(OMO);
+  fs.writeFileSync(OMO, toOffOmo(read(OMO)));
+  console.log("omo.jsonc: gating rules stripped, native agents re-enabled, whitelist dropped");
+  console.log("\nRestart OpenCode sessions to apply.");
+} else if (cmd === "on") {
+  if (!fs.existsSync(SNAP)) throw new Error(`No ON snapshot at ${SNAP}. Cannot restore.`);
+  if (ocEnabled(read(OC)) !== true) {
+    writeBak(OC);
+    fs.writeFileSync(OC, setOc(read(OC), "true"));
+    console.log("opencode.jsonc: agy-bridge MCP enabled");
+  } else console.log("opencode.jsonc: already on");
+  writeBak(OMO);
+  fs.copyFileSync(SNAP, OMO);
+  console.log("omo.jsonc: restored ON state from snapshot");
+  console.log("\nRestart OpenCode sessions to apply.");
+} else {
+  console.log("usage: agy-bridge-toggle <on|off|status>");
+  console.log("  or:  agy-bridge-on, agy-bridge-off, agy-bridge-status");
+  process.exit(1);
+}

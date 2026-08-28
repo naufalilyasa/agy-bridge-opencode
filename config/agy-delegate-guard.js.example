@@ -1,0 +1,38 @@
+// Agy Delegate Guard Plugin for OpenCode
+// Enforces that worker subagents delegate heavy tasks to agy-bridge tools.
+// Install to: ~/.config/opencode/plugins/agy-delegate-guard.js
+// Enable in opencode.jsonc: "plugin": ["./plugins/agy-delegate-guard.js"]
+
+const HEAVY_BASH_PATTERNS = [
+  /git\s+(log|diff|blame)/i,
+  /grep\s+(-[a-zA-Z]*r[a-zA-Z]*|--recursive)/i,
+  /\brg\s+/i,
+  /^\s*cat\s+[^|&;]+\s*$/i,
+];
+
+function isHeavyBashCommand(cmd) {
+  if (typeof cmd !== 'string') return false;
+  return HEAVY_BASH_PATTERNS.some((pattern) => pattern.test(cmd.trim()));
+}
+
+export const AgyDelegateGuardPlugin = async () => {
+  return {
+    'tool.execute.before': async (input, output) => {
+      const tool = String(input?.tool || '').toLowerCase();
+
+      // Check bash commands for heavy operations
+      if (tool === 'bash' || tool === 'shell') {
+        const cmd = output?.args?.command;
+        if (isHeavyBashCommand(cmd)) {
+          output.message =
+            '[agy-guard] NOTICE: Heavy exploration/git search detected in bash. ' +
+            'If you are an exploratory/analysis subagent (oracle, librarian, explore, momus, metis), ' +
+            'you are REQUIRED to use agy-bridge MCP tools (deep_search, analyze_files, web_lookup) ' +
+            'instead of running heavy shell commands in local context.';
+        }
+      }
+    },
+  };
+};
+
+export default AgyDelegateGuardPlugin;

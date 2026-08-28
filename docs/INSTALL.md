@@ -1,0 +1,349 @@
+# agy-bridge & OMO Installation and Setup Guide
+
+Cross-platform installation guide for integrating the Antigravity CLI (`agy`) with OpenCode and Oh My OpenAgent (OMO) via the `agy-bridge` MCP server.
+
+---
+
+## 1. Overview and Architecture
+
+`agy-bridge` is a Model Context Protocol (MCP) server that offloads heavy, token-intensive development operations from primary agent loops (such as OpenCode and Claude Code) to Google DeepMind's Antigravity CLI (`agy`).
+
+By bridging OpenCode orchestrators to specialized `agy` subagent roles, token usage is conserved, local context exhaustion is eliminated, and tasks run on dedicated Gemini and Claude model chains.
+
+```
++-------------------------------------------------------------------------+
+|                           OpenCode Runtime                              |
+|   (Sisyphus Lead Orchestrator, Hephaestus Craftsman, Prometheus, Atlas) |
++------------------------------------+------------------------------------+
+                                     |
+                          MCP JSON-RPC Transport
+                                     |
+                                     v
++-------------------------------------------------------------------------+
+|                        agy-bridge MCP Server                            |
+|             (dist/index.js - Model Router & Failover Engine)            |
++------------------------------------+------------------------------------+
+                                     |
+                          CLI Process Invocation
+                                     |
+                                     v
++-------------------------------------------------------------------------+
+|                         Antigravity CLI (agy)                           |
+|       (Gemini 3.7 Flash High/Medium, Gemini Pro, Claude Sonnet/Opus)    |
++-------------------------------------------------------------------------+
+```
+
+### Core Components
+
+1. **agy-bridge Server**: Fast MCP server implementing 6 specialized tools (`delegate`, `analyze_files`, `deep_search`, `web_lookup`, `adversarial_review`, `follow_up`).
+2. **Agy Delegate Guard Plugin**: OpenCode plugin (`agy-delegate-guard.js`) intercepting heavy bash commands (e.g. `git log`, `grep -r`, `cat` large files) and redirecting subagents to MCP tools.
+3. **Model Failover Router**: Dynamic role-based routing (`agy_bridge.jsonc`) that validates available models via `agy models` and provides quota-aware failover.
+4. **OMO Integration**: Disables internal OMO subagents (`disabled_agents`) and injects agy-bridge routing prompts into primary orchestrators (`omo.jsonc`).
+5. **Toggle Utility**: `agy-bridge-toggle` (`agy-bridge-on`, `agy-bridge-off`, `agy-bridge-status`) for zero-friction switching between bridge mode and pure native mode.
+6. **Live Monitor**: `agy-live` terminal UI for real-time telemetry, token savings metrics, and subagent session tracking.
+
+---
+
+## 2. Prerequisites
+
+The following software must be installed on your machine:
+
+| Component                   | Minimum Version | Purpose                                           |
+| :-------------------------- | :-------------- | :------------------------------------------------ |
+| **Node.js**                 | >= 18.0.0       | MCP server runtime and build system               |
+| **Bun**                     | >= 1.0.0        | Fast execution for `agy-live` TUI                 |
+| **Antigravity CLI (`agy`)** | Latest          | Core execution engine for Gemini/Claude subagents |
+| **OpenCode CLI**            | Latest          | AI development orchestrator platform              |
+
+### Installation Commands by Platform
+
+#### macOS / Linux
+
+```bash
+# Node.js 18+ (via nvm or brew)
+brew install node  # macOS
+# or: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs # Ubuntu/Debian
+
+# Bun Runtime
+curl -fsSL https://bun.sh/install | bash
+
+# Antigravity CLI (agy)
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+
+# OpenCode CLI
+curl -fsSL https://opencode.ai/install | bash
+```
+
+#### Windows (PowerShell)
+
+```powershell
+# Node.js 18+ (via winget or fnm)
+winget install OpenJS.NodeJS.LTS
+
+# Bun Runtime
+powershell -c "irm bun.sh/install.ps1 | iex"
+
+# Antigravity CLI (agy)
+irm https://antigravity.google/cli/install.ps1 | iex
+
+# OpenCode CLI
+irm https://opencode.ai/install.ps1 | iex
+```
+
+---
+
+## 3. Automated Installation
+
+`agy-bridge` includes idempotent, non-destructive installer scripts that set up all configurations, plugins, model definitions, and command-line shims.
+
+### 3.1 macOS & Linux
+
+```bash
+# 1. Clone repository (if not already cloned)
+git clone https://github.com/sshahzaiib/agy-bridge.git
+cd agy-bridge
+
+# 2. Run automated installer
+./scripts/install.sh
+```
+
+### 3.2 Windows (PowerShell)
+
+```powershell
+# 1. Clone repository (if not already cloned)
+git clone https://github.com/sshahzaiib/agy-bridge.git
+cd agy-bridge
+
+# 2. Run automated installer
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+```
+
+### Safety and Idempotency Guarantees
+
+- **No Silent Overwrites**: If configuration files (`opencode.jsonc`, `omo.jsonc`, `agy_bridge.jsonc`) already exist at the target path, the installer writes a `.new` file (e.g. `opencode.jsonc.new`) and prints clear manual merge instructions.
+- **Timestamped Backups**: Existing plugin scripts (such as `agy-delegate-guard.js`) are backed up with a timestamp prefix (`.bak.<YYYYMMDD_HHMMSS>`) before being updated.
+- **Path Resolution**: Placeholders `{{AGY_BRIDGE_DIR}}` and `{{AGY_PATH}}` in `opencode.jsonc.example` are automatically resolved to exact absolute filesystem paths.
+
+---
+
+## 4. What Gets Installed (File & Directory Map)
+
+The installer establishes configuration across several target directories:
+
+| Component            | Source in Repo                         | Target Path (macOS/Linux)                                                                         | Target Path (Windows)                                                                                                                             |
+| :------------------- | :------------------------------------- | :------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **OpenCode Config**  | `config/opencode.jsonc.example`        | `~/.config/opencode/opencode.jsonc`                                                               | `%USERPROFILE%\.config\opencode\opencode.jsonc`                                                                                                   |
+| **Guard Plugin**     | `config/agy-delegate-guard.js.example` | `~/.config/opencode/plugins/agy-delegate-guard.js`                                                | `%USERPROFILE%\.config\opencode\plugins\agy-delegate-guard.js`                                                                                    |
+| **OMO Config**       | `config/omo.jsonc.example`             | `~/.omo/omo.jsonc`                                                                                | `%USERPROFILE%\.omo\omo.jsonc`                                                                                                                    |
+| **Model Routing**    | `config/agy_bridge.jsonc.example`      | `~/.gemini/config/agy_bridge.jsonc`                                                               | `%USERPROFILE%\.gemini\config\agy_bridge.jsonc`                                                                                                   |
+| **Toggle Utility**   | `scripts/agy-bridge-toggle`            | `~/.local/bin/agy-bridge-toggle`                                                                  | `%USERPROFILE%\.local\bin\agy-bridge-toggle.cmd`                                                                                                  |
+| **Toggle Shortcuts** | `scripts/install.sh` generated         | `~/.local/bin/agy-bridge-on`<br>`~/.local/bin/agy-bridge-off`<br>`~/.local/bin/agy-bridge-status` | `%USERPROFILE%\.local\bin\agy-bridge-on.cmd`<br>`%USERPROFILE%\.local\bin\agy-bridge-off.cmd`<br>`%USERPROFILE%\.local\bin\agy-bridge-status.cmd` |
+| **Live Monitor**     | `bin/agy-live-runner.js`               | `~/.local/bin/agy-live`                                                                           | `%USERPROFILE%\.local\bin\agy-live.cmd`                                                                                                           |
+
+---
+
+## 5. Manual Installation Walkthrough
+
+If you prefer configuring components manually or need to merge into existing configurations:
+
+### Step 1: Install Plugin
+
+Copy `config/agy-delegate-guard.js.example` to `~/.config/opencode/plugins/agy-delegate-guard.js`:
+
+```bash
+mkdir -p ~/.config/opencode/plugins
+cp config/agy-delegate-guard.js.example ~/.config/opencode/plugins/agy-delegate-guard.js
+```
+
+### Step 2: Configure Model Failover Chain
+
+Copy `config/agy_bridge.jsonc.example` to `~/.gemini/config/agy_bridge.jsonc`:
+
+```bash
+mkdir -p ~/.gemini/config
+cp config/agy_bridge.jsonc.example ~/.gemini/config/agy_bridge.jsonc
+```
+
+### Step 3: Configure OMO Agents
+
+Copy `config/omo.jsonc.example` to `~/.omo/omo.jsonc`:
+
+```bash
+mkdir -p ~/.omo
+cp config/omo.jsonc.example ~/.omo/omo.jsonc
+```
+
+### Step 4: Register MCP Server in OpenCode
+
+Add the `agy-bridge` MCP server and guard plugin to `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["oh-my-openagent@4.19.4", "./plugins/agy-delegate-guard.js"],
+  "mcp": {
+    "agy-bridge": {
+      "type": "local",
+      "command": ["node", "/ABSOLUTE/PATH/TO/agy-bridge/dist/index.js"],
+      "enabled": true,
+      "timeout": 5400000,
+      "environment": {
+        "AGY_PATH": "/ABSOLUTE/PATH/TO/agy",
+        "AGY_MAX_OUTPUT_CHARS": "50000",
+        "AGY_ON_FAILURE": "fallback",
+        "AGY_IDLE_TIMEOUT": "600",
+        "AGY_TIMEOUT_DELEGATE": "3600",
+        "AGY_TIMEOUT_FOLLOW_UP": "3600",
+        "AGY_TIMEOUT_ANALYZE_FILES": "900",
+        "AGY_TIMEOUT_ADVERSARIAL_REVIEW": "900",
+        "AGY_TIMEOUT_DEEP_SEARCH": "600",
+        "AGY_TIMEOUT_WEB_LOOKUP": "180",
+      },
+    },
+  },
+}
+```
+
+_Note on Windows:_ Use forward slashes (e.g. `C:/Users/username/agy-bridge/dist/index.js`) in JSON files to avoid escape errors.
+
+---
+
+## 6. Verification and Health Check
+
+Perform these checks to confirm proper configuration:
+
+### 1. Check Antigravity Authentication and Models
+
+```bash
+agy models
+```
+
+Expected output: A list of active Gemini and Claude models available in your account.
+
+### 2. Verify agy-bridge Build
+
+Ensure `dist/index.js` is generated:
+
+```bash
+# In agy-bridge repo root:
+npm run build
+# or: bun run build
+```
+
+### 3. Check Toggle State
+
+```bash
+agy-bridge-status
+# or: agy-bridge-toggle status
+```
+
+Expected output:
+
+```
+mcp.agy-bridge.enabled : true
+omo gating rules       : present
+ON snapshot available  : false (or true)
+STATE: ON
+```
+
+### 4. Verify OpenCode Integration
+
+Start OpenCode in your project workspace:
+
+```bash
+opencode
+```
+
+OpenCode will initialize OMO orchestrators (Sisyphus, Hephaestus, Prometheus, Atlas) connected to the `agy-bridge` MCP server.
+
+---
+
+## 7. Mode Switching (`agy-bridge-toggle`)
+
+The `agy-bridge-toggle` utility allows seamless toggling between full `agy-bridge` delegation mode (ON) and native OpenCode/OMO execution (OFF).
+
+### Commands
+
+| Command             | Action                                                                              |
+| :------------------ | :---------------------------------------------------------------------------------- |
+| `agy-bridge-status` | Displays current state (ON, OFF, or MIXED)                                          |
+| `agy-bridge-off`    | Disables agy-bridge MCP, clears prompt gating rules, re-enables internal OMO agents |
+| `agy-bridge-on`     | Restores agy-bridge MCP and OMO delegation rules from snapshot                      |
+
+### How It Works
+
+- **Switching OFF**:
+  1. Sets `"enabled": false` for the `agy-bridge` entry in `opencode.jsonc`.
+  2. Saves a complete ON-state snapshot to `~/.omo/.agy-toggle/omo.jsonc.on-snapshot`.
+  3. Empties `prompt_append` gating rules in `omo.jsonc`.
+  4. Resets `disabled_agents` to `[]` so OMO native subagents run locally.
+- **Switching ON**:
+  1. Sets `"enabled": true` in `opencode.jsonc`.
+  2. Restores `omo.jsonc` from `~/.omo/.agy-toggle/omo.jsonc.on-snapshot`.
+
+---
+
+## 8. Live Telemetry (`agy-live`)
+
+`agy-live` is a Terminal UI built with OpenTUI and Bun that monitors subagent delegations in real time.
+
+```bash
+agy-live
+```
+
+### Key Features
+
+- **Real-Time Stream**: Live view of subagent prompt dispatches, execution status, and tool responses.
+- **Token Analytics**: Breakdown of characters and tokens offloaded to Antigravity CLI vs. local context.
+- **Model Distribution**: Visual representation of model routing across tasks (Gemini 3.7 Flash, Claude Sonnet, Gemini Pro).
+- **Active Sessions**: Inspect ongoing and past multi-turn session identifiers (`sessionId`).
+
+---
+
+## 9. Alternative MCP Clients (Claude Code)
+
+To use `agy-bridge` directly within Claude Code instead of or in addition to OpenCode:
+
+```bash
+# Register MCP server with a 10-minute client deadline
+claude mcp add-json -s user agy-bridge \
+  '{"command":"npx","args":["-y","agy-bridge"],"timeout":600000}'
+
+# Add delegation rules to project or global config
+curl -fsSL https://raw.githubusercontent.com/sshahzaiib/agy-bridge/main/CLAUDE.md -o CLAUDE.md
+```
+
+---
+
+## 10. Troubleshooting and Diagnostics
+
+### 1. `agy` command not found
+
+- **Symptom**: Error `Command failed: agy ...` or `ENOENT`.
+- **Solution**: Confirm Antigravity CLI is installed (`which agy`). If installed in `~/.local/bin/agy`, ensure `~/.local/bin` is in your `PATH` or set `AGY_PATH` explicitly in `opencode.jsonc`.
+
+### 2. Client Timeout (`timed out waiting for response`)
+
+- **Symptom**: Client aborts before long task finishes.
+- **Cause**: Client-side tool timeout is lower than agy execution budget.
+- **Solution**: Increase `timeout` in `opencode.jsonc` or Claude Code MCP configuration (e.g. `5400000` ms). Set `MCP_TOOL_TIMEOUT=600000` in your shell environment.
+
+### 3. Resource Exhaustion (HTTP 429)
+
+- **Symptom**: Model rate limit or quota exceeded.
+- **Behavior**: `agy-bridge` automatically detects 429 errors from agy logs, parses cooldown duration (e.g. "Resets in 4h"), and seamlessly falls back to the next model configured in `~/.gemini/config/agy_bridge.jsonc`.
+
+### 4. Existing Configuration Notice (`.new` files)
+
+- **Symptom**: Installer outputs `[WARN] Configuration already exists: ... Wrote updated template to: ...new`.
+- **Solution**: The installer never overwrites your customized settings. Open both files and merge the `agy-bridge` MCP block or `plugins` array into your active configuration.
+
+### 5. Windows Path Formatting
+
+- **Symptom**: OpenCode fails to parse configuration due to invalid escape sequences.
+- **Solution**: In JSON/JSONC configuration files on Windows, always use forward slashes `/` (e.g. `C:/Users/...`) instead of unescaped backslashes `\`.
+
+### 6. Permission Denied on POSIX Scripts
+
+- **Symptom**: `permission denied: ./scripts/install.sh` or `permission denied: agy-bridge-toggle`.
+- **Solution**: Run `chmod +x scripts/install.sh scripts/agy-bridge-toggle`.

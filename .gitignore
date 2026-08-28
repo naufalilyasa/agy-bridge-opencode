@@ -5,6 +5,7 @@ dist/
 package/
 docs/*
 !docs/multi-client-support.md
+!docs/INSTALL.md
 
 # vendored OMO source (embedded git repo) — not part of agy-bridge source
 oh-my-openagent/

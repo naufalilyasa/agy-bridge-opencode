@@ -1,0 +1,137 @@
+{
+  // ============================================================================
+  // opencode.jsonc — agy-bridge + OMO reference configuration
+  // ============================================================================
+  // Copy to ~/.config/opencode/opencode.jsonc (Linux/macOS) or
+  // %USERPROFILE%\.config\opencode\opencode.jsonc (Windows).
+  //
+  // PLACEHOLDERS to replace before use:
+  //   {{AGY_BRIDGE_DIR}}  -> absolute path to this repo (contains dist/index.js)
+  //   {{AGY_PATH}}        -> absolute path to the `agy` binary (~/.local/bin/agy)
+  //
+  // PROVIDERS: the block below is a minimal example. The reference laptop
+  // config has 15+ providers (DeepSeek, OpenRouter, ChatB, Nara, InferX, ...).
+  // API keys are PERSONAL — never commit them. Use {env:VAR_NAME} and export
+  // the var, or add your own providers. The OMO config (omo.jsonc.example)
+  // references model ids like `chatb/deepseek-v4-flash` and
+  // `opencodezen/deepseek-v4-flash-free` — those providers must exist here.
+  // ============================================================================
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    // ---- Required: OMO plugin (auto-installed from npm) ----
+    "oh-my-openagent@4.19.4",
+    // ---- Required: agy-bridge guard (the installer copies
+    //      agy-delegate-guard.js.example to ~/.config/opencode/plugins/) ----
+    "./plugins/agy-delegate-guard.js",
+    // ---- Optional: uncomment only if you actually use these ----
+    // "@tarquinen/opencode-dcp@latest",
+    // "@ramtinj95/opencode-tokenscope@latest",
+    // "cc-safety-net@latest",
+    // "@dietrichgebert/ponytail",
+    // "./plugins/caveman/plugin.js",
+  ],
+  "lsp": true,
+  "mcp": {
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+    },
+    "github": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+    },
+    "time": {
+      "type": "local",
+      "command": ["npx", "-y", "time-mcp"],
+    },
+    "playwright": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp@latest"],
+    },
+    // ---- agy-bridge: the core MCP server this repo ships ----
+    "agy-bridge": {
+      "type": "local",
+      "command": ["node", "{{AGY_BRIDGE_DIR}}/dist/index.js"],
+      "enabled": true,
+      "timeout": 5400000,
+      "environment": {
+        "AGY_PATH": "{{AGY_PATH}}",
+        "AGY_MAX_OUTPUT_CHARS": "50000",
+        "AGY_ON_FAILURE": "fallback",
+        "AGY_IDLE_TIMEOUT": "600",
+        "AGY_TIMEOUT_DELEGATE": "3600",
+        "AGY_TIMEOUT_FOLLOW_UP": "3600",
+        "AGY_TIMEOUT_ANALYZE_FILES": "900",
+        "AGY_TIMEOUT_ADVERSARIAL_REVIEW": "900",
+        "AGY_TIMEOUT_DEEP_SEARCH": "600",
+        "AGY_TIMEOUT_WEB_LOOKUP": "180",
+      },
+    },
+  },
+  // ---- Minimal provider example (needed by OMO agent models above) ----
+  "provider": {
+    "chatb": {
+      "name": "ChatB",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://api.b.ai/v1",
+        "apiKey": "{env:CHATB_API_KEY}",
+      },
+      "models": {
+        "deepseek-v4-flash": {
+          "name": "DeepSeek V4 Flash",
+          "limit": {
+            "context": 1000000,
+            "output": 393216,
+          },
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"],
+          },
+        },
+      },
+    },
+    "opencodezen": {
+      "name": "Opencode Zen API",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://opencode.ai/zen/v1",
+        "apiKey": "{env:OPCODEZEN_API_KEY}",
+      },
+      "models": {
+        "deepseek-v4-flash-free": {
+          "name": "DeepSeek V4 Flash API",
+          "limit": {
+            "context": 1048576,
+            "output": 393216,
+          },
+          "modalities": {
+            "input": ["text"],
+            "output": ["text"],
+          },
+        },
+      },
+    },
+    "opencodego": {
+      "name": "Opencode Go API",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://opencode.ai/zen/go/v1",
+        "apiKey": "{env:OPENCODEGO_API_KEY}",
+      },
+      "models": {
+        "mimo-v2.5": {
+          "name": "MiMo V2.5",
+          "limit": {
+            "context": 1000000,
+            "output": 131072,
+          },
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"],
+          },
+        },
+      },
+    },
+  },
+}
