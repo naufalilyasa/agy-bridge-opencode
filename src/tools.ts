@@ -77,6 +77,28 @@ export function listAvailableSkills(
   cwd: string,
   exclude: string[] = [],
 ): { name: string; description: string }[] {
+  const MAX_SKILLS = 40;
+  const seen = new Set(exclude.map((s) => s.trim().replace(/^omo-/, "").toLowerCase()));
+  const out: { name: string; description: string }[] = [];
+
+  // Guaranteed slot: agy-delegation always occupies the first entry when
+  // installed, so it is never crowded out of the cap by a large skill
+  // collection. Fills one of the MAX_SKILLS slots.
+  const agySkillPath = path.join(
+    os.homedir(),
+    ".gemini",
+    "config",
+    "skills",
+    "agy-delegation",
+    "SKILL.md",
+  );
+  try {
+    if (fs.statSync(agySkillPath).isFile()) {
+      seen.add("agy-delegation");
+      out.push({ name: "agy-delegation", description: skillDescription(agySkillPath) });
+    }
+  } catch {}
+
   const roots = [
     path.join(cwd, ".agents", "skills"),
     path.join(cwd, ".opencode", "skills"),
@@ -86,8 +108,6 @@ export function listAvailableSkills(
     path.join(os.homedir(), "agy-bridge", "oh-my-openagent", "packages", "shared-skills", "skills"),
     path.join(os.homedir(), "agy-bridge", "oh-my-openagent", ".agents", "skills"),
   ];
-  const seen = new Set(exclude.map((s) => s.trim().replace(/^omo-/, "").toLowerCase()));
-  const out: { name: string; description: string }[] = [];
   for (const root of roots) {
     let entries: string[];
     try {
@@ -107,7 +127,7 @@ export function listAvailableSkills(
       }
       seen.add(key);
       out.push({ name, description: skillDescription(skillMd) });
-      if (out.length >= 40) return out;
+      if (out.length >= MAX_SKILLS) return out;
     }
   }
   return out;
