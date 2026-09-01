@@ -848,7 +848,9 @@ export const TOOLS: ToolDef[] = [
     chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
     timeoutSec: 600,
     buildPrompt(args, cwd) {
-      const task = (args.task as string) || (args.prompt as string);
+      const taskArg = (args.task as string) || "";
+      const promptArg = (args.prompt as string) || "";
+      const task = taskArg && promptArg ? `${taskArg}\n\n${promptArg}` : taskArg || promptArg;
       if (!task) {
         throw new Error("delegate requires either `task` or `prompt`.");
       }
@@ -863,7 +865,7 @@ export const TOOLS: ToolDef[] = [
               mission: `Execute specialized tasks as ${args.role}. Deliver complete, verified, and high-quality results.`,
               focus: ["High-quality implementation", "Verification with builds/tests"],
             }
-          : OMO_ROLES["git-master"]);
+          : OMO_ROLES["sisyphus-junior"]);
       const roleCategory = roleDef.category;
       const roleFirstModel =
         roleDef.chain?.[0] ??
@@ -914,6 +916,12 @@ export const TOOLS: ToolDef[] = [
         loadMemories.length > 0 ||
         saveMemory
       ) {
+        if (!args.role) {
+          throw new Error(
+            `delegate requires a \`role\` when using structured parameters (task/expected_outcome/context/...). ` +
+              `Choose one of: ${Object.keys(OMO_ROLES).sort().join(", ")}`,
+          );
+        }
         let p = `[DELEGATED AGENT ROLE: ${roleDef.title}]\n`;
         p += `Mission: ${roleDef.mission}\n\n`;
 

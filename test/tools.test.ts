@@ -76,6 +76,26 @@ describe("prompt templates", () => {
     expect(get("delegate").buildPrompt({ prompt: "do x" }, "/repo")).toBe("do x");
   });
 
+  it("delegate keeps both task and prompt when both are provided (no silent drop)", () => {
+    const p = get("delegate").buildPrompt(
+      { task: "Fix two pairing bugs", prompt: "BUG 1 root cause: UrlRouter no-op. MUST DO: add case.", role: "deep" },
+      "/repo",
+    );
+    expect(p).toContain("Fix two pairing bugs");
+    expect(p).toContain("BUG 1 root cause: UrlRouter no-op. MUST DO: add case.");
+    expect(p).toContain("[DELEGATED AGENT ROLE: OMO_DEEP_ANALYST]");
+  });
+
+  it("delegate requires a role when using structured parameters", () => {
+    expect(() =>
+      get("delegate").buildPrompt({ task: "Fix bug", context: "some context" }, "/repo"),
+    ).toThrow(/requires a `role`/);
+  });
+
+  it("delegate defaults to sisyphus-junior for a bare prompt passthrough", () => {
+    expect(get("delegate").buildPrompt({ prompt: "just do it" }, "/repo")).toBe("just do it");
+  });
+
   it("delegate generates structured OMO prompt when role and task are provided", () => {
     const p = get("delegate").buildPrompt(
       {
