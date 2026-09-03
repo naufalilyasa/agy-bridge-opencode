@@ -10,14 +10,17 @@
   //  • claude-opus-4-6-thinking -> Claude Opus 4.6 (Thinking)
   //
   //  [GEMINI FAMILY - FAST EXECUTION / SEARCH / ARCHAEOLOGY / TDD]
-  //  • gemini-3.7-flash-high    -> Gemini 3.7 Flash (High)      (Recommended Default)
-  //  • gemini-3.7-flash-medium  -> Gemini 3.7 Flash (Medium)
-  //  • gemini-3.7-flash-low     -> Gemini 3.7 Flash (Low)
+  //  • gemini-3.8-flash-high    -> Gemini 3.8 Flash (High)      (Recommended Default)
+  //  • gemini-3.8-flash-medium  -> Gemini 3.8 Flash (Medium)
+  //  • gemini-3.8-flash-low     -> Gemini 3.8 Flash (Low)
+  //  • gemini-3.8-flash-high    -> Gemini 3.8 Flash (High)
+  //  • gemini-3.8-flash-medium  -> Gemini 3.8 Flash (Medium)
+  //  • gemini-3.8-flash-low     -> Gemini 3.8 Flash (Low)
   //  • gemini-3.1-pro-high      -> Gemini 3.1 Pro (High)
   //  • gemini-3.1-pro-low       -> Gemini 3.1 Pro (Low)
-  //  • gemini-3.6-flash-high    -> Gemini 3.6 Flash (High)
-  //  • gemini-3.6-flash-medium  -> Gemini 3.6 Flash (Medium)
-  //  • gemini-3.6-flash-low     -> Gemini 3.6 Flash (Low)
+  //  • gemini-3.8-flash-high    -> Gemini 3.8 Flash (High)
+  //  • gemini-3.8-flash-medium  -> Gemini 3.8 Flash (Medium)
+  //  • gemini-3.8-flash-low     -> Gemini 3.8 Flash (Low)
   //  • gemini-3.5-flash-high    -> Gemini 3.5 Flash (High)
   //  • gemini-3.5-flash-medium  -> Gemini 3.5 Flash (Medium)
   //  • gemini-3.5-flash-low     -> Gemini 3.5 Flash (Low)
@@ -28,32 +31,32 @@
   // ==============================================================================
 
   // Default model jika tidak ada model yang ditentukan oleh role atau tool
-  "defaultModel": "gemini-3.7-flash-high",
+
 
   // Model Failover Chain per OMO Subagent Role (Urutan prioritas: [Utama, Fallback])
   "roles": {
-    // 🧠 REASONING & QUALITY CRITIC ROLES (Claude Sonnet -> Gemini 3.7 Flash)
-    "oracle": ["gemini-3.7-flash-high", "gemini-3.7-flash-medium"],
-    "momus": ["gemini-3.7-flash-high", "gemini-3.7-flash-medium"],
-    "ultrabrain": ["gemini-3.7-flash-high", "gemini-3.7-flash-medium"],
-    "deep": ["gemini-3.7-flash-high", "gemini-3.7-flash-medium"],
-    "reviewer": ["gemini-3.7-flash-high", "gemini-3.7-flash-medium"],
-    "security": ["gemini-3.7-flash-high", "gemini-3.7-flash-medium"],
+    // 🧠 REASONING & QUALITY CRITIC ROLES (Claude Sonnet -> Gemini 3.8 Flash)
+    "oracle": ["gemini-3.8-flash-high", "gemini-3.8-flash-high"],
+    "momus": ["gemini-3.8-flash-high", "gemini-3.8-flash-high"],
+    "ultrabrain": ["gemini-3.8-flash-high", "gemini-3.8-flash-high"],
+    "deep": ["gemini-3.8-flash-high", "gemini-3.8-flash-high"],
+    "reviewer": ["gemini-3.8-flash-high", "gemini-3.8-flash-high"],
+    "security": ["gemini-3.8-flash-high", "gemini-3.8-flash-high"],
 
     // ⚡ EXECUTION, SEARCH, ARCHAEOLOGY & TESTING ROLES (Gemini 3.7 Flash -> Claude Sonnet)
-    "git-master": ["gemini-3.5-flash-low", "gemini-3.6-flash-low"],
-    "tester": ["gemini-3.7-flash-low", "gemini-3.6-flash-medium"],
-    "librarian": ["gemini-3.7-flash-low", "gemini-3.6-flash-high"],
-    "explore": ["gemini-3.7-flash-low", "gemini-3.6-flash-high"],
-    "metis": ["gemini-3.7-flash-medium", "gemini-3.6-flash-high"],
-    "multimodal-looker": ["gemini-3.7-flash-medium", "gemini-3.6-flash-medium"],
-    "sisyphus-junior": ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
-    "visual-engineering": ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
-    "artistry": ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
-    "writing": ["gemini-3.7-flash-low", "gemini-3.6-flash-medium"],
-    "quick": ["gemini-3.7-flash-low", "gemini-3.6-flash-medium"],
-    "researcher": ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
-    "devops": ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
-    "product": ["gemini-3.7-flash-high", "claude-sonnet-4-6"]
-  }
+    "git-master": ["gemini-3.8-flash-low", "gemini-3.8-flash-low"],
+    "tester": ["gemini-3.8-flash-high", "gemini-3.8-flash-high"],
+    "librarian": ["gemini-3.8-flash-low", "gemini-3.8-flash-high"],
+    "explore": ["gemini-3.8-flash-low", "gemini-3.8-flash-high"],
+    "metis": ["gemini-3.8-flash-high", "gemini-3.8-flash-high"],
+    "multimodal-looker": ["gemini-3.8-flash-high", "gemini-3.8-flash-high"],
+    "sisyphus-junior": ["gemini-3.8-flash-high", "claude-sonnet-4-6"],
+    "visual-engineering": ["gemini-3.8-flash-high", "claude-sonnet-4-6"],
+    "artistry": ["gemini-3.8-flash-high", "claude-sonnet-4-6"],
+    "writing": ["gemini-3.8-flash-low", "gemini-3.8-flash-high"],
+    "quick": ["gemini-3.8-flash-low", "gemini-3.8-flash-high"],
+    "researcher": ["gemini-3.8-flash-high", "claude-sonnet-4-6"],
+    "devops": ["gemini-3.8-flash-high", "claude-sonnet-4-6"],
+    "product": ["gemini-3.8-flash-high", "claude-sonnet-4-6"],
+  },
 }
