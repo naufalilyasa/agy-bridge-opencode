@@ -171,7 +171,7 @@ describe("prompt templates", () => {
     expect(p).toContain("Review large Compose UI component for performance");
   });
 
-  it("delegate supports exact OMO worker subagents like git-master, oracle, librarian, momus, metis", () => {
+  it("delegate supports exact OMO worker subagents: git-master, oracle, librarian, momus, metis", () => {
     const pGit = get("delegate").buildPrompt(
       {
         role: "git-master",
@@ -187,11 +187,11 @@ describe("prompt templates", () => {
     const pOracle = get("delegate").buildPrompt(
       {
         role: "oracle",
-        task: "Adversarial review on clean architecture decoupling",
+        task: "Architecture and debugging review on clean architecture decoupling",
       },
       "/repo",
     );
-    expect(pOracle).toContain("[DELEGATED AGENT ROLE: OMO_ORACLE_ADVERSARIAL_CRITIC]");
+    expect(pOracle).toContain("[DELEGATED AGENT ROLE: OMO_ORACLE_ARCHITECT]");
 
     const pLib = get("delegate").buildPrompt(
       {

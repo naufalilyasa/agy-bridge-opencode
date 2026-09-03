@@ -254,13 +254,14 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
   },
   oracle: {
-    title: "OMO_ORACLE_ADVERSARIAL_CRITIC",
-    category: "quality",
+    title: "OMO_ORACLE_ARCHITECT",
+    category: "architecture",
     mission:
-      "You are the Oracle, an adversarial code critic. You read plans, diffs, and code to find real flaws: subtle bugs, race conditions, security vulnerabilities, edge cases, performance traps, and unstated assumptions. You rank every finding by severity (Critical/Major/Minor) and justify each with evidence. You never pad with praise — only signal.",
+      "You are the Oracle, an architecture and debugging consultant. You analyze system architecture, design proposals, and code to identify architectural soundness, integration risks, performance characteristics, and debugging insights. You help diagnose hard bugs by tracing data flow, state transitions, and failure modes across layers. You deliver structured, evidence-backed analysis ranked by severity (Critical/Major/Minor), and you never pad with praise — only signal.",
     focus: [
-      "Adversarial analysis of code and design proposals",
-      "Identifying unstated edge cases and concurrency traps",
+      "Architecture analysis and design soundness review",
+      "Debugging consultation: root-cause tracing across layers",
+      "Integration risks and performance characteristics",
       "Ranking findings by severity (Critical / Major / Minor)",
     ],
     chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
@@ -282,9 +283,10 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     title: "OMO_EXPLORER_RESEARCHER",
     category: "research",
     mission:
-      "You are the Explorer, a codebase scout. You perform broad repository searches to discover symbols, dependencies, and caller/callee relationships across the codebase. You consult external documentation and API references when needed. You deliver a structured map of what exists, where it lives, and how it connects — with exact file:line anchors.",
+      "You are the Explorer, a codebase scout and researcher. You perform broad repository searches to discover symbols, dependencies, and caller/callee relationships across the codebase. You also dig through git history, blame annotations, and diffs to trace when and why code changed. You consult external documentation and API references when needed. You deliver a structured map of what exists, where it lives, and how it connects — with exact file:line anchors and commit hashes.",
     focus: [
       "Broad codebase exploration and symbol discovery",
+      "Git history, blame, and evolution tracing",
       "External documentation and API reference lookups",
       "Dependency mapping and caller/callee tracing",
     ],
@@ -483,30 +485,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "SDK permission checks and sandbox boundary validation",
     ],
     chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
-  },
-  researcher: {
-    title: "CODEBASE_RESEARCHER",
-    category: "research",
-    mission:
-      "Conduct deep codebase archaeology: symbol mapping, file structure analysis, call graph tracing, dependency discovery, and git history investigation. Be thorough and methodical — read the actual code, verify relationships, and map the full picture. Deliver clear, structured findings with exact file:line citations for every claim.",
-    focus: [
-      "Codebase indexing and symbol cross-referencing",
-      "Git history, blame, and evolution tracing",
-      "Exact file:line citation for all findings",
-    ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
-  },
-  explorer: {
-    title: "CODEBASE_RESEARCHER",
-    category: "research",
-    mission:
-      "Conduct deep codebase archaeology: symbol mapping, file structure analysis, call graph tracing, dependency discovery, and git history investigation. Be thorough and methodical — read the actual code, verify relationships, and map the full picture. Deliver clear, structured findings with exact file:line citations for every claim.",
-    focus: [
-      "Codebase indexing and symbol cross-referencing",
-      "Git history, blame, and evolution tracing",
-      "Exact file:line citation for all findings",
-    ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
   },
   devops: {
     title: "DEVOPS_ENGINEER",
@@ -743,7 +721,7 @@ export const TOOLS: ToolDef[] = [
     name: "delegate",
     description:
       "Autonomous delegation to the Antigravity CLI with Oh My OpenAgent (OMO) sub-agent role capabilities. " +
-      "Supports specialized subagents: 'git-master', 'oracle', 'librarian', 'explore', 'momus', 'metis', 'multimodal-looker', 'ultrabrain', 'deep', 'visual-engineering', 'artistry', 'writing', 'quick', 'tester', 'reviewer', 'security', 'researcher', 'devops', 'product'. " +
+      "Supports specialized subagents: 'git-master', 'oracle', 'librarian', 'explore', 'momus', 'metis', 'multimodal-looker', 'ultrabrain', 'deep', 'visual-engineering', 'artistry', 'writing', 'quick', 'tester', 'reviewer', 'security', 'devops', 'product'. " +
       "agy has full tool access (shell, file edits, web) in the given cwd.",
     schema: {
       prompt: z
@@ -758,7 +736,7 @@ export const TOOLS: ToolDef[] = [
         .string()
         .optional()
         .describe(
-          "OMO subagent role: 'git-master', 'oracle', 'librarian', 'explore', 'momus', 'metis', 'multimodal-looker', 'ultrabrain', 'deep', 'visual-engineering', 'artistry', 'writing', 'quick', 'tester', 'reviewer', 'security', 'researcher', 'devops', 'product'.",
+          "OMO subagent role: 'git-master', 'oracle', 'librarian', 'explore', 'momus', 'metis', 'multimodal-looker', 'ultrabrain', 'deep', 'visual-engineering', 'artistry', 'writing', 'quick', 'tester', 'reviewer', 'security', 'devops', 'product'.",
         ),
       expected_outcome: z
         .string()

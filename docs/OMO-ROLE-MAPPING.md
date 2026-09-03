@@ -31,7 +31,7 @@
 | **quick** | Category `quick` (Single-file changes, typos) | **IDENTIK** — sama persis |
 | **tester** / **qa** | Tidak ada agent builtin khusus tester | **HANYA di agy-bridge** — OMO tidak punya dedicated tester agent. Testing dilakukan oleh agent utama dengan prompt. |
 | **oracle** | Oracle (oracle.d.ts) | **MIRIP** — OMO Oracle = "architecture/debugging" (dari README). agy-bridge Oracle = "adversarial critic". Bedanya: OMO Oracle lebih ke architecture review, agy-bridge lebih ke adversarial code review. |
-| **librarian** | Librarian (librarian.d.ts) | **MIRIP** — OMO Librarian = "docs/code search" (dari README). agy-bridge Librarian = library/package research: cari library, version compatibility dengan project stack, trade-off versi. Tools: MCP context7 + exa/web search + webfetch. Git archaeology pindah ke researcher. |
+| **librarian** | Librarian (librarian.d.ts) | **MIRIP** — OMO Librarian = "docs/code search" (dari README). agy-bridge Librarian = library/package research: cari library, version compatibility dengan project stack, trade-off versi. Tools: MCP context7 + exa/web search + webfetch. Git archaeology kini di explore (researcher dihapus). |
 | **explore** | Explore (explore.d.ts) | **MIRIP** — OMO Explore = "fast codebase grep" (dari README). agy-bridge Explore = "codebase scout, broad search". Sama. |
 | **momus** | Momus (momus.d.ts) | **IDENTIK** (parity) — OMO Momus = "practical plan reviewer, APPROVAL BIAS, OKAY/REJECT ≤3 issues". agy-bridge Momus kini sama: approval-biased verifier, cek references/executability/kontradiksi/QA-scenarios, verdict OKAY/REJECT. |
 | **metis** | Metis (metis.d.ts) | **PARITY** — OMO Metis = "Plan Consultant" (analisis SEBELUM planning: hidden intentions, ambiguities, AI-slop). agy-bridge Metis kini sama: `OMO_METIS_PLAN_CONSULTANT`, category architecture, chain [Claude, Gemini]. Fokus: extract hidden intentions, deteksi ambiguity/AI-slop, clarifying questions + planner directives. |
@@ -42,7 +42,7 @@
 | **devops** | Tidak ada agent builtin khusus devops | **HANYA di agy-bridge** |
 | **writing** | Tidak ada agent builtin khusus writing | **HANYA di agy-bridge** — OMO writing dilakukan oleh agent utama. |
 | **product** | Tidak ada agent builtin khusus product | **HANYA di agy-bridge** |
-| **researcher** | Explore / Librarian (gabungan) | **MIRIP** — agy-bridge punya researcher sebagai role terpisah. OMO gabung fungsi researcher ke explore + librarian. |
+| **researcher** | _removed_ | **DIHAPUS** — di-merge ke explore. Git archaeology + external research kini jadi tanggung jawab explore. |
 | **artistry** | engineering category (tidak spesifik) | **HANYA di agy-bridge** — OMO tidak punya dedicated design/artistry agent. |
 
 > **Catatan:** OMO punya 3 main agents (Sisyphus, Hephaestus, Prometheus) yang TIDAK ada di agy-bridge — mereka orchestrator, bukan subagent. agy-bridge hanya delegasi sub-agent (per instruksi user: sisyphus-junior dihapus, fallback = OMO_GENERIC_EXECUTOR).
@@ -147,7 +147,7 @@ Mission: ...
 
 | Metrik | OMO | agy-bridge |
 | :----- | :-: | :--------- |
-| Jumlah role subagent | ~8 (oracle, librarian, explore, momus, metis, multimodal-looker, git-master) | 19 (tester, security, devops, writing, product, artistry, researcher, reviewer, deep, ultrabrain, visual-engineering, dll) |
+| Jumlah role subagent | ~8 (oracle, librarian, explore, momus, metis, multimodal-looker, git-master) | 18 (tester, security, devops, writing, product, artistry, reviewer, deep, ultrabrain, visual-engineering, dll) |
 | Jumlah main agent | 4 (Sisyphus, Hephaestus, Prometheus, Atlas) | 0 (agy-bridge = sub-agent-only; orchestrator di OpenCode/OMO) |
 | Model-family adaptation | 9 variants per agent | 3 variants (claude/gemini/gpt) via `<Model_Family_Context>` di delegate prompt |
 | Persona depth | Full systemPrompt (puluhan line, di binary) | Mission 1-2 kalimat |

@@ -178,7 +178,7 @@ Every `delegate` call with structured parameters (`task`/`role`/`expected_outcom
 [OUTPUT_RULES]                           ← English only, cite file:line
 ```
 
-Supported subagent roles (19): `git-master`, `oracle`, `librarian`, `explore`, `momus`, `metis`, `multimodal-looker`, `ultrabrain`, `deep`, `visual-engineering`, `artistry`, `writing`, `quick`, `tester`, `reviewer`, `security`, `researcher`, `devops`, `product`.
+Supported subagent roles (18): `git-master`, `oracle`, `librarian`, `explore`, `momus`, `metis`, `multimodal-looker`, `ultrabrain`, `deep`, `visual-engineering`, `artistry`, `writing`, `quick`, `tester`, `reviewer`, `security`, `devops`, `product`.
 
 The prompt is also adapted to the **resolved model family** (Claude variant: extended reasoning; Gemini variant: aggressive tool-call enforcement, anti-optimism checkpoints, repeated verification). `metis` is a plan consultant — delegate to it BEFORE planning to surface hidden intentions, ambiguities, and AI-slop patterns. `momus` is an approval-biased plan/diff verifier (OKAY or REJECT with ≤3 issues).
 

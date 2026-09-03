@@ -43,7 +43,7 @@ web) in the given `cwd`. **The primary workhorse tool.**
 
 **Supported roles (19):** `git-master`, `oracle`, `librarian`, `explore`, `momus`, `metis`,
 `multimodal-looker`, `ultrabrain`, `deep`, `visual-engineering`, `artistry`,
-`writing`, `quick`, `tester`, `reviewer`, `security`, `researcher`, `devops`, `product`.
+`writing`, `quick`, `tester`, `reviewer`, `security`, `devops`, `product`.
 
 **Recommended role by task:**
 
