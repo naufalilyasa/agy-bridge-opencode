@@ -23,24 +23,6 @@ Investigation mindset: gather evidence across code and docs, verify claims, and 
 Outcome mindset: focus on user value and acceptance criteria, ground decisions in the stated goal, and keep scope tight.`,
 };
 
-function isFastModel(model: string | undefined): boolean {
-  return !!model && /flash|compact|mini|nano|fast/i.test(model);
-}
-
-function buildCallerWarning(firstModel: string | undefined): string {
-  const model = firstModel || "a compact model";
-  return (
-    `THIS TASK USES ${/^[aeiou]/i.test(firstModel || "a") ? "AN" : "A"} ${model}.\n` +
-    `The executing model is optimized for speed over depth. Your prompt must be EXHAUSTIVELY EXPLICIT:\n` +
-    `- State the goal and acceptance criteria in one line.\n` +
-    `- Give numbered, atomic MUST DO steps with explicit file paths.\n` +
-    `- List MUST NOT DO boundaries and why each matters.\n` +
-    `- Define the exact expected output and how it will be verified.\n` +
-    `Do not rely on the model to infer scope, infer steps, or fill gaps.`
-  );
-}
-
-
 export function resolveFiles(files: string[], cwd: string): string[] {
   return files.map((f) => (path.isAbsolute(f) ? f : path.resolve(cwd, f)));
 }
@@ -867,11 +849,6 @@ export const TOOLS: ToolDef[] = [
             }
           : OMO_ROLES["sisyphus-junior"]);
       const roleCategory = roleDef.category;
-      const roleFirstModel =
-        roleDef.chain?.[0] ??
-        (roleCategory === "quality" || roleCategory === "security"
-          ? "Claude Sonnet 4.6 (Thinking)"
-          : "Gemini 3.7 Flash (High)");
 
       const expectedOutcome = (args.expected_outcome as string) || (args.outcome as string);
       const reqTools = (args.required_tools as string[]) || (args.tools as string[]);
@@ -928,10 +905,6 @@ export const TOOLS: ToolDef[] = [
         const categoryContext = CATEGORY_CONTEXT[roleCategory];
         if (categoryContext) {
           p += `<Category_Context>\n${categoryContext}\n</Category_Context>\n\n`;
-        }
-
-        if (isFastModel(roleFirstModel)) {
-          p += `<Caller_Warning>\n${buildCallerWarning(roleFirstModel)}\n</Caller_Warning>\n\n`;
         }
 
         p += `## 1. TASK / OBJECTIVE\n${task}\n\n`;

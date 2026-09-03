@@ -78,7 +78,11 @@ describe("prompt templates", () => {
 
   it("delegate keeps both task and prompt when both are provided (no silent drop)", () => {
     const p = get("delegate").buildPrompt(
-      { task: "Fix two pairing bugs", prompt: "BUG 1 root cause: UrlRouter no-op. MUST DO: add case.", role: "deep" },
+      {
+        task: "Fix two pairing bugs",
+        prompt: "BUG 1 root cause: UrlRouter no-op. MUST DO: add case.",
+        role: "deep",
+      },
       "/repo",
     );
     expect(p).toContain("Fix two pairing bugs");
@@ -114,13 +118,12 @@ describe("prompt templates", () => {
     expect(p).toContain("EXECUTION PROTOCOL");
   });
 
-  it("delegate injects OMO-native parity blocks (Category_Context, Caller_Warning for fast roles, EXECUTION DISCIPLINE)", () => {
+  it("delegate injects Category_Context and EXECUTION DISCIPLINE", () => {
     const pFast = get("delegate").buildPrompt(
       { role: "git-master", task: "Commit staged changes atomically" },
       "/repo",
     );
     expect(pFast).toContain("<Category_Context>");
-    expect(pFast).toContain("<Caller_Warning>");
     expect(pFast).toContain("EXECUTION DISCIPLINE");
     expect(pFast).toContain("Execute directly");
 
@@ -129,7 +132,6 @@ describe("prompt templates", () => {
       "/repo",
     );
     expect(pCritic).toContain("<Category_Context>");
-    expect(pCritic).not.toContain("<Caller_Warning>");
     expect(pCritic).toContain("EXECUTION DISCIPLINE");
   });
 

@@ -25,17 +25,17 @@ User → OpenCode/Claude Code → agy-bridge (MCP) → agy CLI → Gemini / Clau
 
 This fork is a **customized, production-hardened build** for OpenCode + Oh My OpenAgent (OMO) workflows. On top of the upstream agy-bridge server it adds:
 
-| Addition                   | What it does                                                                                                                                                                                                                                                    |
-| :------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **One-command installer**  | `scripts/install.sh` / `scripts/install.ps1` — installs the MCP server, OMO config, guard plugin, delegation skill, agy CLI runtime configs, toggle, and TUI shims in one run. **Merges** your `opencode.jsonc` (timestamped backups, never overrides)          |
-| **`agy-bridge-toggle`**    | `on` / `off` / `status` — flip the whole agy-bridge integration off and back on with byte-identical snapshot restore                                                                                                                                            |
-| **Uninstaller**            | `scripts/uninstall.sh` / `scripts/uninstall.ps1` — removes every installed component and restores `opencode.jsonc` from its pre-install backup                                                                                                                  |
-| **`agy-delegation` skill** | Comprehensive delegation protocol (all 8 MCP tools, roles, memory directives). Installed to `~/.gemini/config/skills/agy-delegation/` and **guaranteed the first slot** in every delegated prompt's skill list                                                  |
-| **Hardened prompts**       | OMO-native parity: `<Category_Context>`, `<Caller_Warning>` for fast models, `EXECUTION DISCIPLINE` (anti-delegation, verification mandates, anti-optimism checkpoints, scope discipline), mandatory agentmemory recall/persist directives, English-only output |
-| **Guard plugin**           | `agy-delegate-guard.js` — intercepts heavy `git log/diff/blame`, `grep -r`, `rg`, `cat` calls in the main context and redirects them to agy-bridge delegation                                                                                                   |
-| **`agy-live2` TUI**        | OpenTUI (v2) live session monitor with quota/context meters, hardened against giant-transcript OOM crashes                                                                                                                                                      |
-| **Config templates**       | `config/*.example` — model routing (19-role chains), OMO config, OpenCode config, guard plugin, and agy CLI runtime configs (mcp/hooks/GEMINI.md), secrets-free                                                                                                 |
-| **Model config SSOT**      | Role → model chains live in `~/.gemini/config/agy_bridge.jsonc` (single source of truth), validated against `agy models`                                                                                                                                        |
+| Addition                   | What it does                                                                                                                                                                                                                                           |
+| :------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **One-command installer**  | `scripts/install.sh` / `scripts/install.ps1` — installs the MCP server, OMO config, guard plugin, delegation skill, agy CLI runtime configs, toggle, and TUI shims in one run. **Merges** your `opencode.jsonc` (timestamped backups, never overrides) |
+| **`agy-bridge-toggle`**    | `on` / `off` / `status` — flip the whole agy-bridge integration off and back on with byte-identical snapshot restore                                                                                                                                   |
+| **Uninstaller**            | `scripts/uninstall.sh` / `scripts/uninstall.ps1` — removes every installed component and restores `opencode.jsonc` from its pre-install backup                                                                                                         |
+| **`agy-delegation` skill** | Comprehensive delegation protocol (all 8 MCP tools, roles, memory directives). Installed to `~/.gemini/config/skills/agy-delegation/` and **guaranteed the first slot** in every delegated prompt's skill list                                         |
+| **Hardened prompts**       | OMO-native parity: `<Category_Context>`, `EXECUTION DISCIPLINE` (anti-delegation, verification mandates, anti-optimism checkpoints, scope discipline), mandatory agentmemory recall/persist directives, English-only output                            |
+| **Guard plugin**           | `agy-delegate-guard.js` — intercepts heavy `git log/diff/blame`, `grep -r`, `rg`, `cat` calls in the main context and redirects them to agy-bridge delegation                                                                                          |
+| **`agy-live2` TUI**        | OpenTUI (v2) live session monitor with quota/context meters, hardened against giant-transcript OOM crashes                                                                                                                                             |
+| **Config templates**       | `config/*.example` — model routing (19-role chains), OMO config, OpenCode config, guard plugin, and agy CLI runtime configs (mcp/hooks/GEMINI.md), secrets-free                                                                                        |
+| **Model config SSOT**      | Role → model chains live in `~/.gemini/config/agy_bridge.jsonc` (single source of truth), validated against `agy models`                                                                                                                               |
 
 ## Requirements
 
@@ -161,7 +161,6 @@ Every `delegate` call with structured parameters (`task`/`role`/`expected_outcom
 ```
 [DELEGATED AGENT ROLE: X] + Mission
 <Category_Context>                       ← role-category mindset
-<Caller_Warning>                         ← only for fast/flash-first chains
 ## 1. TASK / OBJECTIVE
 ## 2. EXPECTED OUTCOME
 ## 3. REQUIRED TOOLS (WHITELIST)
