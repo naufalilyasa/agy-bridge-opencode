@@ -79,10 +79,63 @@ function loadRoleModels(
 }
 
 export function stripJsonComments(raw: string): string {
-  return raw
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "")
-    .replace(/([^\\:]|^)\/\/.*$/gm, "$1");
+  let out = "";
+  let inString = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  let escaped = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    const next = raw[i + 1];
+
+    if (inLineComment) {
+      if (c === "\n") {
+        inLineComment = false;
+        out += c;
+      }
+      continue;
+    }
+    if (inBlockComment) {
+      if (c === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (inString) {
+      out += c;
+      if (escaped) {
+        escaped = false;
+      } else if (c === "\\") {
+        escaped = true;
+      } else if (c === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      out += c;
+    } else if (c === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+    } else if (c === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+    } else if (c === ",") {
+      let j = i + 1;
+      while (j < raw.length && (raw[j] === " " || raw[j] === "\t" || raw[j] === "\n" || raw[j] === "\r")) {
+        j++;
+      }
+      if (raw[j] !== "}" && raw[j] !== "]") {
+        out += c;
+      }
+    } else {
+      out += c;
+    }
+  }
+  return out;
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {

@@ -98,4 +98,24 @@ describe("loadConfig", () => {
     expect(c.defaultModel).toBe("gemini-3.7-flash-high");
     expect(c.timeoutSec).toBe(300);
   });
+
+  it("strips trailing commas so live agy_bridge.jsonc with JSONC commas parses", () => {
+    const jsonc = `{
+      // roles block
+      "roles": {
+        "oracle": ["gemini-3.8-flash-high", "claude-opus-4-6-thinking"],
+        "product": ["gemini-3.8-flash-high", "claude-sonnet-4-6"],
+      },
+    }`;
+    const c = JSON.parse(stripJsonComments(jsonc));
+    expect(c.roles.oracle).toEqual(["gemini-3.8-flash-high", "claude-opus-4-6-thinking"]);
+    expect(c.roles.product).toEqual(["gemini-3.8-flash-high", "claude-sonnet-4-6"]);
+  });
+
+  it("does not strip commas inside strings that precede } or ]", () => {
+    const jsonc = `{"note": "a,}b", "list": ["x", "y,"]}`;
+    const c = JSON.parse(stripJsonComments(jsonc));
+    expect(c.note).toBe("a,}b");
+    expect(c.list).toEqual(["x", "y,"]);
+  });
 });
