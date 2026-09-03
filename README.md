@@ -96,12 +96,12 @@ Removes every component the installer added and restores `opencode.jsonc` from i
 
 | Tool                 | Use for                                                         | Model routing                                                  |
 | -------------------- | --------------------------------------------------------------- | -------------------------------------------------------------- |
-| `analyze_files`      | Files >200 lines, >3 files at once, logs, dumps, generated code | per-tool chain (default: Gemini 3.7 Flash → Claude Sonnet 4.6) |
+| `analyze_files`      | Files >200 lines, >3 files at once, logs, dumps, generated code | per-tool chain (live: 3.8 via agy_bridge.jsonc)                |
 | `deep_search`        | git log/diff/blame archaeology, repo-wide greps                 | per-tool chain                                                 |
 | `web_lookup`         | Docs, API references, external/current knowledge                | per-tool chain                                                 |
 | `adversarial_review` | Plan critiques, design and code reviews (second model family)   | per-tool chain (critic roles lead with Claude)                 |
 | `follow_up`          | Continue a prior session by `session_id` — no context resend    | inherits the session                                           |
-| `delegate`           | Autonomous execution with 20 subagent roles (6-section prompt)  | per-role chain (see below)                                     |
+| `delegate`           | Autonomous execution with 19 subagent roles (6-section prompt)  | per-role chain (see below)                                     |
 | `get_session_status` | Current/latest session ID, status, directory binding            | —                                                              |
 | `list_sessions`      | All recorded sessions (find IDs to resume with `follow_up`)     | —                                                              |
 
@@ -115,7 +115,7 @@ Every response ends with a footer:
 
 ```
 ---
-[agy-bridge] model: gemini-3.5-flash-low | session: ae32eb4d-f2a3-49de-8165-07212be0d065 (use follow_up to continue)
+[agy-bridge] model: gemini-3.8-flash-high | session: ae32eb4d-f2a3-49de-8165-07212be0d065 (use follow_up to continue)
 ```
 
 ### Quota-aware failover
@@ -152,7 +152,7 @@ All optional, via environment variables:
 | `AGY_SANDBOX`           | `false`    | Run agy with `--sandbox`                                                                 |
 | `AGY_ON_FAILURE`        | `fallback` | `strict` tells the calling agent not to absorb failed work itself                        |
 
-The 19-role model chains live in `~/.gemini/config/agy_bridge.jsonc` (see `config/agy_bridge.jsonc.example`). `defaultModel` defaults to `gemini-3.7-flash-high`.
+The 19-role model chains live in `~/.gemini/config/agy_bridge.jsonc` (see `config/agy_bridge.jsonc.example`). The file is JSONC: `//` and `/* */` comments plus trailing commas are stripped before parsing. There is no `defaultModel` key — when a chain is empty the server falls through to agy's own default model.
 
 ## Delegation protocol
 
