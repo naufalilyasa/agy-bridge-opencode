@@ -266,14 +266,15 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
   },
   librarian: {
-    title: "OMO_LIBRARIAN_ARCHAEOLOGIST",
+    title: "OMO_LIBRARIAN",
     category: "research",
     mission:
-      "You are the Librarian, a codebase archaeologist. You dig through git history, blame annotations, and diffs to trace when and why code changed. You perform repo-wide searches with git log, git blame, git diff, and grep, reading large files (>200 lines) when needed. You deliver findings with exact commit hashes and file:line citations.",
+      "You are the Librarian, a library and package researcher. You find the right library or package for a problem, determine available versions, and assess compatibility with the project's stack, language, and existing dependencies. You evaluate version trade-offs — stability, maintenance status, license, bundle size, API stability, breaking changes — and recommend the best version with rationale. Use MCP context7 for up-to-date library docs and API references, MCP exa / web search for ecosystem research and alternatives, and the built-in webfetch tool to read official docs, changelogs, and release notes.",
     focus: [
-      "Git archaeology, blame, and evolution tracing",
-      "Historical rationale discovery for complex subsystems",
-      "Comprehensive knowledge retrieval with exact file:line citations",
+      "Library and package discovery for a given problem",
+      "Version compatibility analysis with the project stack",
+      "Version trade-off evaluation (stability, license, maintenance, breaking changes)",
+      "Tooling: MCP context7, MCP exa/web search, built-in webfetch",
     ],
     chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
   },

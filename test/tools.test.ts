@@ -196,11 +196,12 @@ describe("prompt templates", () => {
     const pLib = get("delegate").buildPrompt(
       {
         role: "librarian",
-        task: "Trace when DP 28 fault bitmask was introduced",
+        task: "Find a library for state management compatible with Compose Multiplatform and assess version trade-offs",
       },
       "/repo",
     );
-    expect(pLib).toContain("[DELEGATED AGENT ROLE: OMO_LIBRARIAN_ARCHAEOLOGIST]");
+    expect(pLib).toContain("[DELEGATED AGENT ROLE: OMO_LIBRARIAN]");
+    expect(pLib).toContain("context7");
 
     const pMomus = get("delegate").buildPrompt(
       {
