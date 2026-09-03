@@ -6,6 +6,7 @@ package/
 docs/*
 !docs/multi-client-support.md
 !docs/INSTALL.md
+!docs/OMO-ROLE-MAPPING.md
 
 # vendored OMO source (embedded git repo) — not part of agy-bridge source
 oh-my-openagent/
@@ -15,3 +16,9 @@ oh-my-openagent/
 
 # scratch QA scripts
 .qa-*.ts
+
+# extracted OMO package (scratch from mapping investigation)
+oh-my-openagent-4.19.4/
+
+# macOS
+.DS_Store

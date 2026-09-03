@@ -96,7 +96,7 @@ describe("prompt templates", () => {
     ).toThrow(/requires a `role`/);
   });
 
-  it("delegate defaults to sisyphus-junior for a bare prompt passthrough", () => {
+  it("delegate passes a bare prompt through without injecting a role", () => {
     expect(get("delegate").buildPrompt({ prompt: "just do it" }, "/repo")).toBe("just do it");
   });
 
@@ -133,6 +133,30 @@ describe("prompt templates", () => {
     );
     expect(pCritic).toContain("<Category_Context>");
     expect(pCritic).toContain("EXECUTION DISCIPLINE");
+  });
+
+  it("delegate injects a model-family context block matching the resolved model", () => {
+    const pGemini = get("delegate").buildPrompt(
+      { role: "deep", task: "Implement feature X" },
+      "/repo",
+      "Gemini 3.7 Flash (High)",
+    );
+    expect(pGemini).toContain('<Model_Family_Context model="gemini">');
+    expect(pGemini).toContain("aggressive tool-call");
+
+    const pClaude = get("delegate").buildPrompt(
+      { role: "deep", task: "Implement feature X" },
+      "/repo",
+      "Claude Sonnet 4.6 (Thinking)",
+    );
+    expect(pClaude).toContain('<Model_Family_Context model="claude">');
+    expect(pClaude).toContain("extended reasoning");
+
+    const pNoModel = get("delegate").buildPrompt(
+      { role: "deep", task: "Implement feature X" },
+      "/repo",
+    );
+    expect(pNoModel).not.toContain("Model_Family_Context");
   });
 
   it("delegate supports visual-engineering role", () => {
@@ -188,7 +212,7 @@ describe("prompt templates", () => {
     expect(pMomus).toContain("[DELEGATED AGENT ROLE: OMO_MOMUS_VERIFIER]");
   });
 
-  it("delegate supports specialized OMO subagents: ultrabrain, tester, sisyphus-junior, metis", () => {
+  it("delegate supports specialized OMO subagents: ultrabrain, tester, metis", () => {
     const pUltrabrain = get("delegate").buildPrompt(
       {
         role: "ultrabrain",
@@ -198,23 +222,15 @@ describe("prompt templates", () => {
     );
     expect(pUltrabrain).toContain("[DELEGATED AGENT ROLE: OMO_ULTRABRAIN_ARCHITECT]");
 
-    const pJunior = get("delegate").buildPrompt(
-      {
-        role: "sisyphus-junior",
-        task: "Execute targeted file updates and fixes",
-      },
-      "/repo",
-    );
-    expect(pJunior).toContain("[DELEGATED AGENT ROLE: OMO_SISYPHUS_JUNIOR]");
-
     const pMetis = get("delegate").buildPrompt(
       {
         role: "metis",
-        task: "Multi-file dependency and call graph analysis",
+        task: "Analyze the request before planning to surface ambiguities",
       },
       "/repo",
     );
-    expect(pMetis).toContain("[DELEGATED AGENT ROLE: OMO_METIS_MULTI_FILE_ANALYST]");
+    expect(pMetis).toContain("[DELEGATED AGENT ROLE: OMO_METIS_PLAN_CONSULTANT]");
+    expect(pMetis).toContain("Plan Consultant");
 
     const pTester = get("delegate").buildPrompt(
       {

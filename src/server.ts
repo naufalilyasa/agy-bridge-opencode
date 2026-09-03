@@ -137,19 +137,6 @@ export function createToolHandler(
         }
       }
 
-      let prompt = tool.buildPrompt(args, cwd);
-
-      const MEMORY_EXEMPT_TOOLS = new Set(["get_session_status", "list_sessions"]);
-      if (!MEMORY_EXEMPT_TOOLS.has(tool.name) && !prompt.includes("RECALL MEMORY DIRECTIVE")) {
-        prompt +=
-          `\n\n## MEMORY PROTOCOL - MANDATORY, NEVER SKIP\n` +
-          `- BEFORE starting work: query \`agentmemory\` via \`memory_recall\` and/or \`memory_smart_search\` for concepts relevant to this task.\n` +
-          `- BEFORE your final answer: persist key learnings via \`memory_save\` (always include the project field).\n` +
-          `- If agentmemory tools are unavailable or return zero results, state it explicitly in your final answer ("MEMORY RECALL: 0 results" / "MEMORY SAVE: unavailable"). Silently skipping this step is a protocol violation.`;
-      }
-      const timeoutSec =
-        cfg.perToolTimeouts[tool.name] ?? (cfg.timeoutExplicit ? cfg.timeoutSec : tool.timeoutSec);
-
       const roleKey = ((args.role as string) || "").toLowerCase().replace(/_/g, "-");
       const effectiveChain =
         (roleKey ? cfg.roleModels[roleKey] : undefined) ||
@@ -161,6 +148,23 @@ export function createToolHandler(
         chain: effectiveChain,
         defaultModel: cfg.defaultModel,
       });
+
+      // Build the prompt AFTER resolving the chain so model-family-specific
+      // variants (e.g. Claude vs Gemini discipline) can be injected from the
+      // first available model. resolution.models[0] === undefined means "let
+      // agy pick" — tools fall back to a neutral variant then.
+      let prompt = tool.buildPrompt(args, cwd, resolution.models[0]);
+
+      const MEMORY_EXEMPT_TOOLS = new Set(["get_session_status", "list_sessions"]);
+      if (!MEMORY_EXEMPT_TOOLS.has(tool.name) && !prompt.includes("RECALL MEMORY DIRECTIVE")) {
+        prompt +=
+          `\n\n## MEMORY PROTOCOL - MANDATORY, NEVER SKIP\n` +
+          `- BEFORE starting work: query \`agentmemory\` via \`memory_recall\` and/or \`memory_smart_search\` for concepts relevant to this task.\n` +
+          `- BEFORE your final answer: persist key learnings via \`memory_save\` (always include the project field).\n` +
+          `- If agentmemory tools are unavailable or return zero results, state it explicitly in your final answer ("MEMORY RECALL: 0 results" / "MEMORY SAVE: unavailable"). Silently skipping this step is a protocol violation.`;
+      }
+      const timeoutSec =
+        cfg.perToolTimeouts[tool.name] ?? (cfg.timeoutExplicit ? cfg.timeoutSec : tool.timeoutSec);
 
       const attempts: string[] = [];
       let result: RunResult | undefined;

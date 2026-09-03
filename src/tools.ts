@@ -23,6 +23,35 @@ Investigation mindset: gather evidence across code and docs, verify claims, and 
 Outcome mindset: focus on user value and acceptance criteria, ground decisions in the stated goal, and keep scope tight.`,
 };
 
+/**
+ * Model-family adaptation, mirroring OMO's per-family sisyphus-junior variants:
+ * Claude models get extended-reasoning discipline (default.d.ts), Gemini models
+ * get aggressive tool-call enforcement + anti-optimism checkpoints
+ * (gemini.d.ts). Selected from the first available model in the resolved
+ * chain so the persona matches the model that will actually run.
+ */
+const MODEL_FAMILY_CONTEXT: Record<string, string> = {
+  claude: `You are executing on a Claude model optimized for extended reasoning.
+- Reason carefully and step-by-step before acting; depth of thought is your strength.
+- Never attempt to delegate or hand work back — execute it yourself, completely.`,
+  gemini: `You are executing on a Gemini model.
+- Enforce aggressive tool-call discipline: call file/shell tools early and often instead of reasoning abstractly.
+- Anti-optimism checkpoints: after each step, verify the actual result before proceeding.
+- Repeated verification: run builds/tests and report real output; re-verify after fixes.
+- Stronger scope discipline: touch only what the task requires.`,
+  gpt: `You are executing on a GPT model.
+- Execute directly with your tools; verify results empirically rather than assuming success.`,
+};
+
+function modelFamily(model: string | undefined): string {
+  const m = (model || "").toLowerCase();
+  if (m.includes("claude")) return "claude";
+  if (m.includes("gemini")) return "gemini";
+  if (m.includes("gpt") || m.includes("oss")) return "gpt";
+  return "other";
+}
+
+
 export function resolveFiles(files: string[], cwd: string): string[] {
   return files.map((f) => (path.isAbsolute(f) ? f : path.resolve(cwd, f)));
 }
@@ -171,7 +200,7 @@ export interface ToolDef {
   chain: string[];
   /** Default --print-timeout for this tool, in seconds. AGY_TIMEOUT overrides. */
   timeoutSec: number;
-  buildPrompt(args: Record<string, unknown>, cwd: string): string;
+  buildPrompt(args: Record<string, unknown>, cwd: string, model?: string): string;
 }
 
 export interface OmoRoleDefinition {
@@ -264,25 +293,25 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     title: "OMO_MOMUS_VERIFIER",
     category: "quality",
     mission:
-      "You are Momus, the adversarial Verifier. You inspect large diffs and audit implementation details with an adversarial eye. You catch architectural leaks, regression risks, incomplete changes, and quality regressions before they reach production. You deliver independent second-opinion verification with concrete evidence and ranked concerns.",
+      "You are Momus, a practical plan and diff reviewer. Verify that a plan is executable and that every referenced file/function actually exists. Apply an APPROVAL BIAS: when in doubt, APPROVE. Check ONLY these dimensions: references are valid, the plan is executable, there are no internal contradictions, and QA scenarios are covered. Deliver a verdict of OKAY or REJECT — REJECT only when something is genuinely broken, and list at most 3 issues.",
     focus: [
-      "Diff inspection and pre-merge validation",
-      "Catching architectural leaks and regressions",
-      "Independent second-opinion verification",
+      "Reference validity and executability of plans",
+      "Internal contradictions and missing QA scenarios",
+      "Approval-biased verdict: OKAY or REJECT with ≤3 issues",
     ],
     chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
   },
   metis: {
-    title: "OMO_METIS_MULTI_FILE_ANALYST",
-    category: "research",
+    title: "OMO_METIS_PLAN_CONSULTANT",
+    category: "architecture",
     mission:
-      "You are Metis, the multi-file analyst. You trace data flows across layers, map cross-component dependencies, and verify architectural consistency. When a change spans many files, you analyze the full blast radius and coordinate multi-component refactoring. You deliver call-graph analysis with exact file:line trace of every affected path.",
+      "You are Metis, the Plan Consultant. You analyze user requests BEFORE any planning begins: surface hidden intentions and unstated goals, identify ambiguities, flag AI-slop patterns (vague/vapid asks), and formulate the clarifying questions a planner must answer. You deliver directives that make the follow-up plan accurate and unambiguous.",
     focus: [
-      "Multi-file dependency and call graph analysis",
-      "Cross-layer data flow verification",
-      "Complex refactoring impact analysis",
+      "Hidden intentions and unstated goals extraction",
+      "Ambiguity and AI-slop pattern detection",
+      "Clarifying questions and planner directives",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
   },
   "multimodal-looker": {
     title: "OMO_MULTIMODAL_LOOKER",
@@ -308,32 +337,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
   },
-  "sisyphus-junior": {
-    title: "OMO_SISYPHUS_JUNIOR",
-    category: "engineering",
-    mission:
-      "You are Sisyphus Junior, the fast execution assistant. You read large files (>200 lines), fetch documentation lookups, and execute targeted file updates and fixes directly. You cannot delegate — every task is done by you with your own file and shell tools. You deliver complete, working, verified code.",
-    focus: [
-      "Fast file reading and log inspections",
-      "Targeted code updates and fix applications",
-      "Documentation lookups and verification",
-    ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
-  },
-  junior: {
-    title: "OMO_SISYPHUS_JUNIOR",
-    category: "engineering",
-    mission:
-      "You are Sisyphus Junior, the fast execution assistant. You read large files (>200 lines), fetch documentation lookups, and execute targeted file updates and fixes directly. You cannot delegate — every task is done by you with your own file and shell tools. You deliver complete, working, verified code.",
-    focus: [
-      "Fast file reading and log inspections",
-      "Targeted code updates and fix applications",
-      "Documentation lookups and verification",
-    ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
-  },
-
-  // --- OMO CATEGORIES & SPECIALIZED ROLES ---
   ultrabrain: {
     title: "OMO_ULTRABRAIN_ARCHITECT",
     category: "architecture",
@@ -739,7 +742,7 @@ export const TOOLS: ToolDef[] = [
     name: "delegate",
     description:
       "Autonomous delegation to the Antigravity CLI with Oh My OpenAgent (OMO) sub-agent role capabilities. " +
-      "Supports specialized subagents: 'git-master', 'oracle', 'librarian', 'explore', 'momus', 'metis', 'multimodal-looker', 'sisyphus-junior', 'ultrabrain', 'deep', 'visual-engineering', 'artistry', 'writing', 'quick', 'tester', 'reviewer', 'security', 'researcher', 'devops', 'product'. " +
+      "Supports specialized subagents: 'git-master', 'oracle', 'librarian', 'explore', 'momus', 'metis', 'multimodal-looker', 'ultrabrain', 'deep', 'visual-engineering', 'artistry', 'writing', 'quick', 'tester', 'reviewer', 'security', 'researcher', 'devops', 'product'. " +
       "agy has full tool access (shell, file edits, web) in the given cwd.",
     schema: {
       prompt: z
@@ -754,7 +757,7 @@ export const TOOLS: ToolDef[] = [
         .string()
         .optional()
         .describe(
-          "OMO subagent role: 'git-master', 'oracle', 'librarian', 'explore', 'momus', 'metis', 'multimodal-looker', 'sisyphus-junior', 'ultrabrain', 'deep', 'visual-engineering', 'artistry', 'writing', 'quick', 'tester', 'reviewer', 'security', 'researcher', 'devops', 'product'.",
+          "OMO subagent role: 'git-master', 'oracle', 'librarian', 'explore', 'momus', 'metis', 'multimodal-looker', 'ultrabrain', 'deep', 'visual-engineering', 'artistry', 'writing', 'quick', 'tester', 'reviewer', 'security', 'researcher', 'devops', 'product'.",
         ),
       expected_outcome: z
         .string()
@@ -829,7 +832,7 @@ export const TOOLS: ToolDef[] = [
     },
     chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
     timeoutSec: 600,
-    buildPrompt(args, cwd) {
+    buildPrompt(args, cwd, model) {
       const taskArg = (args.task as string) || "";
       const promptArg = (args.prompt as string) || "";
       const task = taskArg && promptArg ? `${taskArg}\n\n${promptArg}` : taskArg || promptArg;
@@ -847,7 +850,13 @@ export const TOOLS: ToolDef[] = [
               mission: `Execute specialized tasks as ${args.role}. Deliver complete, verified, and high-quality results.`,
               focus: ["High-quality implementation", "Verification with builds/tests"],
             }
-          : OMO_ROLES["sisyphus-junior"]);
+          : {
+              title: "OMO_GENERIC_EXECUTOR",
+              category: "engineering" as const,
+              mission:
+                "Execute the requested work directly and completely. Deliver verified, high-quality results with exact file:line citations.",
+              focus: ["Direct execution", "Verification with builds/tests"],
+            });
       const roleCategory = roleDef.category;
 
       const expectedOutcome = (args.expected_outcome as string) || (args.outcome as string);
@@ -905,6 +914,12 @@ export const TOOLS: ToolDef[] = [
         const categoryContext = CATEGORY_CONTEXT[roleCategory];
         if (categoryContext) {
           p += `<Category_Context>\n${categoryContext}\n</Category_Context>\n\n`;
+        }
+
+        const family = modelFamily(model);
+        const familyContext = MODEL_FAMILY_CONTEXT[family];
+        if (familyContext) {
+          p += `<Model_Family_Context model="${family}">\n${familyContext}\n</Model_Family_Context>\n\n`;
         }
 
         p += `## 1. TASK / OBJECTIVE\n${task}\n\n`;

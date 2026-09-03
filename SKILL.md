@@ -41,8 +41,8 @@ web) in the given `cwd`. **The primary workhorse tool.**
 | `save_memory` | Instruction to persist findings to agentmemory BEFORE final answer. |
 | `cwd` | Working directory for the subagent (defaults to server cwd). |
 
-**Supported roles (20):** `git-master`, `oracle`, `librarian`, `explore`, `momus`, `metis`,
-`multimodal-looker`, `sisyphus-junior`, `ultrabrain`, `deep`, `visual-engineering`, `artistry`,
+**Supported roles (19):** `git-master`, `oracle`, `librarian`, `explore`, `momus`, `metis`,
+`multimodal-looker`, `ultrabrain`, `deep`, `visual-engineering`, `artistry`,
 `writing`, `quick`, `tester`, `reviewer`, `security`, `researcher`, `devops`, `product`.
 
 **Recommended role by task:**
@@ -50,8 +50,9 @@ web) in the given `cwd`. **The primary workhorse tool.**
 | Task | Role |
 | :--- | :--- |
 | Commit / branch / PR / git conflict | `git-master` |
+| Analyze a request BEFORE planning (intent, ambiguities, AI-slop) | `metis` |
 | Architecture, hard logic, design decisions | `ultrabrain`, `oracle` |
-| Adversarial critique, hidden bugs | `momus`, `reviewer` |
+| Plan / diff review (approval-biased, OKAY/REJECT) | `momus`, `reviewer` |
 | Goal-oriented deep research + implementation | `deep` |
 | UI / Compose / styling | `visual-engineering` |
 | Security audit / vulnerability | `security` |

@@ -161,6 +161,7 @@ Every `delegate` call with structured parameters (`task`/`role`/`expected_outcom
 ```
 [DELEGATED AGENT ROLE: X] + Mission
 <Category_Context>                       ← role-category mindset
+<Model_Family_Context>                   ← adapted to Claude (extended reasoning) or Gemini (tool-call enforcement)
 ## 1. TASK / OBJECTIVE
 ## 2. EXPECTED OUTCOME
 ## 3. REQUIRED TOOLS (WHITELIST)
@@ -177,7 +178,9 @@ Every `delegate` call with structured parameters (`task`/`role`/`expected_outcom
 [OUTPUT_RULES]                           ← English only, cite file:line
 ```
 
-Supported subagent roles (20): `git-master`, `oracle`, `librarian`, `explore`, `momus`, `metis`, `multimodal-looker`, `sisyphus-junior`, `ultrabrain`, `deep`, `visual-engineering`, `artistry`, `writing`, `quick`, `tester`, `reviewer`, `security`, `researcher`, `devops`, `product`.
+Supported subagent roles (19): `git-master`, `oracle`, `librarian`, `explore`, `momus`, `metis`, `multimodal-looker`, `ultrabrain`, `deep`, `visual-engineering`, `artistry`, `writing`, `quick`, `tester`, `reviewer`, `security`, `researcher`, `devops`, `product`.
+
+The prompt is also adapted to the **resolved model family** (Claude variant: extended reasoning; Gemini variant: aggressive tool-call enforcement, anti-optimism checkpoints, repeated verification). `metis` is a plan consultant — delegate to it BEFORE planning to surface hidden intentions, ambiguities, and AI-slop patterns. `momus` is an approval-biased plan/diff verifier (OKAY or REJECT with ≤3 issues).
 
 ## Live telemetry — agy-live2
 
