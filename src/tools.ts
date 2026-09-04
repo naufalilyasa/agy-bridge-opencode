@@ -401,14 +401,14 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
   },
   quick: {
-    title: "OMO_QUICK_RESEARCHER",
-    category: "research",
+    title: "OMO_QUICK_EXECUTOR",
+    category: "engineering",
     mission:
-      "You are the Quick Researcher. You perform rapid documentation lookups, API syntax checks, and symbol queries. You are optimized for speed — factual answers, no essays, no deep analysis. You deliver concise, accurate responses with source URLs and exact references in minimal time.",
+      "You are the Quick Executor, a fast single-edit worker. You perform trivial code changes: typo fixes, one-line edits, simple field removal, mechanical renames, and purely mechanical multi-file edits (delete blocks, readonly toggles) with no logic changes. You apply the change directly, verify it compiles or passes the smallest relevant check, and deliver the exact diff with file:line citations — fast, no essays, no scope creep.",
     focus: [
-      "Rapid API doc and library lookups",
-      "Quick syntax and symbol verification",
-      "Concise factual answers",
+      "Typo fixes, one-line edits, simple field removal",
+      "Purely mechanical multi-file edits (delete blocks, rename, readonly toggle)",
+      "Fast verification: compile/lint/smallest relevant check",
     ],
     chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
   },
