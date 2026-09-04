@@ -83,6 +83,11 @@ function detectSessionModel(logPath: string): string {
   }
 }
 
+const sessionMetaCache = new Map<
+  string,
+  { mtime: number; size: number; projectDir: string; model: string }
+>();
+
 function getAllSessions(): AgySession[] {
   if (!fs.existsSync(BRAIN_DIR)) return [];
   const out: AgySession[] = [];
@@ -91,14 +96,29 @@ function getAllSessions(): AgySession[] {
     if (!fs.existsSync(logPath)) continue;
     try {
       const stat = fs.statSync(logPath);
-      out.push({
-        id: entry,
-        path: logPath,
-        projectDir: detectProjectDir(logPath),
-        model: detectSessionModel(logPath),
-        size: stat.size,
-        mtime: stat.mtimeMs,
-      });
+      const cached = sessionMetaCache.get(logPath);
+      if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
+        out.push({
+          id: entry,
+          path: logPath,
+          projectDir: cached.projectDir,
+          model: cached.model,
+          size: stat.size,
+          mtime: stat.mtimeMs,
+        });
+      } else {
+        const projectDir = detectProjectDir(logPath);
+        const model = detectSessionModel(logPath);
+        sessionMetaCache.set(logPath, { mtime: stat.mtimeMs, size: stat.size, projectDir, model });
+        out.push({
+          id: entry,
+          path: logPath,
+          projectDir,
+          model,
+          size: stat.size,
+          mtime: stat.mtimeMs,
+        });
+      }
     } catch {}
   }
   return out.sort((a, b) => b.mtime - a.mtime);
@@ -607,7 +627,7 @@ async function main() {
   }
 
   function setStatus(txt: string) {
-    if (isSelectingSession) return;
+    if (isSelectingSession || isViewingContext) return;
     statusTxt.content = txt;
     updateSidebar();
   }
@@ -775,19 +795,34 @@ async function main() {
     }
 
     // Rolling window: keep scrollBox nodes tight to prevent Yoga layout lag.
-    // Check every 40 pushes and drop back to 400 in one batch — avoids O(n²)
+    // Check every 20 pushes and drop back to 200 in one batch — avoids O(n²)
     // array-copy + per-node remove() churn when a big step arrives.
-    if (++pushCount % 40 === 0 && scrollBox.getChildrenCount() > 600) {
+    if (++pushCount % 20 === 0 && scrollBox.getChildrenCount() > 300) {
       const children = [...scrollBox.getChildren()] as Renderable[];
-      const toRemove = children.slice(0, children.length - 400);
-      for (const c of toRemove) scrollBox.remove(c);
+      const toRemove = children.slice(0, children.length - 200);
+      for (let i = toRemove.length - 1; i >= 0; i--) {
+        destroyRenderable(toRemove[i]);
+      }
+    }
+  }
+
+  function destroyRenderable(r: Renderable) {
+    if (typeof (r as any).destroyRecursively === "function") {
+      (r as any).destroyRecursively();
+    } else if (typeof (r as any).destroy === "function") {
+      (r as any).destroy();
     }
   }
 
   // ── Clear scrollbox ────────────────────────────────────────────────────────────
   function clearScrollBox() {
     const children = [...scrollBox.getChildren()] as Renderable[];
-    for (const c of children) scrollBox.remove(c);
+    for (let i = children.length - 1; i >= 0; i--) {
+      destroyRenderable(children[i]);
+    }
+    scrollBox.scrollTop = 0;
+    scrollBox.scrollLeft = 0;
+    scrollBox.stickyScroll = true;
   }
   function resetCounters() {
     stepCount = 0;
@@ -1211,9 +1246,9 @@ async function main() {
         clearScrollBox();
         resetCounters();
       }
-      if (currentPos === 0 && stat.size > 250_000) {
-        // Fast seek to last 250KB on initial load to avoid processing 2000+ past steps
-        currentPos = Math.max(0, stat.size - 250_000);
+      if (currentPos === 0 && stat.size > 50_000) {
+        // Fast seek to last 50KB on initial load to avoid processing hundreds of past steps
+        currentPos = Math.max(0, stat.size - 50_000);
       }
       const readEnd = Math.min(stat.size, currentPos + MAX_POLL_READ);
       if (readEnd === currentPos) return;
@@ -1243,6 +1278,7 @@ async function main() {
 
   // ── Session switch ─────────────────────────────────────────────────────────────
   function switchSession(s: AgySession) {
+    if (!s) return;
     if (activeFileFd != null) {
       try {
         fs.closeSync(activeFileFd);
@@ -1257,8 +1293,20 @@ async function main() {
     clearScrollBox();
     resetCounters();
     updateSidebar();
+    updateLiveLabel();
     startSpinner("Loading session...");
     poll();
+    // Fast-seek loads ~50KB of history in one poll batch; OpenTUI stickyScroll
+    // only pins the view if it was already at the bottom BEFORE the children
+    // grew, so a switch lands at the top. Jump explicitly after load.
+    scrollToBottom();
+    renderer.requestRender();
+    // Second pass once Yoga computed the new content height (scrollHeight is
+    // stale before the first layout after the bulk add).
+    setTimeout(() => {
+      scrollToBottom();
+      renderer.requestRender();
+    }, 0);
   }
 
   // ── Session selector (display toggle) ──────────────────────────────────────────
@@ -1268,15 +1316,34 @@ async function main() {
 
   function renderSelectorList() {
     const children = [...selBox.getChildren()] as Renderable[];
-    for (const c of children) selBox.remove(c);
+    for (let i = children.length - 1; i >= 0; i--) destroyRenderable(children[i]);
+
+    if (!cachedSessions.length) {
+      const emptyBox = new BoxRenderable(renderer, {
+        width: "100%",
+        paddingX: 1,
+        paddingY: 1,
+      });
+      emptyBox.add(
+        new TextRenderable(renderer, {
+          content: "No sessions found",
+          fg: "#6b7280",
+        }),
+      );
+      selBox.add(emptyBox);
+      return;
+    }
 
     const maxItems = Math.max(
       1,
       Math.min(cachedSessions.length, Math.floor(((renderer.height || 24) - 4) / 2)),
     );
+    if (selectorCursor >= maxItems) selectorCursor = Math.max(0, maxItems - 1);
+
     for (let i = 0; i < maxItems; i++) {
-      const s = cachedSessions[i],
-        sel = i === selectorCursor;
+      const s = cachedSessions[i];
+      if (!s) continue;
+      const sel = i === selectorCursor;
       const folder = s.projectDir !== "(Unbound session)" ? path.basename(s.projectDir) : "Unbound";
       const itemBox = new BoxRenderable(renderer, {
         width: "100%",
@@ -1347,12 +1414,16 @@ async function main() {
   }
 
   function openSelector() {
-    if (isAppDestroyed) return;
+    if (isAppDestroyed || isSelectingSession) return;
     if (isViewingContext) closeContextView();
     isSelectingSession = true;
     cachedSessions = getAllSessions();
+    const maxItems = Math.max(
+      1,
+      Math.min(cachedSessions.length, Math.floor(((renderer.height || 24) - 4) / 2)),
+    );
     const foundIdx = cachedSessions.findIndex((ss) => ss.id === currentSession.id);
-    selectorCursor = foundIdx >= 0 ? foundIdx : 0;
+    selectorCursor = foundIdx >= 0 && foundIdx < maxItems ? foundIdx : 0;
     renderSelectorList();
     leftPane.remove(scrollBox);
     leftPane.insertBefore(selBox, footerBar);
@@ -1369,10 +1440,14 @@ async function main() {
   }
 
   function closeSelector() {
-    if (isAppDestroyed) return;
+    if (isAppDestroyed || !isSelectingSession) return;
     isSelectingSession = false;
+    lastModalToggleTime = 0;
     leftPane.remove(selBox);
     leftPane.insertBefore(scrollBox, footerBar);
+    if (!spinnerTimer) {
+      statusTxt.content = "💤 Idle — waiting for next agy command...";
+    }
     updateLiveLabel();
     renderer.requestRender();
   }
@@ -1380,7 +1455,7 @@ async function main() {
   // ── Context Full View Modal ──────────────────────────────────────────────────
   function renderContextView() {
     const children = [...contextBox.getChildren()] as Renderable[];
-    for (const c of children) contextBox.remove(c);
+    for (let i = children.length - 1; i >= 0; i--) destroyRenderable(children[i]);
 
     const model = currentModel || currentSession.model || "Gemini 3.7 Flash";
     const limit = getModelContextLimit(model);
@@ -1518,7 +1593,7 @@ async function main() {
   }
 
   function openContextView() {
-    if (isAppDestroyed) return;
+    if (isAppDestroyed || isViewingContext) return;
     if (isSelectingSession) closeSelector();
     isViewingContext = true;
     fetchLiveQuotaAsync();
@@ -1532,10 +1607,13 @@ async function main() {
   }
 
   function closeContextView() {
-    if (isAppDestroyed) return;
+    if (isAppDestroyed || !isViewingContext) return;
     isViewingContext = false;
     leftPane.remove(contextBox);
     leftPane.insertBefore(scrollBox, footerBar);
+    if (!spinnerTimer) {
+      statusTxt.content = "💤 Idle — waiting for next agy command...";
+    }
     updateLiveLabel();
     renderer.requestRender();
   }
@@ -1613,7 +1691,8 @@ async function main() {
         return;
       }
       if (keyLower === "s" || seqLower === "s") {
-        if (now - lastModalToggleTime < 250) return;
+        if (now - lastModalToggleTime < 100) return;
+        lastModalToggleTime = now;
         closeSelector();
         return;
       }
@@ -1623,7 +1702,11 @@ async function main() {
         return;
       }
       if (keyLower === "down" || keyLower === "j") {
-        const maxI = Math.max(0, Math.min(cachedSessions.length - 1, (renderer.height || 24) - 5));
+        const maxItems = Math.max(
+          1,
+          Math.min(cachedSessions.length, Math.floor(((renderer.height || 24) - 4) / 2)),
+        );
+        const maxI = Math.max(0, maxItems - 1);
         selectorCursor = Math.min(maxI, selectorCursor + 1);
         redrawSelector();
         return;
@@ -1637,7 +1720,11 @@ async function main() {
         return;
       }
       const num = parseInt(name, 10);
-      if (!isNaN(num) && num >= 1 && num <= cachedSessions.length) {
+      const maxItems = Math.max(
+        1,
+        Math.min(cachedSessions.length, Math.floor(((renderer.height || 24) - 4) / 2)),
+      );
+      if (!isNaN(num) && num >= 1 && num <= maxItems) {
         closeSelector();
         switchSession(cachedSessions[num - 1]);
         return;
@@ -1651,7 +1738,8 @@ async function main() {
       return;
     }
     if (keyLower === "s" || seqLower === "s") {
-      lastModalToggleTime = Date.now();
+      if (now - lastModalToggleTime < 100) return;
+      lastModalToggleTime = now;
       openSelector();
       return;
     }
