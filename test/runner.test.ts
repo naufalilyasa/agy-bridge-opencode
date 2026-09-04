@@ -59,6 +59,8 @@ function fakeDeps(opts: FakeOpts = {}) {
       capturedArgs = args;
       return child;
     },
+    readRoleFile: async () => "",
+    writeRoleFile: async () => {},
     readLog: async () => opts.log ?? "",
     removeLog: async (p) => {
       removed.push(p);

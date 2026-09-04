@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -42,6 +42,8 @@ export interface RunnerDeps {
   readLog(logPath: string): Promise<string>;
   removeLog(logPath: string): Promise<void>;
   readSessionsFile(): Promise<string>;
+  readRoleFile(): Promise<string>;
+  writeRoleFile(content: string): Promise<void>;
   makeLogPath(): string;
   /** How often to scan the run log for quota errors. */
   pollMs?: number;
@@ -70,6 +72,14 @@ export const SESSIONS_FILE = path.join(
   "antigravity-cli",
   "cache",
   "last_conversations.json",
+);
+
+/** cwd -> { sessionId, role } so follow_up inherits the delegate's role chain. */
+export const SESSIONS_ROLE_FILE = path.join(
+  homedir(),
+  ".gemini",
+  "config",
+  "agy_bridge_sessions.json",
 );
 
 // agy reads stdin until EOF even in print mode; an open stdin pipe hangs it forever.
@@ -150,6 +160,17 @@ export const defaultDeps: RunnerDeps = {
   },
   removeLog: (logPath) => rm(logPath, { force: true }),
   readSessionsFile: () => readFile(SESSIONS_FILE, "utf8"),
+  readRoleFile: async () => {
+    try {
+      return await readFile(SESSIONS_ROLE_FILE, "utf8");
+    } catch {
+      return "";
+    }
+  },
+  writeRoleFile: async (content) => {
+    await mkdir(path.dirname(SESSIONS_ROLE_FILE), { recursive: true });
+    await writeFile(SESSIONS_ROLE_FILE, content, "utf8");
+  },
   makeLogPath: () => path.join(tmpdir(), `agy-bridge-${process.pid}-${randomUUID()}.log`),
 };
 

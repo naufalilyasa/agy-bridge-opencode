@@ -639,6 +639,12 @@ export const TOOLS: ToolDef[] = [
         .string()
         .optional()
         .describe("Alternative alias for 'question' (Oh My OpenAgent style)."),
+      role: z
+        .string()
+        .optional()
+        .describe(
+          'Override the role chain for this continuation. Usually omit — the server remembers the original delegate role and reuses its model chain.',
+        ),
       context: z
         .string()
         .optional()

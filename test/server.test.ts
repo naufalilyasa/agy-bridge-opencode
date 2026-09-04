@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { createToolHandler } from "../src/server.js";
 import { ModelRegistry } from "../src/models.js";
-import { TOOLS } from "../src/tools.js";
+import { OMO_ROLES, TOOLS } from "../src/tools.js";
 import { CooldownRegistry } from "../src/quota.js";
 import type { Config } from "../src/config.js";
 import type { ChildHandle, RunnerDeps } from "../src/runner.js";
+import path from "node:path";
 
 const cfg: Config = {
   agyPath: "agy",
@@ -37,6 +38,7 @@ interface Run {
 function fakeDeps(quotaModels: string[] = []) {
   const runs: Run[] = [];
   let currentQuota = false;
+  let roleFile: Record<string, { sessionId: string; role: string }> = {};
 
   const deps: RunnerDeps = {
     spawnChild: (_file, args) => {
@@ -55,13 +57,25 @@ function fakeDeps(quotaModels: string[] = []) {
     readLog: async () => (currentQuota ? LOG_429 : ""),
     removeLog: async () => {},
     readSessionsFile: async () => JSON.stringify({ [process.cwd()]: "sess-1" }),
+    readRoleFile: async () => JSON.stringify(roleFile),
+    writeRoleFile: async (content: string) => {
+      roleFile = JSON.parse(content) as Record<string, { sessionId: string; role: string }>;
+    },
     makeLogPath: () => "/tmp/agy-bridge-test.log",
     pollMs: 5,
     graceMs: 20,
     killGraceMs: 5,
   };
 
-  return { deps, runs, modelOf: (r: Run) => r.args[r.args.indexOf("--model") + 1] };
+  return {
+    deps,
+    runs,
+    modelOf: (r: Run) => r.args[r.args.indexOf("--model") + 1],
+    roleFileRef: () => roleFile,
+    clearRoles: () => {
+      roleFile = {};
+    },
+  };
 }
 
 function handlerFor(
@@ -96,6 +110,37 @@ describe("createToolHandler", () => {
     expect(f.runs[0].args).toContain("--conversation");
     expect(f.runs[0].args).toContain("abc");
     expect(f.runs[0].args).toContain("--model");
+  });
+
+  it("follow_up without role inherits the original delegate's role chain", async () => {
+    const f = fakeDeps();
+    await handlerFor("delegate", f)({
+      task: "build it",
+      role: "tester",
+      expected_outcome: "tests pass",
+    });
+    const savedRole = f.roleFileRef()[path.resolve(process.cwd())]?.role;
+    expect(savedRole).toBe("tester");
+
+    await handlerFor("follow_up", f)({ session_id: "sess-1", question: "continue" });
+    const chain = cfg.roleModels["tester"] ?? OMO_ROLES["tester"].chain;
+    expect(chain[0]).toBeDefined();
+    expect(f.modelOf(f.runs[1])).toBe(chain[0]);
+  });
+
+  it("follow_up with explicit role overrides the remembered one", async () => {
+    const f = fakeDeps();
+    f.clearRoles?.();
+    await handlerFor("follow_up", f)({ session_id: "abc", question: "go", role: "tester" });
+    const chain = cfg.roleModels["tester"] ?? OMO_ROLES["tester"].chain;
+    expect(f.modelOf(f.runs[0])).toBe(chain[0]);
+  });
+
+  it("follow_up without remembered role falls back to builtin chain (backward compat)", async () => {
+    const f = fakeDeps();
+    f.clearRoles?.();
+    await handlerFor("follow_up", f)({ session_id: "abc", question: "go" });
+    expect(f.modelOf(f.runs[0])).toBe(TOOLS.find((t) => t.name === "follow_up")!.chain[0]);
   });
 
   it("uses the per-tool timeout for --print-timeout", async () => {

@@ -137,7 +137,17 @@ export function createToolHandler(
         }
       }
 
-      const roleKey = ((args.role as string) || "").toLowerCase().replace(/_/g, "-");
+      let roleKey = ((args.role as string) || "").toLowerCase().replace(/_/g, "-");
+      if (!roleKey && tool.name === "follow_up") {
+        try {
+          const roles = JSON.parse((await deps.readRoleFile()) || "{}") as Record<
+            string,
+            { role?: string }
+          >;
+          const entry = roles[path.resolve(cwd)] ?? roles[cwd];
+          if (entry?.role) roleKey = entry.role;
+        } catch {}
+      }
       const effectiveChain =
         (roleKey ? cfg.roleModels[roleKey] : undefined) ||
         (roleKey ? OMO_ROLES[roleKey]?.chain : undefined) ||
@@ -241,6 +251,17 @@ export function createToolHandler(
       if (resolution.note) meta.push(`note: ${resolution.note}`);
       if (attempts.length) meta.push(`failover: ${attempts.join("; ")}`);
       if (result.sessionId) meta.push(`session: ${result.sessionId} (use follow_up to continue)`);
+
+      if (tool.name === "delegate" && result.sessionId && roleKey) {
+        try {
+          const roles = JSON.parse((await deps.readRoleFile()) || "{}") as Record<
+            string,
+            { sessionId: string; role: string }
+          >;
+          roles[path.resolve(cwd)] = { sessionId: result.sessionId, role: roleKey };
+          await deps.writeRoleFile(JSON.stringify(roles, null, 2));
+        } catch {}
+      }
 
       return {
         content: [
