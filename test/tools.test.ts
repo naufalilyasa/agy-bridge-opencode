@@ -87,7 +87,7 @@ describe("prompt templates", () => {
     );
     expect(p).toContain("Fix two pairing bugs");
     expect(p).toContain("BUG 1 root cause: UrlRouter no-op. MUST DO: add case.");
-    expect(p).toContain("[DELEGATED AGENT ROLE: OMO_DEEP_ANALYST]");
+    expect(p).toContain("[DELEGATED AGENT ROLE: OMO_DEEP_ENGINEER]");
   });
 
   it("delegate requires a role when using structured parameters", () => {

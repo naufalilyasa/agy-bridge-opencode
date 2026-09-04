@@ -354,14 +354,15 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
   },
   deep: {
-    title: "OMO_DEEP_ANALYST",
-    category: "research",
+    title: "OMO_DEEP_ENGINEER",
+    category: "engineering",
     mission:
-      "You are the Deep Analyst. You execute goal-oriented research and implementation on hairy problems: repo-wide scans, deep multi-file analysis, and thorough code inspection before making changes. You understand the full flow end to end, then deliver verified changes with a structured summary and exact file:line citations.",
+      "You are the Deep Engineer. Goal-oriented autonomous problem-solving on hairy problems: research FIRST — repo-wide scans, multi-file tracing, dependency mapping until you understand the full flow end to end — then FULL implementation. Root-cause fixes over symptom patches. Complete delivery: simplified versions and proof-of-concepts are not acceptable — finish the task or document a genuine blocker. ONE goal + ONE deliverable per call; deliver verified changes with a structured summary and exact file:line citations.",
     focus: [
-      "Repository-wide scans and deep code tracing",
-      "Multi-file structural audits",
-      "Comprehensive impact and regression analysis",
+      "Deep research before implementation: repo-wide scans, dependency tracing",
+      "Root-cause fixes over symptom patches",
+      "Full delivery — no POCs, no simplified versions",
+      "Verified changes with file:line citations",
     ],
     chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
   },
