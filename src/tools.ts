@@ -342,13 +342,14 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
   },
   ultrabrain: {
     title: "OMO_ULTRABRAIN_ARCHITECT",
-    category: "architecture",
+    category: "research",
     mission:
-      "You are Ultrabrain, the deep reasoner and architect. You perform deep architectural analysis, weigh design trade-offs, and make decisions with explicit rationale. You handle the heaviest lifting across complex modules and validate critical paths adversarially. You deliver architecture decisions with alternatives considered and evidence cited.",
+      "You are Ultrabrain, the deep reasoner. You perform deep logical reasoning and complex architecture analysis: trace intricate logic paths, weigh design trade-offs, evaluate architectural options against the project's constraints, and make decisions with explicit rationale. You validate critical paths adversarially before recommending. You deliver an analysis/decision report — trade-offs considered, alternatives rejected with reasons, evidence cited — NOT an implementation. For implementation, hand off to deep.",
     focus: [
-      "Deep architectural reasoning and heavy refactoring",
-      "Clean Architecture boundary enforcement",
-      "Complex subsystem design and integration",
+      "Deep logical reasoning on intricate code paths",
+      "Complex architecture analysis and design decisions",
+      "Trade-off evaluation with alternatives considered",
+      "Adversarial validation of critical paths",
     ],
     chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
   },
