@@ -217,10 +217,18 @@ export class IdleStallError extends Error {
   constructor(
     public readonly model: string | undefined,
     public readonly idleSeconds: number,
+    public readonly logTail?: string,
+    public readonly logPath?: string,
   ) {
     super(`agy process stalled (no activity for ${idleSeconds}s).`);
     this.name = "IdleStallError";
   }
+}
+
+export function logTail(log: string, maxChars = 2000): string {
+  if (!log) return "(log file empty — agy produced no output before stalling)";
+  const tail = log.slice(-maxChars);
+  return (tail.length < log.length ? "...[earlier log trimmed]...\n" : "") + tail;
 }
 
 export async function runAgy(
@@ -234,6 +242,7 @@ export async function runAgy(
   const killGraceMs = deps.killGraceMs ?? 5_000;
   const quotaConfirmMs = deps.quotaConfirmMs ?? 20_000;
   const logPath = deps.makeLogPath();
+  let keepLog = false;
 
   const stdout = await new Promise<string>((resolve, reject) => {
     const child = deps.spawnChild(cfg.agyPath, buildArgs(req, cfg, logPath), req.cwd);
@@ -284,13 +293,17 @@ export async function runAgy(
           // retrying a real 429. Kill and fail over. A quota line in a still-
           // growing log is transient/benign — let agy's own retry run.
           killChild();
+          keepLog = true;
           finish(() => reject(new QuotaError(req.model, quota)));
           return;
         }
 
         if (Date.now() - lastActivityTime > idleTimeoutMs) {
+          const log = await deps.readLog(logPath);
           killChild();
-          finish(() => reject(new IdleStallError(req.model, cfg.idleTimeoutSec)));
+          finish(() =>
+            reject(new IdleStallError(req.model, cfg.idleTimeoutSec, logTail(log), logPath)),
+          );
           return;
         }
       } finally {
@@ -301,20 +314,26 @@ export async function runAgy(
     // Hard deadline independent of the child's pipes: agy's own --print-timeout
     // should fire first; if it doesn't, reject without waiting for "close".
     timers.push(
-      setTimeout(
-        () => {
-          killChild();
+      setTimeout(() => {
+        killChild();
+        void deps.readLog(logPath).then((log) => {
           finish(() =>
-            reject(new Error(`agy timed out after ${timeoutSec}s (AGY_TIMEOUT to adjust).`)),
+            reject(
+              new Error(
+                `agy timed out after ${timeoutSec}s (AGY_TIMEOUT to adjust).\n` +
+                  `Runtime log kept at: ${logPath}\n` +
+                  `Log tail (where it was when killed):\n---\n${logTail(log)}\n---`,
+              ),
+            ),
           );
-        },
-        timeoutSec * 1000 + graceMs,
-      ),
+        });
+      }, timeoutSec * 1000 + graceMs),
     );
 
     const onAbort = () => {
       killChild();
-      finish(() => reject(new Error("agy run cancelled by client.")));
+      keepLog = true;
+        finish(() => reject(new Error("agy run cancelled by client.")));
     };
     if (req.signal?.aborted) {
       onAbort();
@@ -336,7 +355,8 @@ export async function runAgy(
         return;
       }
       if (error) {
-        finish(() => reject(new Error(`agy failed: ${error.message}`)));
+        keepLog = true;
+          finish(() => reject(new Error(`agy failed: ${error.message}`)));
         return;
       }
       const out = child.stdout().trim();
@@ -346,14 +366,16 @@ export async function runAgy(
       const quota = detectQuota(combined) || detectQuota(logContent);
 
       if (quota) {
-        finish(() => reject(new QuotaError(req.model, quota)));
+        keepLog = true;
+          finish(() => reject(new QuotaError(req.model, quota)));
         return;
       }
 
       if (code !== 0) {
-        finish(() =>
-          reject(new Error(stderr ? `agy failed: ${stderr}` : `agy exited with code ${code}.`)),
-        );
+        keepLog = true;
+          finish(() =>
+            reject(new Error(stderr ? `agy failed: ${stderr}` : `agy exited with code ${code}.`)),
+          );
         return;
       }
       if (!out) {
@@ -368,7 +390,10 @@ export async function runAgy(
       }
       finish(() => resolve(out));
     });
-  }).finally(() => void deps.removeLog(logPath).catch(() => {}));
+  }).finally(() => {
+    if (keepLog) return;
+    void deps.removeLog(logPath).catch(() => {});
+  });
 
   const { text, truncated } = truncate(stdout, cfg.maxOutputChars);
 

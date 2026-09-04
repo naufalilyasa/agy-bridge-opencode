@@ -1002,7 +1002,19 @@ export const TOOLS: ToolDef[] = [
         p += `- Direct Action: Use file editing and shell tools directly to perform all work.\n`;
         p += `- No Placeholders: Write complete, functional code without TODOs or stubbed logic.\n`;
         p += `- Quality Verification: Run the relevant build or test commands to ensure clean execution.\n`;
-        p += `- Deliverables: Provide a structured summary of completed work with exact file:line citations.\n\n`;
+        p += `- Deliverables: Provide a structured summary of completed work with exact file:line citations.\n`;
+        p += `- Completion Report (MANDATORY final format): end your answer with exactly these three sections:\n`;
+        p += `  CHANGES — one bullet per edit: file:line — what changed\n`;
+        p += `  VERIFICATION — each command you ran (build/lint/test/grep) and its ACTUAL result\n`;
+        p += `  RISKS — anything unverified, side effects, or follow-up work needed\n\n`;
+
+        p += `## DEFAULT VALIDATION GATES\n`;
+        p += `Before finishing, run the project's standard check for every file type you touched — do not skip because it looks fine:\n`;
+        p += `- .php → php -l on each touched file (and the project's pint/style fixer if configured)\n`;
+        p += `- .vue/.js/.ts/.tsx → the project's build or lint (e.g. npm run build)\n`;
+        p += `- .kt/.java → compile the affected module; .py → the project's test/lint runner\n`;
+        p += `- Config files (.json/.yaml/.jsonc) → validate syntax parses\n`;
+        p += `Report the actual command output in the VERIFICATION section. If a gate is unavailable in this environment, say so explicitly instead of claiming success.\n\n`;
 
         p += `## EXECUTION DISCIPLINE — MANDATORY\n`;
         p += `- Execute directly: do the work yourself with file/shell tools. Do NOT delegate to another agent, do NOT return a plan-only response, and do NOT ask clarifying questions when the task is executable now.\n`;

@@ -111,6 +111,14 @@ slot) so the subagent can pick matching skills for its next delegation.
 
 Resume prior work WITHOUT re-sending context — the full prior context stays on agy's side.
 
+**Memory note:** a resumed session continues the conversation transcript, but its `agentmemory`
+recall is NOT automatic — pass `load_memories` on `follow_up` too if context recall matters.
+
+**Stall recovery:** if a `delegate` was auto-terminated (stall/timeout), the error message
+includes the preserved runtime log path + log tail. Before resuming: check `git status`/`git diff`
+for partial edits, then call `follow_up` and REPEAT the original task prompt in full —
+the resumed session has no memory of the stalled run.
+
 **Parameters:** `session_id` (or omit / pass `"latest"` to auto-continue the last session for the
 cwd), `question` / `instruction` (required), `context`, `load_memories`, `save_memory`, `cwd`.
 

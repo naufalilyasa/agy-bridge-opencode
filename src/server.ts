@@ -259,8 +259,11 @@ export function createToolHandler(
         const recoveryMsg =
           `[agy-bridge stall detected] agy process became inactive/stalled (no log output for ${err.idleSeconds}s).\n` +
           `- The stalled process has been automatically terminated.\n` +
-          (sessionId ? `- Active session ID: "${sessionId}"\n` : "") +
-          `- AUTONOMOUS RECOVERY ACTION: Please immediately invoke 'follow_up' (session_id: "${sessionId || "latest"}") with your instructions to resume execution.`;
+          (sessionId ? `- Session ID of THIS run is ambiguous — the cwd-keyed session map may still point to an older task. Do NOT trust it blindly.\n` : "") +
+          (err.logPath ? `- Runtime log preserved at: ${err.logPath} (inspect with grep/tail if needed)\n` : "") +
+          (err.logTail ? `- Log tail (last activity before the stall):\n---\n${err.logTail}\n---\n` : "") +
+          `- BEFORE resuming: run 'git status' / 'git diff' to check what the stalled agent already changed.\n` +
+          `- AUTONOMOUS RECOVERY ACTION: invoke 'follow_up' (session_id: "${sessionId || "latest"}") and REPEAT the original task prompt in full — the resumed session has no memory of the stalled run.`;
 
         return {
           content: [{ type: "text", text: recoveryMsg }],
