@@ -21,6 +21,8 @@ import {
   withLock,
   resolveReal,
 } from "./store.js";
+import { drainInbox, type Message } from "./mailbox.js";
+import { listTasks, type Task } from "./tasklist.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -148,6 +150,65 @@ export interface WakeMemberResult {
 export interface TeamSemaphore {
   acquire(): Promise<void>;
   release(): void;
+}
+
+export class BoundedSemaphore implements TeamSemaphore {
+  readonly cap: number;
+  private active = 0;
+  private readonly waiters: Array<() => void> = [];
+
+  constructor(cap: number = 4) {
+    if (cap < 1) {
+      throw new TeamError(
+        "Semaphore capacity must be at least 1",
+        "capacity",
+        "INVALID_CAPACITY",
+      );
+    }
+    this.cap = cap;
+  }
+
+  get max(): number {
+    return this.cap;
+  }
+
+  get currentActive(): number {
+    return this.active;
+  }
+
+  get available(): number {
+    return this.cap - this.active;
+  }
+
+  get queueLength(): number {
+    return this.waiters.length;
+  }
+
+  async acquire(): Promise<void> {
+    if (this.active < this.cap) {
+      this.active++;
+      return;
+    }
+    return new Promise<void>((resolve) => {
+      this.waiters.push(resolve);
+    });
+  }
+
+  release(): void {
+    if (this.active <= 0) {
+      throw new TeamError(
+        "DOUBLE_RELEASE: semaphore already at cap",
+        "semaphore",
+        "DOUBLE_RELEASE",
+      );
+    }
+    if (this.waiters.length > 0) {
+      const next = this.waiters.shift()!;
+      next();
+    } else {
+      this.active--;
+    }
+  }
 }
 
 export interface TeamRuntimeDeps {
@@ -378,12 +439,157 @@ export async function updateTeamState(
   });
 }
 
+export async function buildWakePrompt(
+  stateOrMember: unknown,
+  memberNameOrCtx: unknown,
+  cfg?: unknown,
+): Promise<string> {
+  if (!stateOrMember || typeof stateOrMember !== "object") {
+    throw new TeamError(
+      "State or member object is required for buildWakePrompt",
+      "stateOrMember",
+      "INVALID_ARGUMENT",
+    );
+  }
+
+  let memberName = "";
+  let resolvedRole = "worker";
+  let teamRunId = "";
+  let projectRoot = "";
+  let state: TeamRunState | undefined;
+  const cfgObj = (cfg && typeof cfg === "object" ? cfg : {}) as Record<string, any>;
+
+  if (typeof memberNameOrCtx === "string") {
+    // Calling convention 1: buildWakePrompt(state, memberName, cfg)
+    memberName = memberNameOrCtx;
+    state = stateOrMember as TeamRunState;
+    teamRunId = state.teamRunId || "";
+    projectRoot = state.projectRoot || cfgObj.projectRoot || "";
+    const member = state.members?.find((m) => m.name === memberName);
+    if (member) {
+      resolvedRole = member.resolvedRole || (member as any).role || resolvedRole;
+    }
+  } else if (
+    typeof (stateOrMember as any).name === "string" &&
+    typeof memberNameOrCtx === "object"
+  ) {
+    // Calling convention 2: buildWakePrompt(member, ctx)
+    const mem = stateOrMember as any;
+    memberName = mem.name;
+    resolvedRole = mem.resolvedRole || mem.role || resolvedRole;
+    const ctx = (memberNameOrCtx || {}) as Record<string, any>;
+    projectRoot = ctx.projectRoot || ctx.state?.projectRoot || cfgObj.projectRoot || "";
+    teamRunId = ctx.teamRunId || ctx.state?.teamRunId || "";
+    state = ctx.state;
+  } else {
+    // Calling convention 3: object options
+    const ctx = (memberNameOrCtx || {}) as Record<string, any>;
+    teamRunId = (stateOrMember as any).teamRunId || ctx.teamRunId || "";
+    projectRoot = (stateOrMember as any).projectRoot || ctx.projectRoot || cfgObj.projectRoot || "";
+    memberName = ctx.name || ctx.memberName || "";
+    state = stateOrMember as TeamRunState;
+    const member = state.members?.find((m) => m.name === memberName);
+    if (member) {
+      resolvedRole = member.resolvedRole || (member as any).role || resolvedRole;
+    }
+  }
+
+  if (!memberName) {
+    throw new TeamError(
+      "Member name is required for buildWakePrompt",
+      "memberName",
+      "INVALID_ARGUMENT",
+    );
+  }
+
+  if (state?.members && !state.members.some((m) => m.name === memberName)) {
+    throw new TeamError(
+      `Member '${memberName}' not found in team '${teamRunId}'`,
+      "memberName",
+      "MEMBER_NOT_FOUND",
+    );
+  }
+
+  // 1. Drain inbox messages (oldest-first)
+  let messages: Message[] = [];
+  if (cfgObj.messages && Array.isArray(cfgObj.messages)) {
+    messages = cfgObj.messages;
+  } else if (projectRoot && teamRunId) {
+    try {
+      const rd = runDir(projectRoot, teamRunId);
+      messages = await drainInbox(rd, memberName);
+    } catch {
+      messages = [];
+    }
+  }
+
+  let inboxText = "(none)";
+  if (messages.length > 0) {
+    inboxText = messages
+      .map((msg) => {
+        const bodyStr = typeof msg.body === "string" ? msg.body : JSON.stringify(msg.body);
+        return `FROM ${msg.from}: ${bodyStr}`;
+      })
+      .join("\n");
+  }
+
+  // 2. Owned tasks snapshot
+  let tasks: Task[] = [];
+  if (cfgObj.tasks && Array.isArray(cfgObj.tasks)) {
+    tasks = cfgObj.tasks;
+  } else if (projectRoot && teamRunId) {
+    try {
+      const rd = runDir(projectRoot, teamRunId);
+      tasks = await listTasks(rd, { owner: memberName });
+    } catch {
+      tasks = [];
+    }
+  }
+
+  const activeTasks = tasks.filter((t) => {
+    const isOwner = !t.owner || t.owner === memberName;
+    const isActiveStatus =
+      t.status === "pending" ||
+      t.status === "in_progress" ||
+      t.status === "claimed";
+    return isOwner && isActiveStatus;
+  });
+
+  let tasksText = "(none)";
+  if (activeTasks.length > 0) {
+    tasksText = activeTasks
+      .map((t) => `- [${t.status}] ${t.id}: ${t.subject}`)
+      .join("\n");
+  }
+
+  return [
+    `# TEAM CONTEXT`,
+    `Team Run ID: ${teamRunId}`,
+    `Member: ${memberName}`,
+    `Role: ${resolvedRole}`,
+    `Role Directive: You are ${memberName}, acting as ${resolvedRole}. Autonomously execute your role's responsibilities.`,
+    ``,
+    `## INBOX MESSAGES`,
+    inboxText,
+    ``,
+    `## OWNED TASKS`,
+    tasksText,
+    ``,
+    `## REPORT DIRECTIVE`,
+    `When you complete work, reply with a concise report of what you did. Do not ask for permission to continue — work autonomously.`,
+  ].join("\n");
+}
+
 export class TeamRuntime {
   readonly deps: TeamRuntimeDeps;
   private readonly teamRoots = new Map<string, string>();
+  readonly semaphore: TeamSemaphore;
 
   constructor(deps: TeamRuntimeDeps = {}) {
     this.deps = deps;
+    this.semaphore =
+      deps.semaphore ??
+      new BoundedSemaphore(deps.cfg?.teamMaxParallel ?? deps.cfg?.maxParallel ?? 4);
   }
 
   async createTeam(
@@ -756,28 +962,27 @@ export class TeamRuntime {
     }
 
     // --- Acquire semaphore slot ---
-    if (this.deps.semaphore) {
-      await this.deps.semaphore.acquire();
-    }
-
-    // --- Mark member as running ---
-    await updateTeamState(projectRoot, teamRunId, (s) => {
-      const m = s.members.find((x) => x.name === memberName);
-      if (m) {
-        validateTransition(m.status, "running");
-        m.status = "running";
-        m.lastWakeAt = Date.now();
-      }
-      return s;
-    });
-
-    const timeoutSec = this.deps.cfg?.teamMemberTimeoutSec ?? 300;
-    const prompt = opts?.prompt ?? `Wake ${memberName}`;
-    const transcriptPath = member.transcriptPath;
-    // Use existing sessionId for conversation resume
-    let conversationId = member.sessionId ?? undefined;
+    await this.semaphore.acquire();
 
     try {
+      // --- Mark member as running ---
+      await updateTeamState(projectRoot, teamRunId, (s) => {
+        const m = s.members.find((x) => x.name === memberName);
+        if (m) {
+          validateTransition(m.status, "running");
+          m.status = "running";
+          m.lastWakeAt = Date.now();
+        }
+        return s;
+      });
+
+      const timeoutSec = this.deps.cfg?.teamMemberTimeoutSec ?? 300;
+      const prompt =
+        opts?.prompt ??
+        (await this.buildWakePrompt(state, memberName));
+      const transcriptPath = member.transcriptPath;
+      // Use existing sessionId for conversation resume
+      let conversationId = member.sessionId ?? undefined;
       // --- Chain failover loop ---
       const attempts: string[] = [];
       let result: WakeResult | null = null;
@@ -874,9 +1079,7 @@ export class TeamRuntime {
       };
     } finally {
       // --- ALWAYS: release semaphore + reset status ---
-      if (this.deps.semaphore) {
-        this.deps.semaphore.release();
-      }
+      this.semaphore.release();
 
       // Reset status: if shutdown was requested mid-run → awaiting_shutdown; else → idle
       await updateTeamState(projectRoot, teamRunId, (s) => {
@@ -890,9 +1093,12 @@ export class TeamRuntime {
     }
   }
 
-  // T9 buildWakePrompt stub seam
-  buildWakePrompt(_member: unknown, _ctx: unknown): string {
-    throw new Error("not implemented (T9: buildWakePrompt)");
+  async buildWakePrompt(
+    stateOrMember: unknown,
+    memberNameOrCtx: unknown,
+    cfg?: unknown,
+  ): Promise<string> {
+    return buildWakePrompt(stateOrMember, memberNameOrCtx, cfg ?? this.deps.cfg);
   }
 
   // T10 loop stub seams

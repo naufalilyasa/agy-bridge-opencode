@@ -18,6 +18,8 @@ import {
   spawnWorktree,
   removeWorktrees,
   ALLOWED_MEMBER_TRANSITIONS,
+  BoundedSemaphore,
+  buildWakePrompt,
   type MemberStatus,
   type TeamRuntimeDeps,
   type WakeOptions,
@@ -29,6 +31,8 @@ import {
 import { TeamError, type TeamSpec } from "../src/team/spec.js";
 import { QuotaError } from "../src/quota.js";
 import { runDir, readJson } from "../src/team/store.js";
+import { sendMessage } from "../src/team/mailbox.js";
+import { createTask } from "../src/team/tasklist.js";
 
 describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", () => {
   let testDir: string;
@@ -491,9 +495,10 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
         runtime.wakeMember(testDir, "team-123", "worker"),
       ).rejects.toThrow(TeamError);
 
-      expect(() => runtime.buildWakePrompt({}, {})).toThrow(
-        /not implemented \(T9/,
-      );
+      // buildWakePrompt is now implemented (T9) — without valid state it rejects with TeamError
+      await expect(
+        runtime.buildWakePrompt({}, {}),
+      ).rejects.toThrow(TeamError);
       expect(() => runtime.startLoop(testDir, "team-123")).toThrow(
         /not implemented \(T10/,
       );
@@ -1083,3 +1088,438 @@ describe("src/team/runtime T8: wakeMember with failover + session persistence", 
     }
   });
 });
+
+describe("src/team/runtime T9: BoundedSemaphore", () => {
+  it("initializes with default or specified capacity and rejects capacity < 1", () => {
+    const semDefault = new BoundedSemaphore();
+    expect(semDefault.cap).toBe(4);
+    expect(semDefault.available).toBe(4);
+    expect(semDefault.currentActive).toBe(0);
+
+    const semCustom = new BoundedSemaphore(2);
+    expect(semCustom.cap).toBe(2);
+
+    expect(() => new BoundedSemaphore(0)).toThrow(TeamError);
+    try {
+      new BoundedSemaphore(0);
+    } catch (err) {
+      expect((err as TeamError).code).toBe("INVALID_CAPACITY");
+    }
+  });
+
+  it("acquires up to cap immediately without blocking", async () => {
+    const sem = new BoundedSemaphore(3);
+    await sem.acquire();
+    await sem.acquire();
+    await sem.acquire();
+    expect(sem.currentActive).toBe(3);
+    expect(sem.available).toBe(0);
+    expect(sem.queueLength).toBe(0);
+  });
+
+  it("blocks 5th acquire at cap 4 and resolves it when a slot is released", async () => {
+    const sem = new BoundedSemaphore(4);
+    for (let i = 0; i < 4; i++) {
+      await sem.acquire();
+    }
+    expect(sem.currentActive).toBe(4);
+
+    let fifthAcquired = false;
+    const fifthPromise = sem.acquire().then(() => {
+      fifthAcquired = true;
+    });
+
+    // Should still be waiting
+    await new Promise((r) => setTimeout(r, 10));
+    expect(fifthAcquired).toBe(false);
+    expect(sem.queueLength).toBe(1);
+
+    // Release one slot
+    sem.release();
+    await fifthPromise;
+    expect(fifthAcquired).toBe(true);
+    expect(sem.currentActive).toBe(4);
+    expect(sem.queueLength).toBe(0);
+  });
+
+  it("serializes 5 concurrent acquires at cap 4 in FIFO order", async () => {
+    const sem = new BoundedSemaphore(4);
+    const order: number[] = [];
+
+    // Start 5 acquires simultaneously
+    const p1 = sem.acquire().then(() => order.push(1));
+    const p2 = sem.acquire().then(() => order.push(2));
+    const p3 = sem.acquire().then(() => order.push(3));
+    const p4 = sem.acquire().then(() => order.push(4));
+    const p5 = sem.acquire().then(() => order.push(5));
+
+    // Wait for the first 4 to resolve
+    await Promise.all([p1, p2, p3, p4]);
+    expect(order).toEqual([1, 2, 3, 4]);
+    expect(sem.queueLength).toBe(1);
+
+    // Release 1 slot — p5 must resolve next
+    sem.release();
+    await p5;
+    expect(order).toEqual([1, 2, 3, 4, 5]);
+
+    // Clean up remaining acquires
+    for (let i = 0; i < 4; i++) {
+      sem.release();
+    }
+    expect(sem.currentActive).toBe(0);
+  });
+
+  it("FIFO order with multiple queued waiters", async () => {
+    const sem = new BoundedSemaphore(2);
+    await sem.acquire();
+    await sem.acquire();
+
+    const order: number[] = [];
+    const p3 = sem.acquire().then(() => order.push(3));
+    const p4 = sem.acquire().then(() => order.push(4));
+    const p5 = sem.acquire().then(() => order.push(5));
+
+    expect(sem.queueLength).toBe(3);
+
+    sem.release();
+    await p3;
+    expect(order).toEqual([3]);
+
+    sem.release();
+    await p4;
+    expect(order).toEqual([3, 4]);
+
+    sem.release();
+    await p5;
+    expect(order).toEqual([3, 4, 5]);
+  });
+
+  it("double-release throws TeamError with code DOUBLE_RELEASE", async () => {
+    const sem = new BoundedSemaphore(2);
+
+    // Release on fresh semaphore (count already at cap)
+    expect(() => sem.release()).toThrow(TeamError);
+    try {
+      sem.release();
+    } catch (err) {
+      expect((err as TeamError).code).toBe("DOUBLE_RELEASE");
+      expect((err as Error).message).toMatch(/DOUBLE_RELEASE/);
+    }
+
+    // Acquire 1, release 2 times -> second release must throw DOUBLE_RELEASE
+    await sem.acquire();
+    sem.release();
+    expect(() => sem.release()).toThrow(TeamError);
+    try {
+      sem.release();
+    } catch (err) {
+      expect((err as TeamError).code).toBe("DOUBLE_RELEASE");
+    }
+  });
+});
+
+describe("src/team/runtime T9: buildWakePrompt", () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = path.join(os.tmpdir(), `team-prompt-test-${randomUUID()}`);
+    await fs.mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    try {
+      await fs.rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  const promptSpec: TeamSpec = {
+    version: 1,
+    name: "prompt-test-team",
+    leadAgentId: "lead",
+    backendType: "cli",
+    members: [
+      {
+        name: "lead",
+        kind: "subagent_type",
+        subagent_type: "deep",
+        backendType: "cli",
+      },
+      {
+        name: "worker1",
+        kind: "subagent_type",
+        subagent_type: "quick",
+        backendType: "cli",
+      },
+    ],
+  };
+
+  function createPromptRuntime(extra: Partial<TeamRuntimeDeps> = {}): TeamRuntime {
+    return new TeamRuntime({
+      spawnWorktree: async (_pr, teamRunId, member) => {
+        const wt = resolveMemberWorktree(teamRunId, member);
+        return { worktreePath: wt, cwd: wt, sessionCwd: path.resolve(testDir) };
+      },
+      removeWorktrees: async () => {},
+      ...extra,
+    });
+  }
+
+  it("renders all sections with populated team context, inbox, owned tasks, and report directive", async () => {
+    const runtime = createPromptRuntime();
+    const { teamRunId } = await runtime.createTeam(promptSpec, testDir);
+    const state = await runtime.loadState(testDir, teamRunId);
+
+    // Send 2 messages to worker1 inbox
+    const rd = runDir(testDir, teamRunId);
+    await sendMessage(rd, { from: "lead", to: "worker1", body: "Please review PR 42" });
+    await sendMessage(rd, { from: "lead", to: "worker1", body: "Also check test suite" });
+
+    // Create tasks: 2 owned by worker1 (one in_progress, one pending), 1 completed, 1 owned by lead
+    await createTask(rd, {
+      id: "task-1",
+      subject: "Review PR 42",
+      owner: "worker1",
+      status: "in_progress",
+    });
+    await createTask(rd, {
+      id: "task-2",
+      subject: "Check test suite",
+      owner: "worker1",
+      status: "pending",
+    });
+    await createTask(rd, {
+      id: "task-old",
+      subject: "Old completed task",
+      owner: "worker1",
+      status: "completed",
+    });
+    await createTask(rd, {
+      id: "task-lead",
+      subject: "Lead task",
+      owner: "lead",
+      status: "pending",
+    });
+
+    const prompt = await runtime.buildWakePrompt(state, "worker1");
+
+    // Check team context
+    expect(prompt).toContain(`# TEAM CONTEXT`);
+    expect(prompt).toContain(`Team Run ID: ${teamRunId}`);
+    expect(prompt).toContain(`Member: worker1`);
+    expect(prompt).toContain(`Role: quick`);
+    expect(prompt).toContain(
+      `Role Directive: You are worker1, acting as quick. Autonomously execute your role's responsibilities.`,
+    );
+
+    // Check inbox messages drained oldest-first
+    expect(prompt).toContain(`## INBOX MESSAGES`);
+    expect(prompt).toContain(`FROM lead: Please review PR 42`);
+    expect(prompt).toContain(`FROM lead: Also check test suite`);
+
+    // Check owned tasks snapshot (only active statuses for worker1)
+    expect(prompt).toContain(`## OWNED TASKS`);
+    expect(prompt).toContain(`- [in_progress] task-1: Review PR 42`);
+    expect(prompt).toContain(`- [pending] task-2: Check test suite`);
+    expect(prompt).not.toContain(`Old completed task`);
+    expect(prompt).not.toContain(`Lead task`);
+
+    // Check report directive
+    expect(prompt).toContain(`## REPORT DIRECTIVE`);
+    expect(prompt).toContain(
+      "When you complete work, reply with a concise report of what you did. Do not ask for permission to continue — work autonomously.",
+    );
+
+    // Second call: inbox should now be empty (drained destructively)
+    const prompt2 = await runtime.buildWakePrompt(state, "worker1");
+    expect(prompt2).toContain(`## INBOX MESSAGES\n(none)`);
+  });
+
+  it("renders (none) fallback for empty inbox and empty tasks", async () => {
+    const runtime = createPromptRuntime();
+    const { teamRunId } = await runtime.createTeam(promptSpec, testDir);
+    const state = await runtime.loadState(testDir, teamRunId);
+
+    const prompt = await runtime.buildWakePrompt(state, "worker1");
+
+    expect(prompt).toContain(`## INBOX MESSAGES\n(none)`);
+    expect(prompt).toContain(`## OWNED TASKS\n(none)`);
+    expect(prompt).toContain(
+      "When you complete work, reply with a concise report of what you did. Do not ask for permission to continue — work autonomously.",
+    );
+  });
+
+  it("supports standalone buildWakePrompt and calling convention (member, ctx)", async () => {
+    const member = {
+      name: "worker1",
+      kind: "subagent_type" as const,
+      resolvedRole: "quick",
+      status: "idle" as const,
+      lastWakeAt: 0,
+      sessionId: null,
+      transcriptPath: "/tmp/transcript.jsonl",
+    };
+
+    const prompt = await buildWakePrompt(
+      member,
+      {
+        teamRunId: "team-standalone-1",
+        projectRoot: testDir,
+      },
+      {
+        messages: [
+          {
+            id: "m1",
+            from: "admin",
+            to: "worker1",
+            body: "Hello directly",
+            ts: 100,
+          },
+        ],
+        tasks: [
+          {
+            id: "task-1",
+            teamRunId: "team-standalone-1",
+            subject: "Direct task",
+            description: "",
+            status: "claimed",
+            createdBy: "admin",
+            owner: "worker1",
+            blockedBy: [],
+            createdAt: 100,
+            updatedAt: 100,
+          },
+        ],
+      },
+    );
+
+    expect(prompt).toContain(`Team Run ID: team-standalone-1`);
+    expect(prompt).toContain(`Member: worker1`);
+    expect(prompt).toContain(`FROM admin: Hello directly`);
+    expect(prompt).toContain(`- [claimed] task-1: Direct task`);
+  });
+
+  it("throws MEMBER_NOT_FOUND when memberName does not exist in state", async () => {
+    const runtime = createPromptRuntime();
+    const { teamRunId } = await runtime.createTeam(promptSpec, testDir);
+    const state = await runtime.loadState(testDir, teamRunId);
+
+    await expect(
+      runtime.buildWakePrompt(state, "nonexistent"),
+    ).rejects.toThrow(TeamError);
+
+    try {
+      await runtime.buildWakePrompt(state, "nonexistent");
+    } catch (err) {
+      expect((err as TeamError).code).toBe("MEMBER_NOT_FOUND");
+    }
+  });
+});
+
+describe("src/team/runtime T9: effective semaphore & wakeMember wiring", () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = path.join(os.tmpdir(), `team-concurrency-test-${randomUUID()}`);
+    await fs.mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    try {
+      await fs.rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  it("constructor initializes BoundedSemaphore with cfg.teamMaxParallel ?? 4 when none injected", () => {
+    const rDefault = new TeamRuntime();
+    expect(rDefault.semaphore).toBeInstanceOf(BoundedSemaphore);
+    expect((rDefault.semaphore as BoundedSemaphore).cap).toBe(4);
+
+    const rCustom = new TeamRuntime({ cfg: { teamMaxParallel: 2 } });
+    expect(rCustom.semaphore).toBeInstanceOf(BoundedSemaphore);
+    expect((rCustom.semaphore as BoundedSemaphore).cap).toBe(2);
+
+    const injectedSem = new BoundedSemaphore(8);
+    const rInjected = new TeamRuntime({ semaphore: injectedSem });
+    expect(rInjected.semaphore).toBe(injectedSem);
+  });
+
+  it("wakeMember routes through effective semaphore: 5 parallel calls cap at max 4 concurrent runs", async () => {
+    const fiveMemberSpec: TeamSpec = {
+      version: 1,
+      name: "concurrency-team",
+      leadAgentId: "m1",
+      backendType: "cli",
+      members: [
+        { name: "m1", kind: "subagent_type", subagent_type: "deep", backendType: "cli" },
+        { name: "m2", kind: "subagent_type", subagent_type: "deep", backendType: "cli" },
+        { name: "m3", kind: "subagent_type", subagent_type: "deep", backendType: "cli" },
+        { name: "m4", kind: "subagent_type", subagent_type: "deep", backendType: "cli" },
+        { name: "m5", kind: "subagent_type", subagent_type: "deep", backendType: "cli" },
+      ],
+    };
+
+    let activeRuns = 0;
+    let maxActiveRuns = 0;
+    let releaseBarrier!: () => void;
+    const barrier = new Promise<void>((r) => {
+      releaseBarrier = r;
+    });
+
+    const slowRunWake = async (opts: WakeOptions): Promise<WakeResult> => {
+      activeRuns++;
+      if (activeRuns > maxActiveRuns) {
+        maxActiveRuns = activeRuns;
+      }
+      if (activeRuns === 4) {
+        // All 4 allowed slots reached concurrently! Release barrier so all 4 proceed
+        releaseBarrier();
+      } else if (activeRuns < 4) {
+        // Wait until 4 concurrent runners arrive (or fallback timeout)
+        await Promise.race([
+          barrier,
+          new Promise((r) => setTimeout(r, 2000)),
+        ]);
+      }
+      // Hold slot briefly to guarantee overlap
+      await new Promise((r) => setTimeout(r, 20));
+      activeRuns--;
+      return { output: `done-${opts.prompt}`, sessionId: `sess-${opts.model}`, model: opts.model };
+    };
+
+    const runtime = new TeamRuntime({
+      cfg: { teamMaxParallel: 4 },
+      spawnWorktree: async (_pr, teamRunId, member) => {
+        const wt = resolveMemberWorktree(teamRunId, member);
+        return { worktreePath: wt, cwd: wt, sessionCwd: path.resolve(testDir) };
+      },
+      removeWorktrees: async () => {},
+      runWake: slowRunWake,
+      resolveModelChain: (member) => [member.resolvedRole],
+    });
+
+    const { teamRunId } = await runtime.createTeam(fiveMemberSpec, testDir);
+
+    // Launch all 5 members concurrently
+    const wakePromises = ["m1", "m2", "m3", "m4", "m5"].map((name) =>
+      runtime.wakeMember(testDir, teamRunId, name, { prompt: `run-${name}` }),
+    );
+
+    const results = await Promise.all(wakePromises);
+
+    // All 5 must succeed
+    expect(results.length).toBe(5);
+    for (const res of results) {
+      expect(res.ok).toBe(true);
+    }
+
+    // Active concurrency must reach exactly 4 (cap) and NEVER exceed 4
+    expect(maxActiveRuns).toBe(4);
+    expect(activeRuns).toBe(0);
+  });
+});
+
