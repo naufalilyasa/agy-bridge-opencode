@@ -20,6 +20,8 @@ import {
   type TeamRuntimeConfig,
   type TeamCooldownRegistry,
   type TeamRunMember,
+  type WakeOptions,
+  type WakeResult,
 } from "./team/runtime.js";
 
 export class AllModelsExhaustedError extends Error {
@@ -52,6 +54,32 @@ function adaptCooldowns(cooldowns: CooldownRegistry): TeamCooldownRegistry {
   };
 }
 
+export function makeDefaultRunWake(
+  cfg: Config,
+  deps: RunnerDeps = defaultDeps,
+): (options: WakeOptions) => Promise<WakeResult> {
+  return async (options: WakeOptions): Promise<WakeResult> => {
+    const res = await runAgy(
+      {
+        prompt: options.prompt,
+        cwd: options.projectRoot,
+        model: options.model,
+        conversationId: options.conversationId,
+        timeoutSec: options.timeoutSec,
+        signal: options.signal,
+        onProgress: options.onProgress,
+      },
+      cfg,
+      deps,
+    );
+    return {
+      output: res.output,
+      sessionId: res.sessionId ?? null,
+      model: options.model,
+    };
+  };
+}
+
 interface HandlerExtra {
   signal?: AbortSignal;
   _meta?: {
@@ -79,6 +107,7 @@ export function createToolHandler(
       : new TeamRuntime({
           cfg: cfg as unknown as TeamRuntimeConfig,
           cooldowns: adaptCooldowns(cooldowns),
+          runWake: makeDefaultRunWake(cfg, deps),
           resolveModelChain: (member: TeamRunMember) =>
             cfg.roleModels[member.resolvedRole] ??
             OMO_ROLES[member.resolvedRole]?.chain ??
@@ -397,6 +426,7 @@ export function createToolHandler(
 export function createServer(
   runtime?: TeamRuntime,
   cfg: Config = loadConfig(),
+  deps: RunnerDeps = defaultDeps,
 ): McpServer {
   const registry = new ModelRegistry(async () => {
     const { stdout } = await execWithClosedStdin(cfg.agyPath, ["models"], {
@@ -412,6 +442,7 @@ export function createServer(
     new TeamRuntime({
       cfg: cfg as unknown as TeamRuntimeConfig,
       cooldowns: adaptCooldowns(cooldowns),
+      runWake: makeDefaultRunWake(cfg, deps),
       resolveModelChain: (member: TeamRunMember) =>
         cfg.roleModels[member.resolvedRole] ??
         OMO_ROLES[member.resolvedRole]?.chain ??
@@ -423,7 +454,7 @@ export function createServer(
     server.registerTool(
       tool.name,
       { description: tool.description, inputSchema: tool.schema },
-      createToolHandler(tool, cfg, registry, defaultDeps, cooldowns, server, teamRuntime),
+      createToolHandler(tool, cfg, registry, deps, cooldowns, server, teamRuntime),
     );
   }
   return server;

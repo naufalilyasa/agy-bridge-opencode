@@ -9,11 +9,12 @@ import {
   type TeamRunMember,
 } from "./team/runtime.js";
 import { OMO_ROLES } from "./tools.js";
-import { createServer } from "./server.js";
+import { createServer, makeDefaultRunWake } from "./server.js";
 
 const cfg = loadConfig();
 export const runtime = new TeamRuntime({
   cfg: cfg as unknown as TeamRuntimeConfig,
+  runWake: makeDefaultRunWake(cfg),
   resolveModelChain: (member: TeamRunMember) =>
     cfg.roleModels[member.resolvedRole] ??
     OMO_ROLES[member.resolvedRole]?.chain ??

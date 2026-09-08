@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import { loadConfig, type Config } from "../src/config.js";
-import { createToolHandler, createServer } from "../src/server.js";
+import { createToolHandler, createServer, makeDefaultRunWake } from "../src/server.js";
 import { ModelRegistry } from "../src/models.js";
 import { TOOLS, OMO_ROLES } from "../src/tools.js";
 import { CooldownRegistry } from "../src/quota.js";
@@ -313,3 +313,137 @@ describe("Production resolveModelChain wiring", () => {
     expect(resolver({ resolvedRole: "unknown-slug" } as TeamRunMember)).toEqual(["unknown-slug"]);
   });
 });
+
+describe("Production runWake wiring", () => {
+  it("makeDefaultRunWake invokes runAgy and returns WakeResult shape", async () => {
+    const f = fakeDeps();
+    const runWake = makeDefaultRunWake(baseCfg, f.deps);
+
+    const result = await runWake({
+      member: "architect",
+      projectRoot: process.cwd(),
+      teamRunId: "team-test-1",
+      prompt: "analyze system",
+      model: "gemini-3.8-flash-medium",
+      conversationId: "conv-123",
+      timeoutSec: 120,
+    });
+
+    expect(result).toEqual({
+      output: "agent answer",
+      sessionId: "sess-1",
+      model: "gemini-3.8-flash-medium",
+    });
+    expect(f.runs.length).toBe(1);
+    expect(f.runs[0].args).toContain("analyze system");
+    expect(f.runs[0].args).toContain("--model");
+    expect(f.runs[0].args).toContain("gemini-3.8-flash-medium");
+  });
+
+  it("makeDefaultRunWake returns null sessionId when session file does not contain root", async () => {
+    const f = fakeDeps();
+    f.deps.readSessionsFile = async () => JSON.stringify({});
+    const runWake = makeDefaultRunWake(baseCfg, f.deps);
+
+    const result = await runWake({
+      member: "coder",
+      projectRoot: "/tmp/non-existent-proj",
+      teamRunId: "team-test-2",
+      prompt: "write code",
+      model: "claude-sonnet",
+      timeoutSec: 60,
+    });
+
+    expect(result.sessionId).toBeNull();
+    expect(result.output).toBe("agent answer");
+    expect(result.model).toBe("claude-sonnet");
+  });
+
+  it("wires runWake on createServer default TeamRuntime and delegates to runAgy", async () => {
+    let capturedRuntime: TeamRuntime | undefined;
+    const origHandler = TEAM_HANDLERS.team_list;
+    TEAM_HANDLERS.team_list = async (args, ctx) => {
+      capturedRuntime = ctx?.runtime;
+      return origHandler(args, ctx);
+    };
+
+    try {
+      const f = fakeDeps();
+      const server = createServer(undefined, baseCfg, f.deps);
+      const registeredTools = (server as unknown as {
+        _registeredTools: Record<string, { handler: (args: Record<string, unknown>) => Promise<unknown> }>;
+      })._registeredTools;
+
+      await registeredTools.team_list.handler({ cwd: "/tmp/non-existent-proj" });
+
+      expect(capturedRuntime).toBeDefined();
+      expect(capturedRuntime?.deps.runWake).toBeDefined();
+
+      const result = await capturedRuntime!.deps.runWake!({
+        member: "worker",
+        projectRoot: process.cwd(),
+        teamRunId: "team-test-cs",
+        prompt: "perform task",
+        model: "gemini-pro",
+        timeoutSec: 45,
+      });
+
+      expect(result.output).toBe("agent answer");
+      expect(result.sessionId).toBe("sess-1");
+      expect(result.model).toBe("gemini-pro");
+      expect(f.runs.length).toBe(1);
+      expect(f.runs[0].args).toContain("perform task");
+    } finally {
+      TEAM_HANDLERS.team_list = origHandler;
+    }
+  });
+
+  it("wires runWake on createToolHandler fallback TeamRuntime and delegates to runAgy", async () => {
+    let capturedRuntime: TeamRuntime | undefined;
+    const origHandler = TEAM_HANDLERS.team_list;
+    TEAM_HANDLERS.team_list = async (args, ctx) => {
+      capturedRuntime = ctx?.runtime;
+      return origHandler(args, ctx);
+    };
+
+    try {
+      const f = fakeDeps();
+      const cooldowns = new CooldownRegistry();
+      const toolDef = TOOLS.find((t) => t.name === "team_list")!;
+      const handler = createToolHandler(
+        toolDef,
+        baseCfg,
+        new ModelRegistry(async () => "test-model\n"),
+        f.deps,
+        cooldowns,
+      );
+
+      await handler({ cwd: "/tmp/non-existent-proj" });
+
+      expect(capturedRuntime).toBeDefined();
+      expect(capturedRuntime?.deps.runWake).toBeDefined();
+
+      const result = await capturedRuntime!.deps.runWake!({
+        member: "tester",
+        projectRoot: process.cwd(),
+        teamRunId: "team-test-cth",
+        prompt: "run tests",
+        model: "gemini-3.8-flash-medium",
+        timeoutSec: 30,
+      });
+
+      expect(result.output).toBe("agent answer");
+      expect(result.sessionId).toBe("sess-1");
+      expect(result.model).toBe("gemini-3.8-flash-medium");
+      expect(f.runs.length).toBe(1);
+    } finally {
+      TEAM_HANDLERS.team_list = origHandler;
+    }
+  });
+
+  it("wires runWake on singleton runtime exported from index.ts", () => {
+    expect(singletonRuntime.deps.runWake).toBeDefined();
+    expect(typeof singletonRuntime.deps.runWake).toBe("function");
+  });
+});
+
