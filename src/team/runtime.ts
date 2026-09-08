@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import fs from "node:fs";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import {
   validateTeamSpec,
   TeamError,
@@ -14,7 +18,10 @@ import {
   atomicWriteJson,
   readJson,
   withLock,
+  resolveReal,
 } from "./store.js";
+
+const execFileAsync = promisify(execFile);
 
 export type MemberStatus = "idle" | "running" | "awaiting_shutdown" | "removed";
 
@@ -57,6 +64,7 @@ export interface TeamRunMember {
   lastWakeAt: number | null;
   sessionId: string | null;
   transcriptPath: string;
+  worktreePath?: string;
   [key: string]: unknown;
 }
 
@@ -83,6 +91,7 @@ export interface CreateTeamResult {
   status: "creating";
   runDir?: string;
   members?: string[];
+  worktrees?: string[];
 }
 
 export interface ShutdownTransitionResult extends TeamRunMember {
@@ -103,11 +112,25 @@ export interface TeamRuntimeConfig {
   [key: string]: unknown;
 }
 
+export interface WorktreeResult {
+  worktreePath: string;
+  cwd: string;
+  sessionCwd: string;
+}
+
 export interface TeamRuntimeDeps {
   cooldowns?: TeamCooldownRegistry;
   cfg?: TeamRuntimeConfig;
-  spawnWorktree?: (projectRoot: string, teamRunId: string, member: string) => Promise<string>;
-  removeWorktrees?: (projectRoot: string, teamRunId: string, members: string[]) => Promise<void>;
+  spawnWorktree?: (
+    projectRoot: string,
+    teamRunId: string,
+    member: string,
+  ) => Promise<WorktreeResult | string>;
+  removeWorktrees?: (
+    projectRoot: string,
+    teamRunId: string,
+    members: string[],
+  ) => Promise<void>;
   runWake?: (options: unknown) => Promise<unknown>;
   spawnChild?: (command: string, args: string[], options?: unknown) => Promise<unknown>;
   [key: string]: unknown;
@@ -123,6 +146,153 @@ export function getStateLockPath(projectRoot: string, teamRunId: string): string
 
 export function getStateFilePath(projectRoot: string, teamRunId: string): string {
   return path.join(runDir(projectRoot, teamRunId), "state.json");
+}
+
+export function slugifyMemberName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+export function resolveMemberWorktree(
+  teamRunId: string,
+  memberName: string,
+): string {
+  const tmp = fs.realpathSync(os.tmpdir());
+  return path.join(
+    tmp,
+    `agy-bridge-team-${teamRunId}-${slugifyMemberName(memberName)}`,
+  );
+}
+
+function safeResolveReal(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+async function isGitRepo(projectRoot: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd: projectRoot,
+      timeout: 5_000,
+    });
+    return stdout.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+export async function spawnWorktree(
+  projectRoot: string,
+  teamRunId: string,
+  memberName: string,
+): Promise<WorktreeResult> {
+  const targetWorktreePath = resolveMemberWorktree(teamRunId, memberName);
+  const parentDir = path.dirname(targetWorktreePath);
+  await fsp.mkdir(parentDir, { recursive: true });
+
+  try {
+    await execFileAsync(
+      "git",
+      ["worktree", "add", "--detach", targetWorktreePath, "HEAD"],
+      {
+        cwd: projectRoot,
+        timeout: 30_000,
+      },
+    );
+  } catch (err: unknown) {
+    const message = (err as Error)?.message ?? String(err);
+    const notGit =
+      message.includes("not a git repository") ||
+      message.includes("not a git work tree") ||
+      !(await isGitRepo(projectRoot));
+
+    if (notGit) {
+      throw new TeamError(
+        `Project root '${projectRoot}' is not a git repository: ${message}`,
+        "projectRoot",
+        "NOT_GIT_REPO",
+      );
+    }
+
+    throw new TeamError(
+      `Failed to spawn worktree for member '${memberName}': ${message}`,
+      "worktree",
+      "SPAWN_WORKTREE_FAILED",
+    );
+  }
+
+  const realWorktree = safeResolveReal(targetWorktreePath);
+  const realProjectRoot = safeResolveReal(projectRoot);
+
+  return {
+    worktreePath: realWorktree,
+    cwd: realWorktree,
+    sessionCwd: realProjectRoot,
+  };
+}
+
+export async function removeWorktrees(
+  projectRoot: string,
+  teamRunId: string,
+  memberNames: string[],
+): Promise<void> {
+  const errors: Array<{ member: string; error: Error }> = [];
+  let attemptedCount = 0;
+
+  for (const memberName of memberNames) {
+    const worktreePath = path.isAbsolute(memberName)
+      ? memberName
+      : resolveMemberWorktree(teamRunId, memberName);
+
+    let exists = false;
+    try {
+      await fsp.stat(worktreePath);
+      exists = true;
+    } catch {
+      exists = false;
+    }
+
+    if (!exists) {
+      try {
+        await execFileAsync("git", ["worktree", "prune"], {
+          cwd: projectRoot,
+          timeout: 10_000,
+        });
+      } catch {
+        // Prune failure ignored
+      }
+      continue;
+    }
+
+    attemptedCount++;
+    try {
+      await execFileAsync("git", ["worktree", "remove", "--force", worktreePath], {
+        cwd: projectRoot,
+        timeout: 30_000,
+      });
+    } catch (err: unknown) {
+      errors.push({ member: memberName, error: err as Error });
+    }
+
+    try {
+      await execFileAsync("git", ["worktree", "prune"], {
+        cwd: projectRoot,
+        timeout: 10_000,
+      });
+    } catch {
+      // Prune error is non-fatal for individual removal
+    }
+  }
+
+  if (attemptedCount > 0 && errors.length === attemptedCount) {
+    throw new TeamError(
+      `Failed to remove worktrees for all members: ${errors.map((e) => `${e.member}: ${e.error.message}`).join("; ")}`,
+      "worktree",
+      "REMOVE_WORKTREES_FAILED",
+    );
+  }
 }
 
 export async function getTeamState(
@@ -243,6 +413,25 @@ export class TeamRuntime {
       };
     });
 
+    const createdMemberNames: string[] = [];
+    try {
+      for (const member of members) {
+        const wtResult = await this.spawnWorktree(projectRoot, teamRunId, member.name);
+        const wtPath = typeof wtResult === "string" ? wtResult : wtResult.worktreePath;
+        member.worktreePath = wtPath;
+        createdMemberNames.push(member.name);
+      }
+    } catch (err) {
+      if (createdMemberNames.length > 0) {
+        try {
+          await this.removeWorktrees(projectRoot, teamRunId, createdMemberNames);
+        } catch {
+          // Ignore rollback removal error so root cause spawn error is thrown
+        }
+      }
+      throw err;
+    }
+
     const state: TeamRunState = {
       teamRunId,
       spec: normalizedSpec,
@@ -262,6 +451,7 @@ export class TeamRuntime {
       status: "creating",
       runDir: runDirectory,
       members: normalizedSpec.members.map((m) => m.name),
+      worktrees: members.map((m) => m.worktreePath as string).filter(Boolean),
     };
   }
 
@@ -437,16 +627,24 @@ export class TeamRuntime {
     return { projectRoot, teamRunId, memberName };
   }
 
-  // T7 worktree stub seams
+  // T7 worktree manager
   async spawnWorktree(
     projectRoot: string,
     teamRunId: string,
     member: string,
-  ): Promise<string> {
+  ): Promise<WorktreeResult> {
     if (this.deps.spawnWorktree) {
-      return this.deps.spawnWorktree(projectRoot, teamRunId, member);
+      const res = await this.deps.spawnWorktree(projectRoot, teamRunId, member);
+      if (typeof res === "string") {
+        return {
+          worktreePath: res,
+          cwd: res,
+          sessionCwd: safeResolveReal(projectRoot),
+        };
+      }
+      return res;
     }
-    throw new Error("not implemented (T7: spawnWorktree)");
+    return spawnWorktree(projectRoot, teamRunId, member);
   }
 
   async removeWorktrees(
@@ -457,7 +655,7 @@ export class TeamRuntime {
     if (this.deps.removeWorktrees) {
       return this.deps.removeWorktrees(projectRoot, teamRunId, members);
     }
-    throw new Error("not implemented (T7: removeWorktrees)");
+    return removeWorktrees(projectRoot, teamRunId, members);
   }
 
   // T8 wakeMember stub seam

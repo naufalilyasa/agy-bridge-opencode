@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { existsSync } from "node:fs";
+import fsSync, { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   TeamRuntime,
@@ -12,14 +13,34 @@ import {
   getTeamState,
   loadTeamState,
   updateTeamState,
+  resolveMemberWorktree,
+  slugifyMemberName,
+  spawnWorktree,
+  removeWorktrees,
   ALLOWED_MEMBER_TRANSITIONS,
   type MemberStatus,
+  type TeamRuntimeDeps,
 } from "../src/team/runtime.js";
 import { TeamError, type TeamSpec } from "../src/team/spec.js";
 import { runDir, readJson } from "../src/team/store.js";
 
 describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", () => {
   let testDir: string;
+
+  function createTestRuntime(deps: TeamRuntimeDeps = {}): TeamRuntime {
+    return new TeamRuntime({
+      spawnWorktree: async (projectRoot, teamRunId, member) => {
+        const wt = resolveMemberWorktree(teamRunId, member);
+        return {
+          worktreePath: wt,
+          cwd: wt,
+          sessionCwd: path.resolve(projectRoot),
+        };
+      },
+      removeWorktrees: async () => {},
+      ...deps,
+    });
+  }
 
   beforeEach(async () => {
     testDir = path.join(os.tmpdir(), `team-runtime-test-${randomUUID()}`);
@@ -152,7 +173,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
 
   describe("createTeam", () => {
     it("returns immediately with status 'creating' and persists state.json with correct shape", async () => {
-      const runtime = new TeamRuntime();
+      const runtime = createTestRuntime();
       const startTime = Date.now();
 
       // createTeam(spec, projectRoot)
@@ -185,6 +206,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
         lastWakeAt: null,
         sessionId: null,
         transcriptPath: path.join(targetRunDir, "transcript", "planner.jsonl"),
+        worktreePath: resolveMemberWorktree(res.teamRunId, "planner"),
       });
 
       expect(worker).toEqual({
@@ -195,6 +217,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
         lastWakeAt: null,
         sessionId: null,
         transcriptPath: path.join(targetRunDir, "transcript", "worker.jsonl"),
+        worktreePath: resolveMemberWorktree(res.teamRunId, "worker"),
       });
 
       expect(reviewer).toEqual({
@@ -205,7 +228,14 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
         lastWakeAt: null,
         sessionId: null,
         transcriptPath: path.join(targetRunDir, "transcript", "reviewer.jsonl"),
+        worktreePath: resolveMemberWorktree(res.teamRunId, "reviewer"),
       });
+
+      expect(res.worktrees).toEqual([
+        resolveMemberWorktree(res.teamRunId, "planner"),
+        resolveMemberWorktree(res.teamRunId, "worker"),
+        resolveMemberWorktree(res.teamRunId, "reviewer"),
+      ]);
 
       // Run directory structure verified
       expect(existsSync(path.join(targetRunDir, "inboxes", "planner"))).toBe(true);
@@ -216,7 +246,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
     });
 
     it("supports inverted arguments createTeam(projectRoot, spec)", async () => {
-      const runtime = new TeamRuntime();
+      const runtime = createTestRuntime();
       const res = await runtime.createTeam(testDir, validSingleSpec);
 
       expect(res.status).toBe("creating");
@@ -227,7 +257,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
     });
 
     it("generates unique teamRunId across two sequential create calls", async () => {
-      const runtime = new TeamRuntime();
+      const runtime = createTestRuntime();
       const res1 = await runtime.createTeam(validSingleSpec, testDir);
       const res2 = await runtime.createTeam(validSingleSpec, testDir);
 
@@ -242,7 +272,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
     });
 
     it("rejects duplicate member names in spec with TeamError", async () => {
-      const runtime = new TeamRuntime();
+      const runtime = createTestRuntime();
       const duplicateSpec = {
         version: 1,
         name: "dup-team",
@@ -267,7 +297,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
     });
 
     it("rejects invalid spec using validateTeamSpec", async () => {
-      const runtime = new TeamRuntime();
+      const runtime = createTestRuntime();
       // missing leadAgentId on multi-member team
       const invalidSpec = {
         name: "invalid-team",
@@ -286,7 +316,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
 
   describe("state persistence under locks (getState, loadState, updateState)", () => {
     it("loads state correctly and throws if teamRunId does not exist", async () => {
-      const runtime = new TeamRuntime();
+      const runtime = createTestRuntime();
       const res = await runtime.createTeam(validSingleSpec, testDir);
 
       const state = await runtime.loadState(testDir, res.teamRunId);
@@ -301,7 +331,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
     });
 
     it("updates state atomically under lock", async () => {
-      const runtime = new TeamRuntime();
+      const runtime = createTestRuntime();
       const res = await runtime.createTeam(validSingleSpec, testDir);
 
       const updated = await runtime.updateState(
@@ -324,7 +354,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
 
   describe("member shutdown lifecycle transitions", () => {
     it("handles requestShutdown -> approveShutdown -> removed cycle", async () => {
-      const runtime = new TeamRuntime();
+      const runtime = createTestRuntime();
       const { teamRunId } = await runtime.createTeam(validMultiSpec, testDir);
 
       // 1. Initial status is idle
@@ -366,7 +396,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
     });
 
     it("handles requestShutdown -> rejectShutdown -> idle cycle", async () => {
-      const runtime = new TeamRuntime();
+      const runtime = createTestRuntime();
       const { teamRunId } = await runtime.createTeam(validMultiSpec, testDir);
 
       // requestShutdown: idle -> awaiting_shutdown
@@ -389,7 +419,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
     });
 
     it("rejects direct approveShutdown on idle member without request", async () => {
-      const runtime = new TeamRuntime();
+      const runtime = createTestRuntime();
       const { teamRunId } = await runtime.createTeam(validMultiSpec, testDir);
 
       // approveShutdown on idle member is illegal transition (idle -> removed is invalid)
@@ -399,7 +429,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
     });
 
     it("rejects shutdown operations for non-existent member", async () => {
-      const runtime = new TeamRuntime();
+      const runtime = createTestRuntime();
       const { teamRunId } = await runtime.createTeam(validMultiSpec, testDir);
 
       await expect(
@@ -414,7 +444,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
     });
 
     it("allows transition from running to awaiting_shutdown mid-run", async () => {
-      const runtime = new TeamRuntime();
+      const runtime = createTestRuntime();
       const { teamRunId } = await runtime.createTeam(validMultiSpec, testDir);
 
       // Manually set worker to running
@@ -451,14 +481,6 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
       expect(runtime.deps.cfg?.maxParallel).toBe(4);
 
       await expect(
-        runtime.spawnWorktree(testDir, "team-123", "worker"),
-      ).rejects.toThrow(/not implemented \(T7/);
-
-      await expect(
-        runtime.removeWorktrees(testDir, "team-123", ["worker"]),
-      ).rejects.toThrow(/not implemented \(T7/);
-
-      await expect(
         runtime.wakeMember(testDir, "team-123", "worker"),
       ).rejects.toThrow(/not implemented \(T8/);
 
@@ -474,6 +496,252 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
       await expect(runtime.deleteTeam(testDir, "team-123")).rejects.toThrow(
         /not implemented \(T10/,
       );
+    });
+  });
+
+  describe("src/team/runtime T7: worktree manager + createTeam integration", () => {
+    it("slugifies member names for safe path usage", () => {
+      expect(slugifyMemberName("worker")).toBe("worker");
+      expect(slugifyMemberName("special/worker:1")).toBe("special_worker_1");
+      expect(slugifyMemberName("agent@team.io")).toBe("agent_team.io");
+      expect(slugifyMemberName("sisyphus-junior")).toBe("sisyphus-junior");
+    });
+
+    it("resolves realpath'd worktree path under os.tmpdir()", () => {
+      const p = resolveMemberWorktree("team-abc-123", "worker");
+      expect(p.startsWith(fsSync.realpathSync(os.tmpdir()))).toBe(true);
+      expect(p).toContain("agy-bridge-team-team-abc-123-worker");
+    });
+
+    it("calls spawnWorktree once per member with realpath'd tmpdir path and captures args", async () => {
+      const spawnCalls: Array<{ projectRoot: string; teamRunId: string; member: string }> = [];
+      const runtime = new TeamRuntime({
+        spawnWorktree: async (projectRoot, teamRunId, member) => {
+          spawnCalls.push({ projectRoot, teamRunId, member });
+          const wt = resolveMemberWorktree(teamRunId, member);
+          return {
+            worktreePath: wt,
+            cwd: wt,
+            sessionCwd: path.resolve(projectRoot),
+          };
+        },
+        removeWorktrees: async () => {},
+      });
+
+      const res = await runtime.createTeam(validMultiSpec, testDir);
+      expect(spawnCalls).toHaveLength(3);
+      expect(spawnCalls.map((c) => c.member)).toEqual(["planner", "worker", "reviewer"]);
+      expect(spawnCalls[0].projectRoot).toBe(testDir);
+      expect(spawnCalls[0].teamRunId).toBe(res.teamRunId);
+
+      const state = await runtime.loadState(testDir, res.teamRunId);
+      for (const m of state.members) {
+        expect(m.worktreePath).toBe(resolveMemberWorktree(res.teamRunId, m.name));
+        expect(m.worktreePath?.startsWith(fsSync.realpathSync(os.tmpdir()))).toBe(true);
+      }
+      expect(res.worktrees).toEqual(state.members.map((m) => m.worktreePath));
+    });
+
+    it("rolls back worktrees when 2nd member's spawnWorktree throws", async () => {
+      const removedCalls: Array<{ projectRoot: string; teamRunId: string; members: string[] }> = [];
+      let callCount = 0;
+
+      const runtime = new TeamRuntime({
+        spawnWorktree: async (projectRoot, teamRunId, member) => {
+          callCount++;
+          if (callCount === 2) {
+            throw new Error("simulated spawn failure for second member");
+          }
+          const wt = resolveMemberWorktree(teamRunId, member);
+          return {
+            worktreePath: wt,
+            cwd: wt,
+            sessionCwd: path.resolve(projectRoot),
+          };
+        },
+        removeWorktrees: async (projectRoot, teamRunId, members) => {
+          removedCalls.push({ projectRoot, teamRunId, members });
+        },
+      });
+
+      await expect(runtime.createTeam(validMultiSpec, testDir)).rejects.toThrow(
+        "simulated spawn failure for second member",
+      );
+
+      // Rollback was called for 1st member
+      expect(removedCalls).toHaveLength(1);
+      expect(removedCalls[0].projectRoot).toBe(testDir);
+      expect(removedCalls[0].members).toEqual(["planner"]);
+    });
+
+    it("throws TeamError with NOT_GIT_REPO when projectRoot is not a git repo", async () => {
+      await expect(
+        spawnWorktree(testDir, "team-run-not-git", "worker"),
+      ).rejects.toThrow(TeamError);
+
+      try {
+        await spawnWorktree(testDir, "team-run-not-git", "worker");
+      } catch (err) {
+        const teamErr = err as TeamError;
+        expect(teamErr.code).toBe("NOT_GIT_REPO");
+        expect(teamErr.field).toBe("projectRoot");
+        expect(teamErr.message).toContain("not a git repository");
+      }
+    });
+
+    it("handles removeWorktrees best-effort when one fails and another succeeds", async () => {
+      let isGit = false;
+      try {
+        execFileSync("git", ["--version"], { stdio: "ignore" });
+        isGit = true;
+      } catch {
+        isGit = false;
+      }
+      if (!isGit) return;
+
+      const scratchDir = path.join(os.tmpdir(), `wt-best-effort-${randomUUID()}`);
+      await fs.mkdir(scratchDir, { recursive: true });
+
+      try {
+        execFileSync("git", ["init"], { cwd: scratchDir, stdio: "ignore" });
+        execFileSync("git", ["config", "user.name", "test"], { cwd: scratchDir, stdio: "ignore" });
+        execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: scratchDir, stdio: "ignore" });
+        execFileSync("git", ["commit", "--allow-empty", "-m", "init"], { cwd: scratchDir, stdio: "ignore" });
+
+        const runId = "test-run-best-effort";
+        const res1 = await spawnWorktree(scratchDir, runId, "worker1");
+        expect(existsSync(res1.worktreePath)).toBe(true);
+
+        // Member 2 does not exist, worker1 exists.
+        // removeWorktrees should succeed best-effort and remove worker1 without throwing.
+        await expect(
+          removeWorktrees(scratchDir, runId, ["worker1", "missing-worker"]),
+        ).resolves.not.toThrow();
+
+        expect(existsSync(res1.worktreePath)).toBe(false);
+      } finally {
+        await fs.rm(scratchDir, { recursive: true, force: true });
+      }
+    });
+
+    it("throws TeamError with REMOVE_WORKTREES_FAILED only if ALL attempted removals fail", async () => {
+      let isGit = false;
+      try {
+        execFileSync("git", ["--version"], { stdio: "ignore" });
+        isGit = true;
+      } catch {
+        isGit = false;
+      }
+      if (!isGit) return;
+
+      const scratchDir = path.join(os.tmpdir(), `wt-all-fail-${randomUUID()}`);
+      await fs.mkdir(scratchDir, { recursive: true });
+
+      try {
+        execFileSync("git", ["init"], { cwd: scratchDir, stdio: "ignore" });
+        execFileSync("git", ["config", "user.name", "test"], { cwd: scratchDir, stdio: "ignore" });
+        execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: scratchDir, stdio: "ignore" });
+        execFileSync("git", ["commit", "--allow-empty", "-m", "init"], { cwd: scratchDir, stdio: "ignore" });
+
+        const runId = "test-run-all-fail";
+        // Create 2 directories that exist, but are NOT valid git worktrees
+        const p1 = resolveMemberWorktree(runId, "fail1");
+        const p2 = resolveMemberWorktree(runId, "fail2");
+        await fs.mkdir(p1, { recursive: true });
+        await fs.mkdir(p2, { recursive: true });
+
+        try {
+          await expect(
+            removeWorktrees(scratchDir, runId, ["fail1", "fail2"]),
+          ).rejects.toThrow(TeamError);
+
+          try {
+            await removeWorktrees(scratchDir, runId, ["fail1", "fail2"]);
+          } catch (err) {
+            const teamErr = err as TeamError;
+            expect(teamErr.code).toBe("REMOVE_WORKTREES_FAILED");
+            expect(teamErr.field).toBe("worktree");
+          }
+        } finally {
+          await fs.rm(p1, { recursive: true, force: true });
+          await fs.rm(p2, { recursive: true, force: true });
+        }
+      } finally {
+        await fs.rm(scratchDir, { recursive: true, force: true });
+      }
+    });
+
+    it("creates and removes worktrees in a real scratch git repository (real-git integration test)", async () => {
+      let isGitAvailable = false;
+      try {
+        execFileSync("git", ["--version"], { stdio: "ignore" });
+        isGitAvailable = true;
+      } catch {
+        isGitAvailable = false;
+      }
+
+      if (!isGitAvailable) {
+        console.warn("git not available in environment, skipping real-git integration test");
+        return;
+      }
+
+      const gitRepoDir = path.join(os.tmpdir(), `real-git-test-${randomUUID()}`);
+      await fs.mkdir(gitRepoDir, { recursive: true });
+
+      try {
+        execFileSync("git", ["init"], { cwd: gitRepoDir, stdio: "ignore" });
+        execFileSync("git", ["config", "user.name", "Integration Test"], {
+          cwd: gitRepoDir,
+          stdio: "ignore",
+        });
+        execFileSync("git", ["config", "user.email", "test@example.com"], {
+          cwd: gitRepoDir,
+          stdio: "ignore",
+        });
+        execFileSync("git", ["commit", "--allow-empty", "-m", "init"], {
+          cwd: gitRepoDir,
+          stdio: "ignore",
+        });
+
+        // Instantiate runtime with default deps (real git!)
+        const runtime = new TeamRuntime();
+        const res = await runtime.createTeam(validMultiSpec, gitRepoDir);
+
+        expect(res.status).toBe("creating");
+        expect(res.worktrees).toHaveLength(3);
+
+        // Verify each worktree exists on disk and is a realpath
+        for (const wtPath of res.worktrees!) {
+          expect(existsSync(wtPath)).toBe(true);
+          expect(fsSync.realpathSync(wtPath)).toBe(wtPath);
+        }
+
+        // Verify git worktree list output contains the created worktrees
+        const listOutput = execFileSync("git", ["worktree", "list"], {
+          cwd: gitRepoDir,
+        }).toString();
+        for (const wtPath of res.worktrees!) {
+          expect(listOutput).toContain(wtPath);
+        }
+
+        // Clean up via removeWorktrees
+        await runtime.removeWorktrees(gitRepoDir, res.teamRunId, res.members!);
+
+        // Verify worktrees are gone from disk
+        for (const wtPath of res.worktrees!) {
+          expect(existsSync(wtPath)).toBe(false);
+        }
+
+        // Verify git worktree list is clean (only main repo remains)
+        const cleanListOutput = execFileSync("git", ["worktree", "list"], {
+          cwd: gitRepoDir,
+        }).toString();
+        for (const wtPath of res.worktrees!) {
+          expect(cleanListOutput).not.toContain(wtPath);
+        }
+      } finally {
+        await fs.rm(gitRepoDir, { recursive: true, force: true });
+      }
     });
   });
 });
