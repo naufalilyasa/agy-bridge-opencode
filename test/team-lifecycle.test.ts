@@ -11,6 +11,11 @@ import {
   handleTeamShutdownRequest,
   handleTeamShutdownApprove,
   handleTeamShutdownReject,
+  handleSendMessage,
+  handleTeamTaskCreate,
+  handleTeamTaskList,
+  handleTeamTaskGet,
+  handleTeamTaskUpdate,
   TEAM_HANDLERS,
   type TeamHandlerContext,
 } from "../src/team/handlers.js";
@@ -193,11 +198,41 @@ describe("T11-T13: Team Lifecycle & Shutdown Handlers", () => {
       expect(res.content[0].text).toContain("INVALID_ARGUMENT");
     });
 
-    it("rejects non-cli top-level backendType with clear REJECTED message", async () => {
+    it("rejects non-cli top-level backendType (tmux) with clear REJECTED message", async () => {
       const res = await handleTeamCreate(
         {
           backendType: "tmux",
           inline_spec: validSoloSpec,
+        },
+        ctx,
+      );
+
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain("UNSUPPORTED_BACKEND_TYPE");
+      expect(res.content[0].text).toContain("tmux/in-process REJECTED");
+    });
+
+    it("rejects non-cli top-level backendType (in-process) with clear REJECTED message", async () => {
+      const res = await handleTeamCreate(
+        {
+          backendType: "in-process",
+          inline_spec: validSoloSpec,
+        },
+        ctx,
+      );
+
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain("UNSUPPORTED_BACKEND_TYPE");
+      expect(res.content[0].text).toContain("tmux/in-process REJECTED");
+    });
+
+    it("rejects tmux backendType specified in inline spec", async () => {
+      const res = await handleTeamCreate(
+        {
+          inline_spec: {
+            ...validSoloSpec,
+            backendType: "tmux",
+          },
         },
         ctx,
       );
@@ -530,6 +565,166 @@ describe("T11-T13: Team Lifecycle & Shutdown Handlers", () => {
       const res = await TEAM_HANDLERS.team_list({}, ctx);
       expect(res.isError).toBeFalsy();
       expect(res.content[0].text).toContain("Active Runs");
+    });
+  });
+
+  describe("T23: End-to-End Full Lifecycle Matrix", () => {
+    it("executes complete lifecycle: create (named + inline) -> status -> send_message -> task ops -> shutdown (request/reject/approve) -> delete", async () => {
+      // 1. Create named team on disk and instantiate run
+      await saveNamedTeam(testDir, validPairSpec);
+      const createNamedRes = await handleTeamCreate({ name: "pair-team" }, ctx);
+      expect(createNamedRes.isError).toBeFalsy();
+      const parsedNamed = JSON.parse(createNamedRes.content[0].text.slice(createNamedRes.content[0].text.indexOf("{")));
+      expect(parsedNamed.status).toBe("creating");
+      expect(parsedNamed.members).toEqual(["lead", "reviewer"]);
+
+      // 2. Create inline team run
+      const createInlineRes = await handleTeamCreate(
+        {
+          inline_spec: {
+            ...validPairSpec,
+            name: "e2e-team",
+          },
+        },
+        ctx,
+      );
+      expect(createInlineRes.isError).toBeFalsy();
+      const parsedInline = JSON.parse(createInlineRes.content[0].text.slice(createInlineRes.content[0].text.indexOf("{")));
+      const runId = parsedInline.teamRunId;
+
+      // 3. Status check
+      const statusRes1 = await handleTeamStatus({ teamRunId: runId }, ctx);
+      expect(statusRes1.isError).toBeFalsy();
+      expect(statusRes1.content[0].text).toContain("lead [idle]");
+      expect(statusRes1.content[0].text).toContain("reviewer [idle]");
+
+      // 4. Send messages (direct + broadcast)
+      const msgRes1 = await handleSendMessage(
+        {
+          teamRunId: runId,
+          from: "lead",
+          to: "reviewer",
+          body: "Start reviewing task",
+        },
+        ctx,
+      );
+      expect(msgRes1.isError).toBeFalsy();
+      expect(msgRes1.content[0].text).toContain("delivered to 1 recipient(s)");
+
+      const msgBroadcast = await handleSendMessage(
+        {
+          teamRunId: runId,
+          from: "lead",
+          to: "*",
+          body: "Team wide notification",
+        },
+        ctx,
+      );
+      expect(msgBroadcast.isError).toBeFalsy();
+      expect(msgBroadcast.content[0].text).toContain("delivered to 2 recipient(s)");
+
+      // 5. Task operations: create -> list -> get -> claim -> in_progress -> completed
+      const taskCreateRes = await handleTeamTaskCreate(
+        {
+          teamRunId: runId,
+          subject: "Write end-to-end tests",
+          description: "Full lifecycle validation",
+        },
+        ctx,
+      );
+      expect(taskCreateRes.isError).toBeFalsy();
+      const createdTask = JSON.parse(taskCreateRes.content[0].text.slice(taskCreateRes.content[0].text.indexOf("{")));
+      expect(createdTask.status).toBe("pending");
+
+      const taskListRes = await handleTeamTaskList({ teamRunId: runId }, ctx);
+      expect(taskListRes.isError).toBeFalsy();
+      expect(taskListRes.content[0].text).toContain(`- [pending] ${createdTask.id}: Write end-to-end tests`);
+
+      const taskGetRes = await handleTeamTaskGet({ teamRunId: runId, taskId: createdTask.id }, ctx);
+      expect(taskGetRes.isError).toBeFalsy();
+      expect(taskGetRes.content[0].text).toContain("Write end-to-end tests");
+
+      const claimRes = await handleTeamTaskUpdate(
+        {
+          teamRunId: runId,
+          taskId: createdTask.id,
+          status: "claimed",
+          owner: "reviewer",
+        },
+        ctx,
+      );
+      expect(claimRes.isError).toBeFalsy();
+      expect(claimRes.content[0].text).toContain("status=claimed");
+
+      const inProgRes = await handleTeamTaskUpdate(
+        {
+          teamRunId: runId,
+          taskId: createdTask.id,
+          status: "in_progress",
+          owner: "reviewer",
+        },
+        ctx,
+      );
+      expect(inProgRes.isError).toBeFalsy();
+      expect(inProgRes.content[0].text).toContain("status=in_progress");
+
+      const compRes = await handleTeamTaskUpdate(
+        {
+          teamRunId: runId,
+          taskId: createdTask.id,
+          status: "completed",
+          owner: "reviewer",
+        },
+        ctx,
+      );
+      expect(compRes.isError).toBeFalsy();
+      expect(compRes.content[0].text).toContain("status=completed");
+
+      // Verify status reflects completed task
+      const statusRes2 = await handleTeamStatus({ teamRunId: runId }, ctx);
+      expect(statusRes2.content[0].text).toContain("completed=1");
+
+      // 6. Shutdown flow: request -> reject -> request -> approve
+      const shutReq1 = await handleTeamShutdownRequest(
+        { teamRunId: runId, targetMemberName: "reviewer" },
+        ctx,
+      );
+      expect(shutReq1.isError).toBeFalsy();
+      expect(shutReq1.content[0].text).toContain("awaiting_shutdown");
+
+      const shutRej = await handleTeamShutdownReject(
+        {
+          teamRunId: runId,
+          targetMemberName: "reviewer",
+          reason: "Need another verification pass",
+        },
+        ctx,
+      );
+      expect(shutRej.isError).toBeFalsy();
+      expect(shutRej.content[0].text).toContain("status: idle");
+
+      const shutReq2 = await handleTeamShutdownRequest(
+        { teamRunId: runId, targetMemberName: "reviewer" },
+        ctx,
+      );
+      expect(shutReq2.isError).toBeFalsy();
+
+      const shutApp = await handleTeamShutdownApprove(
+        { teamRunId: runId, targetMemberName: "reviewer" },
+        ctx,
+      );
+      expect(shutApp.isError).toBeFalsy();
+      expect(shutApp.content[0].text).toContain("status: removed");
+
+      // 7. Delete team run
+      const delRes = await handleTeamDelete({ teamRunId: runId }, ctx);
+      expect(delRes.isError).toBeFalsy();
+      expect(delRes.content[0].text).toContain("deleted successfully");
+
+      // Verify post-deletion status returns TEAM_NOT_FOUND error
+      const postDelStatus = await handleTeamStatus({ teamRunId: runId }, ctx);
+      expect(postDelStatus.isError).toBe(true);
+      expect(postDelStatus.content[0].text).toContain("TEAM_NOT_FOUND");
     });
   });
 });

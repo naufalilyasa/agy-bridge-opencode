@@ -1814,5 +1814,100 @@ describe("src/team/runtime T10: wake loop and deleteTeam drain", () => {
     expect(delRes.status).toBe("deleted");
     expect(existsSync(rd)).toBe(false);
   });
+
+  it("deleteTeam aborts in-flight activeRuns controllers immediately", async () => {
+    let observedSignal: AbortSignal | undefined;
+    let abortReason: unknown;
+
+    const fakeRunWake = async (opts: WakeOptions): Promise<WakeResult> => {
+      observedSignal = opts.signal;
+      opts.signal?.addEventListener("abort", () => {
+        abortReason = opts.signal?.reason;
+      });
+      // Hang until aborted
+      await new Promise<void>((resolve) => {
+        opts.signal?.addEventListener("abort", () => resolve());
+      });
+      return { output: "aborted-finish", sessionId: null, model: opts.model };
+    };
+
+    const runtime = new TeamRuntime({
+      spawnWorktree: async (_pr, teamRunId, member) => {
+        const wt = resolveMemberWorktree(teamRunId, member);
+        return { worktreePath: wt, cwd: wt, sessionCwd: path.resolve(testDir) };
+      },
+      removeWorktrees: async () => {},
+      runWake: fakeRunWake,
+      resolveModelChain: (m) => [m.resolvedRole],
+    });
+
+    const { teamRunId } = await runtime.createTeam(twoMemberSpec, testDir);
+
+    // Launch wake in background
+    const wakePromise = runtime.wakeMember(testDir, teamRunId, "worker-busy");
+
+    // Wait until wake starts and receives signal
+    while (!observedSignal) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(observedSignal.aborted).toBe(false);
+
+    // Call deleteTeam
+    const deleteRes = await runtime.deleteTeam(testDir, teamRunId);
+
+    expect(observedSignal.aborted).toBe(true);
+    expect(abortReason).toBe("Team deleted");
+    expect(deleteRes.status).toBe("deleted");
+
+    await wakePromise;
+  });
+
+  it("spawns worktree via fake git (deps.spawnChild) and uses canonical realpathSync tmpdir", async () => {
+    const gitCommands: Array<{ command: string; args: string[]; cwd?: string }> = [];
+
+    const fakeSpawnChild = async (
+      command: string,
+      args: string[],
+      options?: any,
+    ): Promise<unknown> => {
+      gitCommands.push({ command, args, cwd: options?.cwd });
+      return { stdout: "", stderr: "" };
+    };
+
+    const runtime = new TeamRuntime({
+      spawnChild: fakeSpawnChild,
+      spawnWorktree: async (projectRoot, teamRunId, member) => {
+        const wt = resolveMemberWorktree(teamRunId, member);
+        // Canonical realpathSync check
+        const canonicalTmp = fsSync.realpathSync(os.tmpdir());
+        expect(wt.startsWith(canonicalTmp)).toBe(true);
+
+        // Record worktree add command
+        await fakeSpawnChild("git", ["worktree", "add", "--detach", wt, "HEAD"], {
+          cwd: projectRoot,
+        });
+
+        return {
+          worktreePath: wt,
+          cwd: wt,
+          sessionCwd: path.resolve(projectRoot),
+        };
+      },
+      removeWorktrees: async () => {},
+    });
+
+    const res = await runtime.createTeam(twoMemberSpec, testDir);
+    expect(res.status).toBe("creating");
+    expect(gitCommands).toHaveLength(2);
+
+    for (const cmd of gitCommands) {
+      expect(cmd.command).toBe("git");
+      expect(cmd.args[0]).toBe("worktree");
+      expect(cmd.args[1]).toBe("add");
+      expect(cmd.args[2]).toBe("--detach");
+      expect(cmd.args[4]).toBe("HEAD");
+      expect(cmd.args[3].startsWith(fsSync.realpathSync(os.tmpdir()))).toBe(true);
+    }
+  });
 });
 

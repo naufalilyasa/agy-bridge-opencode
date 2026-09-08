@@ -181,6 +181,36 @@ describe("validateTeamSpec - normalization and valid specs", () => {
     const normalized = validateTeamSpec(raw);
     expect(normalized.members).toHaveLength(8);
   });
+
+  it("normalizes a minimal valid single-member category spec", () => {
+    const raw = {
+      version: 1,
+      name: "single-cat-team",
+      members: [
+        {
+          name: "lead-eng",
+          kind: "category",
+          category: "engineering",
+        },
+      ],
+    };
+
+    const normalized = validateTeamSpec(raw);
+    expect(normalized).toEqual({
+      version: 1,
+      name: "single-cat-team",
+      leadAgentId: "lead-eng",
+      backendType: "cli",
+      members: [
+        {
+          name: "lead-eng",
+          kind: "category",
+          category: "engineering",
+          backendType: "cli",
+        },
+      ],
+    });
+  });
 });
 
 describe("validateTeamSpec - validation errors and edge cases", () => {
@@ -471,6 +501,75 @@ describe("validateTeamSpec - validation errors and edge cases", () => {
       expect(err.message).toMatch(/version/i);
     }
   });
+
+  it("throws TeamError with code UNSUPPORTED_BACKEND_TYPE when backendType is tmux or in-process", () => {
+    for (const backend of ["tmux", "in-process"]) {
+      try {
+        validateTeamSpec({
+          name: "backend-team",
+          backendType: backend,
+          members: [{ name: "lead", kind: "subagent_type", subagent_type: "deep" }],
+        });
+      } catch (e) {
+        expect(e).toBeInstanceOf(TeamError);
+        const err = e as TeamError;
+        expect(err.field).toBe("backendType");
+        expect(err.code).toBe("UNSUPPORTED_BACKEND_TYPE");
+        expect(err.message).toMatch(/UNSUPPORTED_BACKEND_TYPE|cli/i);
+      }
+    }
+  });
+
+  it("throws TeamError with code INVALID_MEMBER when members are non-flat or non-object items", () => {
+    const nonObjectMembers = [
+      "string-member",
+      null,
+      undefined,
+      123,
+      true,
+    ];
+
+    for (const badMember of nonObjectMembers) {
+      try {
+        validateTeamSpec({
+          name: "non-flat-team",
+          members: [badMember],
+        });
+        expect.unreachable("should have thrown TeamError");
+      } catch (e) {
+        expect(e).toBeInstanceOf(TeamError);
+        const err = e as TeamError;
+        expect(err.field).toBe("members");
+        expect(err.code).toBe("INVALID_MEMBER");
+        expect(err.message).toMatch(/object/i);
+      }
+    }
+
+    // Nested array inside members list (non-flat members array)
+    try {
+      validateTeamSpec({
+        name: "nested-array-team",
+        members: [
+          [{ name: "nested-lead", kind: "subagent_type", subagent_type: "deep" }],
+        ],
+      });
+      expect.unreachable("should have thrown TeamError");
+    } catch (e) {
+      expect(e).toBeInstanceOf(TeamError);
+      const err = e as TeamError;
+      // An array is an object whose name property is undefined -> throws INVALID_MEMBER_NAME
+      expect(err.field).toBe("name");
+      expect(err.code).toBe("INVALID_MEMBER_NAME");
+    }
+  });
+
+  it("resolves role alias function or mapping: sisyphus->deep, sisyphus-junior->quick, atlas->ultrabrain", () => {
+    const resolveRoleAlias = (role: string) => ROLE_ALIASES[role] ?? role;
+    expect(resolveRoleAlias("sisyphus")).toBe("deep");
+    expect(resolveRoleAlias("sisyphus-junior")).toBe("quick");
+    expect(resolveRoleAlias("atlas")).toBe("ultrabrain");
+    expect(resolveRoleAlias("explore")).toBe("explore");
+  });
 });
 
 describe("TeamSpecSchema Zod schema directly", () => {
@@ -611,8 +710,16 @@ describe("named team spec load/save/list", () => {
     expect(list).toHaveLength(1);
     expect(list[0].name).toBe("valid-team");
 
-    // Also verify loadNamedTeam on corrupted throws TeamError
-    await expect(loadNamedTeam(tmpDir, "corrupted-team")).rejects.toThrow(TeamError);
+    // Also verify loadNamedTeam on corrupted throws TeamError with INVALID_JSON code
+    try {
+      await loadNamedTeam(tmpDir, "corrupted-team");
+      expect.unreachable("should have thrown TeamError");
+    } catch (e) {
+      expect(e).toBeInstanceOf(TeamError);
+      const err = e as TeamError;
+      expect(err.code).toBe("INVALID_JSON");
+      expect(err.field).toBe("spec");
+    }
     // And loadNamedTeam on invalid spec throws TeamError
     await expect(loadNamedTeam(tmpDir, "missing-lead")).rejects.toThrow(TeamError);
     // And loadNamedTeam on empty dir returns null (spec absent)

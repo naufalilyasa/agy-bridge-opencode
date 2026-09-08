@@ -232,22 +232,72 @@ describe("src/team/tasklist", () => {
       const task = await createTask(runDir, { subject: "Transition test" });
       await claimTask(runDir, task.id, "worker-1");
       await updateTaskStatus(runDir, task.id, { status: "in_progress", owner: "worker-1" });
+
+      // Rollback: in_progress -> pending (InvalidTaskTransitionError)
+      const rollbackErr = await updateTaskStatus(runDir, task.id, {
+        status: "pending",
+        owner: "worker-1",
+      }).catch((e) => e);
+      expect(rollbackErr).toBeInstanceOf(InvalidTaskTransitionError);
+      expect(rollbackErr.currentStatus).toBe("in_progress");
+      expect(rollbackErr.nextStatus).toBe("pending");
+
+      // Rollback: in_progress -> claimed (InvalidTaskTransitionError)
+      await expect(
+        updateTaskStatus(runDir, task.id, { status: "claimed", owner: "worker-1" }),
+      ).rejects.toBeInstanceOf(InvalidTaskTransitionError);
+
       await updateTaskStatus(runDir, task.id, { status: "completed", owner: "worker-1" });
+
+      // completed -> in_progress (illegal backward transition)
+      const compToInProgErr = await updateTaskStatus(runDir, task.id, {
+        status: "in_progress",
+        owner: "worker-1",
+      }).catch((e) => e);
+      expect(compToInProgErr).toBeInstanceOf(InvalidTaskTransitionError);
+      expect(compToInProgErr.currentStatus).toBe("completed");
+      expect(compToInProgErr.nextStatus).toBe("in_progress");
 
       // completed -> claimed (illegal backward transition)
       await expect(
         updateTaskStatus(runDir, task.id, { status: "claimed", owner: "worker-1" }),
       ).rejects.toBeInstanceOf(InvalidTaskTransitionError);
 
-      // completed -> in_progress (illegal backward transition)
-      await expect(
-        updateTaskStatus(runDir, task.id, { status: "in_progress", owner: "worker-1" }),
-      ).rejects.toBeInstanceOf(InvalidTaskTransitionError);
-
       // completed -> pending (illegal backward transition)
       await expect(
         updateTaskStatus(runDir, task.id, { status: "pending", owner: "worker-1" }),
       ).rejects.toBeInstanceOf(InvalidTaskTransitionError);
+    });
+
+    it("verifies full forward-only path: pending -> claimed -> in_progress -> completed -> deleted", async () => {
+      const task = await createTask(runDir, { subject: "Full forward path" });
+      expect(task.status).toBe("pending");
+
+      const claimed = await updateTaskStatus(runDir, task.id, { status: "claimed", owner: "worker-1" });
+      expect(claimed.status).toBe("claimed");
+      expect(claimed.owner).toBe("worker-1");
+
+      const inProgress = await updateTaskStatus(runDir, task.id, { status: "in_progress", owner: "worker-1" });
+      expect(inProgress.status).toBe("in_progress");
+
+      const completed = await updateTaskStatus(runDir, task.id, { status: "completed", owner: "worker-1" });
+      expect(completed.status).toBe("completed");
+
+      const deleted = await updateTaskStatus(runDir, task.id, { status: "deleted" });
+      expect(deleted.status).toBe("deleted");
+
+      // Once deleted, no further transitions allowed (terminal state)
+      await expect(
+        updateTaskStatus(runDir, task.id, { status: "completed" }),
+      ).rejects.toBeInstanceOf(InvalidTaskTransitionError);
+    });
+
+    it("throws TeamError if updating with an invalid status", async () => {
+      const task = await createTask(runDir, { subject: "Invalid status test" });
+      const err = await updateTaskStatus(runDir, task.id, "unknown_status" as any).catch((e) => e);
+      expect(err).toBeInstanceOf(TeamError);
+      expect(err.code).toBe("INVALID_STATUS");
+      expect(err.field).toBe("status");
     });
 
     it("rejects cross-owner updates for non-deleted transitions", async () => {

@@ -7,6 +7,8 @@ import { randomUUID } from "node:crypto";
 import {
   atomicWriteJson,
   readJson,
+  parseLockContent,
+  isPidDead,
   withLock,
   runtimeRoot,
   runDir,
@@ -66,6 +68,24 @@ describe("src/team/store fs primitives", () => {
       const files = await fs.readdir(testDir);
       expect(files).toEqual(["override.json"]);
     });
+    it("cleans up temporary file and throws if serialization fails", async () => {
+      const targetFile = path.join(testDir, "fail.json");
+      const badPayload = { big: BigInt(9007199254740991) };
+
+      await expect(atomicWriteJson(targetFile, badPayload)).rejects.toThrow(TypeError);
+
+      const files = await fs.readdir(testDir);
+      expect(files).toEqual([]);
+      expect(existsSync(targetFile)).toBe(false);
+    });
+
+    it("formats output with 2 spaces indentation and trailing newline", async () => {
+      const targetFile = path.join(testDir, "format.json");
+      await atomicWriteJson(targetFile, { hello: "world" });
+
+      const raw = await fs.readFile(targetFile, "utf-8");
+      expect(raw).toBe('{\n  "hello": "world"\n}\n');
+    });
   });
 
   describe("readJson", () => {
@@ -88,6 +108,63 @@ describe("src/team/store fs primitives", () => {
       await fs.writeFile(targetFile, "{ bad json", "utf-8");
 
       await expect(readJson(targetFile)).rejects.toThrow(SyntaxError);
+    });
+
+    it("throws non-ENOENT filesystem errors (e.g. reading a directory)", async () => {
+      await expect(readJson(testDir)).rejects.toThrow();
+    });
+  });
+
+  describe("parseLockContent", () => {
+    it("parses 2-line lock content correctly", () => {
+      const parsed = parseLockContent("12345\n1700000000000\n");
+      expect(parsed).toEqual({ pid: 12345, ts: 1700000000000 });
+    });
+
+    it("parses 3-line lock content with owner tag prefix (OMO format)", () => {
+      const parsed = parseLockContent("owner-tag\n12345\n1700000000000\n");
+      expect(parsed).toEqual({ pid: 12345, ts: 1700000000000 });
+    });
+
+    it("parses 3-line lock content starting with pid", () => {
+      const parsed = parseLockContent("12345\n1700000000000\nextra-data\n");
+      expect(parsed).toEqual({ pid: 12345, ts: 1700000000000 });
+    });
+
+    it("returns null on insufficient lines", () => {
+      expect(parseLockContent("")).toBeNull();
+      expect(parseLockContent("12345\n")).toBeNull();
+    });
+
+    it("returns null on non-integer or non-positive pid/ts", () => {
+      expect(parseLockContent("abc\n1700000000000\n")).toBeNull();
+      expect(parseLockContent("12345\ndef\n")).toBeNull();
+      expect(parseLockContent("0\n1700000000000\n")).toBeNull();
+      expect(parseLockContent("-10\n1700000000000\n")).toBeNull();
+      expect(parseLockContent("12345\n0\n")).toBeNull();
+      expect(parseLockContent("12345\n-1\n")).toBeNull();
+    });
+  });
+
+  describe("isPidDead", () => {
+    it("returns false for current running process", () => {
+      expect(isPidDead(process.pid)).toBe(false);
+    });
+
+    it("returns true for non-positive or non-integer pid", () => {
+      expect(isPidDead(0)).toBe(true);
+      expect(isPidDead(-1)).toBe(true);
+      expect(isPidDead(NaN)).toBe(true);
+    });
+
+    it("returns true for dead pid (ESRCH)", () => {
+      const deadPid = 999999;
+      try {
+        process.kill(deadPid, 0);
+      } catch (err: any) {
+        expect(err?.code).toBe("ESRCH");
+      }
+      expect(isPidDead(deadPid)).toBe(true);
     });
   });
 
@@ -223,6 +300,72 @@ describe("src/team/store fs primitives", () => {
 
       expect(existsSync(lockPath)).toBe(false);
     });
+
+    it("creates missing parent directory if lock path is in non-existent folder", async () => {
+      const nestedLockDir = path.join(testDir, "deep", "locks");
+      const lockPath = path.join(nestedLockDir, "sub.lock");
+
+      let executed = false;
+      await withLock(lockPath, async () => {
+        executed = true;
+      });
+
+      expect(executed).toBe(true);
+      expect(existsSync(nestedLockDir)).toBe(true);
+      expect(existsSync(lockPath)).toBe(false);
+    });
+
+    it("writes process.pid and timestamp into lock file while acquired", async () => {
+      const lockPath = path.join(testDir, "content.lock");
+
+      await withLock(lockPath, async () => {
+        expect(existsSync(lockPath)).toBe(true);
+        const content = await fs.readFile(lockPath, "utf-8");
+        const parsed = parseLockContent(content);
+        expect(parsed).not.toBeNull();
+        expect(parsed?.pid).toBe(process.pid);
+        expect(Date.now() - (parsed?.ts ?? 0)).toBeLessThan(5000);
+      });
+
+      expect(existsSync(lockPath)).toBe(false);
+    });
+
+    it("does not reap dead-PID lock if lock is younger than staleMs (waits until timeout)", async () => {
+      const deadPid = 999999;
+      try {
+        process.kill(deadPid, 0);
+      } catch (err: any) {
+        expect(err?.code).toBe("ESRCH");
+      }
+
+      const lockPath = path.join(testDir, "dead-young.lock");
+      await fs.writeFile(lockPath, `${deadPid}\n${Date.now()}\n`, "utf-8");
+
+      await expect(
+        withLock(
+          lockPath,
+          async () => {},
+          { staleMs: 30000, timeoutMs: 120, pollIntervalMs: 25 },
+        ),
+      ).rejects.toThrow(TeamError);
+
+      expect(existsSync(lockPath)).toBe(true);
+    });
+
+    it("does not reap lock with unparseable content and times out", async () => {
+      const lockPath = path.join(testDir, "corrupt.lock");
+      await fs.writeFile(lockPath, "not-a-pid\nnot-a-ts\n", "utf-8");
+
+      await expect(
+        withLock(
+          lockPath,
+          async () => {},
+          { staleMs: 0, timeoutMs: 120, pollIntervalMs: 25 },
+        ),
+      ).rejects.toThrow(TeamError);
+
+      expect(existsSync(lockPath)).toBe(true);
+    });
   });
 
   describe("path helpers", () => {
@@ -254,9 +397,48 @@ describe("src/team/store fs primitives", () => {
       expect(existsSync(path.join(dirs.inboxesDir, "worker2"))).toBe(true);
     });
 
+    it("ensureRunDirs works when memberNames is empty or omitted", async () => {
+      const dirs = await ensureRunDirs(testDir, "empty-run");
+
+      expect(existsSync(dirs.runDir)).toBe(true);
+      expect(existsSync(dirs.inboxesDir)).toBe(true);
+      expect(existsSync(dirs.tasksDir)).toBe(true);
+      expect(existsSync(dirs.transcriptDir)).toBe(true);
+
+      const inboxes = await fs.readdir(dirs.inboxesDir);
+      expect(inboxes).toEqual([]);
+    });
+
+    it("ensureRunDirs is idempotent when called repeatedly", async () => {
+      const dirs1 = await ensureRunDirs(testDir, "idempotent-run", ["alice"]);
+      const dirs2 = await ensureRunDirs(testDir, "idempotent-run", ["alice", "bob"]);
+
+      expect(dirs1.runDir).toBe(dirs2.runDir);
+      expect(existsSync(path.join(dirs2.inboxesDir, "alice"))).toBe(true);
+      expect(existsSync(path.join(dirs2.inboxesDir, "bob"))).toBe(true);
+    });
+
     it("resolveReal returns fs.realpathSync of the path as a pure function", () => {
       const real = resolveReal(testDir);
       expect(real).toBe(realpathSync(testDir));
+    });
+
+    it("resolveReal canonicalizes a symlink to its target", async () => {
+      const targetPath = path.join(testDir, "target-dir");
+      await fs.mkdir(targetPath, { recursive: true });
+      const symlinkPath = path.join(testDir, "symlink-dir");
+      await fs.symlink(targetPath, symlinkPath);
+
+      expect(resolveReal(symlinkPath)).toBe(realpathSync(targetPath));
+    });
+  });
+
+  describe("TeamError", () => {
+    it("creates an instance of Error with name TeamError", () => {
+      const err = new TeamError("custom error");
+      expect(err).toBeInstanceOf(Error);
+      expect(err.name).toBe("TeamError");
+      expect(err.message).toBe("custom error");
     });
   });
 });

@@ -20,6 +20,7 @@ import {
 } from "../src/team/runtime.js";
 import { type TeamSpec } from "../src/team/spec.js";
 import { MAX_PAYLOAD_BYTES } from "../src/team/mailbox.js";
+import { atomicWriteJson } from "../src/team/store.js";
 
 describe("T14-T15: Messaging & Task Tool Handlers", () => {
   let testDir: string;
@@ -202,6 +203,35 @@ describe("T14-T15: Messaging & Task Tool Handlers", () => {
 
       expect(res.isError).toBe(true);
       expect(res.content[0].text).toContain("PAYLOAD_TOO_LARGE");
+    });
+
+    it("returns isError with RECIPIENT_BACKPRESSURE when recipient unread exceeds limit", async () => {
+      const inboxDir = path.join(testDir, ".omo", "runtime", teamRunId, "inboxes", "researcher");
+      await fsp.mkdir(inboxDir, { recursive: true });
+
+      // Pre-seed an existing message in researcher's inbox totaling ~250 KB
+      const preseededPath = path.join(inboxDir, "existing-msg.json");
+      const largeContent = "x".repeat(249_000);
+      await atomicWriteJson(preseededPath, {
+        id: "pre-seed",
+        from: "lead",
+        to: "researcher",
+        body: largeContent,
+        ts: Date.now() - 10_000,
+      });
+
+      // Sending another 20 KB message pushes total unread over 256 KB limit
+      const res = await handleSendMessage(
+        {
+          teamRunId,
+          to: "researcher",
+          body: "y".repeat(20_000),
+        },
+        ctx,
+      );
+
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain("RECIPIENT_BACKPRESSURE");
     });
 
     it("supports team_id alias", async () => {
