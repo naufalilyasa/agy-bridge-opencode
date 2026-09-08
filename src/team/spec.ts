@@ -1,5 +1,9 @@
+import type { Dirent } from "node:fs";
+import fsp from "node:fs/promises";
+import path from "node:path";
 import { z } from "zod";
 import { OMO_ROLES } from "../tools.js";
+import { atomicWriteJson, readJson } from "./store.js";
 
 export class TeamError extends Error {
   readonly field?: string;
@@ -346,3 +350,62 @@ export function validateTeamSpec(raw: unknown): TeamSpec {
 
   return spec;
 }
+
+export async function loadNamedTeam(
+  projectRoot: string,
+  name: string,
+): Promise<TeamSpec | null> {
+  const configPath = path.join(projectRoot, ".omo", "teams", name, "config.json");
+  let raw: unknown;
+  try {
+    raw = await readJson(configPath);
+  } catch (err) {
+    throw new TeamError(
+      `Failed to parse team spec '${name}' JSON: ${(err as Error).message}`,
+      "spec",
+      "INVALID_JSON",
+    );
+  }
+  if (raw === null) {
+    return null;
+  }
+  return validateTeamSpec(raw);
+}
+
+export async function saveNamedTeam(
+  projectRoot: string,
+  spec: unknown,
+): Promise<void> {
+  const validated = validateTeamSpec(spec);
+  const configPath = path.join(projectRoot, ".omo", "teams", validated.name, "config.json");
+  await atomicWriteJson(configPath, validated);
+}
+
+export async function listNamedTeams(
+  projectRoot: string,
+): Promise<TeamSpec[]> {
+  const teamsDir = path.join(projectRoot, ".omo", "teams");
+  let entries: Dirent[] = [];
+  try {
+    entries = await fsp.readdir(teamsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const specs: TeamSpec[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const spec = await loadNamedTeam(projectRoot, entry.name);
+      if (spec !== null) {
+        specs.push(spec);
+      }
+    } catch {
+      // Skip unreadable or invalid specs
+    }
+  }
+
+  specs.sort((a, b) => a.name.localeCompare(b.name));
+  return specs;
+}
+
