@@ -424,6 +424,17 @@ async function main() {
   let scheduledUntilMs = 0;
   let scheduledPrompt = "";
   let activeBackgroundTask: string | null = null;
+  // Pagination: fixed-size chunks (PAGE_SIZE lines) of the WHOLE session file —
+  // page 1 = start of session. Full history is parsed once (strings only, no
+  // DOM) on first page-mode entry; pages then grow in realtime as poll parses
+  // new steps. DOM renders only the viewed page on switch.
+  type PageLine = { text: string; fg: string; bg?: string };
+  const PAGE_SIZE = 200; // ponytail: fixed chunk size; raise for denser pages
+  let pages: PageLine[][] = [];
+  let pageIndex = 0;
+  let pageMode = false;
+  let historyScanned = false;
+  let recording = false;
   let currentModel = currentSession.model || "Detecting...";
   let userPromptCount = 0,
     plannerResponseCount = 0,
@@ -553,7 +564,16 @@ async function main() {
 
   function updateLiveLabel() {
     if (isSelectingSession || isViewingContext) return;
-    liveTxt.content = isLive ? "[LIVE]" : "[SCROLL]";
+    if (pageMode) {
+      liveTxt.content = `[PAGE ${pageIndex + 1}/${pages.length}]`;
+      liveTxt.fg = "#fbbf24" as any;
+      return;
+    }
+    if (pages.length) {
+      liveTxt.content = `[LIVE] [PAGE ${pages.length}/${pages.length}]`;
+    } else {
+      liveTxt.content = "[LIVE]";
+    }
     liveTxt.fg = isLive ? "#68d391" : ("#f6ad55" as any);
   }
 
@@ -752,6 +772,15 @@ async function main() {
 
   // ── Log push ──────────────────────────────────────────────────────────────────
   function pushLine(txt: string, fg = "#d1d5db", bg?: string) {
+    if (recording) {
+      let page = pages[pages.length - 1];
+      if (!page || page.length >= PAGE_SIZE) {
+        page = [];
+        pages.push(page);
+      }
+      page.push({ text: txt, fg, bg });
+    }
+    if (pageMode) return; // viewing an old page — record only, DOM untouched
     const formatted = formatMarkdownLinks(txt);
     const clean = stripAnsi(formatted) || " ";
     const cardW = getCardWidth();
@@ -823,6 +852,103 @@ async function main() {
     scrollBox.scrollTop = 0;
     scrollBox.scrollLeft = 0;
     scrollBox.stickyScroll = true;
+  }
+
+  // ── Pagination (arrow left/right) ─────────────────────────────────────────────
+  function scanFullHistory() {
+    if (historyScanned) return;
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(currentSession.path, "r");
+      const size = fs.fstatSync(fd).size;
+      pageMode = true; // suppress DOM adds while scanning; DOM rendered after
+      recording = true;
+      resetCounters(); // scan re-counts from the true session start
+      let pos = 0;
+      let rem = "";
+      while (pos < size) {
+        const len = Math.min(MAX_POLL_READ, size - pos);
+        const buf = Buffer.alloc(len);
+        fs.readSync(fd, buf, 0, len, pos);
+        pos += len;
+        const chunk = rem + buf.toString("utf8");
+        const rawLines = chunk.split("\n");
+        rem = rawLines.pop() ?? "";
+        for (const raw of rawLines) {
+          const t = raw.trim();
+          if (!t) continue;
+          try {
+            renderStep(JSON.parse(t));
+          } catch {}
+        }
+      }
+      historyScanned = true;
+      // Live tail already rendered its portion into DOM; the scan recorded the
+      // same lines into pages. Rewind live cursor to scan end — poll continues
+      // from there with zero gaps and zero duplicates.
+      currentPos = pos;
+      remainder = "";
+    } catch {} finally {
+      if (fd != null) {
+        try {
+          fs.closeSync(fd);
+        } catch {}
+      }
+    }
+  }
+
+  function renderPageIntoDom(idx: number) {
+    const pg = pages[Math.max(0, Math.min(idx, pages.length - 1))];
+    if (!pg) return;
+    clearScrollBox();
+    scrollBox.stickyScroll = false;
+    for (const l of pg) {
+      const opts: any = { content: l.text, fg: l.fg, wrapMode: "none", width: "100%" };
+      if (l.bg) opts.bg = l.bg;
+      scrollBox.add(new TextRenderable(renderer, opts));
+    }
+    renderer.requestRender();
+  }
+
+  function enterPageMode(idx: number) {
+    scanFullHistory();
+    if (!pages.length) return;
+    pageMode = true;
+    isLive = false;
+    pageIndex = Math.max(0, Math.min(idx, pages.length - 1));
+    renderPageIntoDom(pageIndex);
+    updateLiveLabel();
+    renderer.requestRender();
+  }
+
+  function exitPageMode() {
+    pageMode = false;
+    updateLiveLabel();
+    renderer.requestRender();
+  }
+
+  function pagePrev() {
+    if (!pageMode) {
+      // From LIVE: show the current (last) page from its start — that's the
+      // "review how this sub-agent did its prompt" view.
+      enterPageMode(Math.max(0, pages.length - 1));
+      return;
+    }
+    if (pageIndex <= 0) return;
+    enterPageMode(pageIndex - 1);
+  }
+
+  function pageNext() {
+    if (!pageMode) return;
+    if (pageIndex >= pages.length - 1) {
+      // Right past the last page → back to LIVE tail.
+      exitPageMode();
+      scrollToBottom();
+      updateLiveLabel();
+      renderer.requestRender();
+      return;
+    }
+    enterPageMode(pageIndex + 1);
   }
   function resetCounters() {
     stepCount = 0;
@@ -1271,7 +1397,8 @@ async function main() {
       }
       if (newCount > 0) {
         updateSidebar();
-        renderer.requestRender();
+        if (pageMode) updateLiveLabel(); // pages grew in realtime; refresh x/y
+        else renderer.requestRender();
       }
     } catch {}
   }
@@ -1289,6 +1416,11 @@ async function main() {
     currentPos = 0;
     remainder = "";
     isLive = true;
+    pageMode = false;
+    pageIndex = 0;
+    pages = [];
+    historyScanned = false;
+    recording = false;
     currentModel = s.model || "Detecting...";
     clearScrollBox();
     resetCounters();
@@ -1733,6 +1865,22 @@ async function main() {
     }
 
     // Normal mode
+    if (pageMode && (keyLower === "q" || keyLower === "escape")) {
+      // Don't kill the app while reviewing pages — return to LIVE first.
+      exitPageMode();
+      scrollToBottom();
+      updateLiveLabel();
+      renderer.requestRender();
+      return;
+    }
+    if (keyLower === "left") {
+      pagePrev();
+      return;
+    }
+    if (keyLower === "right") {
+      pageNext();
+      return;
+    }
     if (keyLower === "q" || keyLower === "escape") {
       exitApp(0);
       return;
