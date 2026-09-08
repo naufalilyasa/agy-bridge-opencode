@@ -102,10 +102,23 @@ Removes every component the installer added and restores `opencode.jsonc` from i
 | `adversarial_review` | Plan critiques, design and code reviews (second model family)   | per-tool chain (critic roles lead with Claude)                 |
 | `follow_up`          | Continue a prior session by `session_id` — no context resend    | inherits the session                                           |
 | `delegate`           | Autonomous execution with 19 subagent roles (6-section prompt)  | per-role chain (see below)                                     |
-| `get_session_status` | Current/latest session ID, status, directory binding            | —                                                              |
-| `list_sessions`      | All recorded sessions (find IDs to resume with `follow_up`)     | —                                                              |
+| `get_session_status`     | Current/latest session ID, status, directory binding            | —                                                              |
+| `list_sessions`          | All recorded sessions (find IDs to resume with `follow_up`)     | —                                                              |
+| **Team mode**            |                                                                 |                                                                |
+| `team_create`            | Create and initialize parallel agent team run (named or inline) | — (bridge orchestration)                                       |
+| `team_list`              | List active/recent team runs and saved named team specs         | —                                                              |
+| `team_status`            | Status: member states, elapsed time, task stats, unread counts  | —                                                              |
+| `team_delete`            | Stop loop, abort runs, prune git worktrees, delete run state     | —                                                              |
+| `team_shutdown_request`  | Request graceful shutdown for member (`awaiting_shutdown`)      | —                                                              |
+| `team_approve_shutdown`  | Approve pending member shutdown (`removed`)                     | —                                                              |
+| `team_reject_shutdown`   | Reject member shutdown with mandatory reason (resets to `idle`) | —                                                              |
+| `team_send_message`      | Send point-to-point or broadcast (`*`) message to team inboxes  | —                                                              |
+| `team_task_create`       | Create task in shared tasklist with dependencies (`blockedBy`)  | —                                                              |
+| `team_task_list`         | List tasks with optional status or owner filters                | —                                                              |
+| `team_task_get`          | Retrieve task details, status, owner, and blockers              | —                                                              |
+| `team_task_update`       | Atomically claim task or advance forward-only status            | —                                                              |
 
-All tools accept optional `cwd` (project root). `delegate`/`follow_up` also accept `load_memories` / `save_memory` (agentmemory) and `skills` (inject full SKILL.md protocols).
+All tools accept optional `cwd` (project root). `delegate`/`follow_up` also accept `load_memories` / `save_memory` (agentmemory) and `skills` (inject full SKILL.md protocols). Team tools operate on project-scoped `.omo/` state with member runs isolated in temporary git worktrees.
 
 ### Model routing (single source of truth)
 
@@ -149,8 +162,12 @@ All optional, via environment variables:
 | `AGY_DEFAULT_MODEL`     | unset      | Fallback model when no chain entry is available                                          |
 | `AGY_ROLE_MODEL_<ROLE>` | unset      | Comma-separated model chain override for a role, e.g. `AGY_ROLE_MODEL_ORACLE`            |
 | `AGY_SKIP_PERMISSIONS`  | `true`     | Pass `--dangerously-skip-permissions` to agy                                             |
-| `AGY_SANDBOX`           | `false`    | Run agy with `--sandbox`                                                                 |
-| `AGY_ON_FAILURE`        | `fallback` | `strict` tells the calling agent not to absorb failed work itself                        |
+| `AGY_SANDBOX`                 | `false`    | Run agy with `--sandbox`                                                                 |
+| `AGY_ON_FAILURE`              | `fallback` | `strict` tells the calling agent not to absorb failed work itself                        |
+| `AGY_TEAM_MAX_PARALLEL`       | `4`        | Maximum parallel member runs across team runs                                            |
+| `AGY_TEAM_POLL_MS`            | `3000`     | Background wake loop polling interval in milliseconds                                    |
+| `AGY_TEAM_MEMBER_TIMEOUT_SEC` | `300`      | Execution timeout in seconds per member agy run                                          |
+| `AGY_TEAM_KILL_GRACE_MS`      | `5000`     | Timeout in milliseconds to await child process exit during team deletion                 |
 
 The 19-role model chains live in `~/.gemini/config/agy_bridge.jsonc` (see `config/agy_bridge.jsonc.example`). The file is JSONC: `//` and `/* */` comments plus trailing commas are stripped before parsing. There is no `defaultModel` key — when a chain is empty the server falls through to agy's own default model.
 
@@ -181,6 +198,26 @@ Every `delegate` call with structured parameters (`task`/`role`/`expected_outcom
 Supported subagent roles (18): `git-master`, `oracle`, `librarian`, `explore`, `momus`, `metis`, `multimodal-looker`, `ultrabrain`, `deep`, `visual-engineering`, `artistry`, `writing`, `quick`, `tester`, `reviewer`, `security`, `devops`, `product`.
 
 The prompt is also adapted to the **resolved model family** (Claude variant: extended reasoning; Gemini variant: aggressive tool-call enforcement, anti-optimism checkpoints, repeated verification). `metis` is a plan consultant — delegate to it BEFORE planning to surface hidden intentions, ambiguities, and AI-slop patterns. `momus` is an approval-biased plan/diff verifier (OKAY or REJECT with ≤3 issues).
+
+## Team mode
+
+agy-bridge supports OMO-style parallel multi-agent teams. Team runs execute via detached `agy --print` jobs in isolated git worktrees, supervised by a background wake loop.
+
+### Prerequisites
+
+- **Git repository**: Project root must be inside a valid git repository (members use isolated `git worktree` instances in `os.tmpdir()`).
+- **Antigravity CLI authenticated**: `agy login` must be completed and working.
+
+### Named spec vs inline spec
+
+Teams can be spawned either from committed specifications or dynamically inline:
+
+- **Named team spec**: Saved at `<projectRoot>/.omo/teams/<name>/config.json`. Reusable across sessions and trackable in git. Launch with `team_create({ name: "my-team" })`.
+- **Inline spec**: Define members on the fly via `team_create({ members: [{ name: "worker", kind: "category", category: "engineering" }, ...] })` or `inline_spec`. Ideal for one-off tasks without disk persistence.
+
+Members communicate asynchronously through mailbox queues (`team_send_message`) with payload (32 KB) and backpressure (256 KB) limits, coordinate via shared atomic tasklists (`team_task_*`), and shut down gracefully via `team_shutdown_*`.
+
+For detailed architecture, state layout, role mapping, and known engine differences, see [docs/TEAM-MODE.md](docs/TEAM-MODE.md).
 
 ## Live telemetry — agy-live2
 

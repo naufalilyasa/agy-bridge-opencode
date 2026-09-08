@@ -7,6 +7,7 @@ docs/*
 !docs/multi-client-support.md
 !docs/INSTALL.md
 !docs/OMO-ROLE-MAPPING.md
+!docs/TEAM-MODE.md
 
 # vendored OMO source (embedded git repo) — not part of agy-bridge source
 oh-my-openagent/
