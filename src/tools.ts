@@ -201,6 +201,7 @@ export interface ToolDef {
   /** Default --print-timeout for this tool, in seconds. AGY_TIMEOUT overrides. */
   timeoutSec: number;
   buildPrompt(args: Record<string, unknown>, cwd: string, model?: string): string;
+  kind?: string;
 }
 
 export interface OmoRoleDefinition {
@@ -1036,5 +1037,237 @@ export const TOOLS: ToolDef[] = [
       // Raw prompt passthrough
       return task;
     },
+  },
+
+  // --- TEAM MODE LIFECYCLE & OPS TOOLS (kind: "team") ---
+  {
+    name: "team_create",
+    description:
+      "Create and initialize a new parallel agent team run. " +
+      "Accepts either a saved named team spec (by name) or an inline spec with member definitions. " +
+      "Provisions isolated git worktrees, inboxes, tasklist, and starts the background wake loop.",
+    schema: {
+      name: z.string().optional().describe("Named team specification name or team run identifier."),
+      inline_spec: z
+        .union([z.string(), z.record(z.unknown())])
+        .optional()
+        .describe("Inline team specification as a JSON string or object."),
+      spec: z
+        .union([z.string(), z.record(z.unknown())])
+        .optional()
+        .describe("Alias for inline_spec."),
+      teamName: z.string().optional().describe("Alias for name."),
+      members: z
+        .array(z.union([z.string(), z.record(z.unknown())]))
+        .optional()
+        .describe(
+          "List of team members as objects ({name, kind, category, subagent_type, role, prompt}) or string names.",
+        ),
+      leadAgentId: z.string().optional().describe("Name of the lead agent member in the team."),
+      description: z.string().optional().describe("Human-readable description of the team's objective."),
+      backendType: z.string().optional().describe("Backend execution engine ('cli' subprocess)."),
+      sessionPermission: z.string().optional().describe("Session permission mode for the team."),
+      teamAllowedPaths: z.array(z.string()).optional().describe("Allowed filesystem path boundaries."),
+      cwd: z.string().optional().describe("Project root working directory."),
+    },
+    chain: [],
+    timeoutSec: 60,
+    buildPrompt: () => "",
+    kind: "team",
+  },
+  {
+    name: "team_list",
+    description:
+      "List all active and recent team runs across the workspace, along with saved named team specifications. " +
+      "Shows status, member counts, and creation timestamps.",
+    schema: {
+      cwd: z.string().optional().describe("Project root working directory."),
+    },
+    chain: [],
+    timeoutSec: 30,
+    buildPrompt: () => "",
+    kind: "team",
+  },
+  {
+    name: "team_status",
+    description:
+      "Get comprehensive status of a team run, including member states (idle, running, awaiting_shutdown, removed), " +
+      "wall-clock elapsed time, active task statistics, unread message counts, and latest transcript activity.",
+    schema: {
+      teamRunId: z.string().optional().describe("Unique team run identifier (e.g. 'team-xxx')."),
+      team_id: z.string().optional().describe("Alias for teamRunId."),
+      cwd: z.string().optional().describe("Project root working directory."),
+    },
+    chain: [],
+    timeoutSec: 30,
+    buildPrompt: () => "",
+    kind: "team",
+  },
+  {
+    name: "team_delete",
+    description:
+      "Stop, drain, and clean up a team run. " +
+      "Halts the background wake loop, aborts in-flight member executions, prunes git worktrees, " +
+      "and deletes runtime storage. Strictly idempotent.",
+    schema: {
+      teamRunId: z.string().optional().describe("Unique team run identifier to delete."),
+      team_id: z.string().optional().describe("Alias for teamRunId."),
+      cwd: z.string().optional().describe("Project root working directory."),
+    },
+    chain: [],
+    timeoutSec: 60,
+    buildPrompt: () => "",
+    kind: "team",
+  },
+  {
+    name: "team_shutdown_request",
+    description:
+      "Request graceful shutdown for a specific team member. " +
+      "Transitions member to 'awaiting_shutdown' so they complete current work without accepting new tasks.",
+    schema: {
+      teamRunId: z.string().optional().describe("Unique team run identifier."),
+      team_id: z.string().optional().describe("Alias for teamRunId."),
+      targetMemberName: z.string().optional().describe("Name of the member to request shutdown for."),
+      memberName: z.string().optional().describe("Alias for targetMemberName."),
+      cwd: z.string().optional().describe("Project root working directory."),
+    },
+    chain: [],
+    timeoutSec: 30,
+    buildPrompt: () => "",
+    kind: "team",
+  },
+  {
+    name: "team_approve_shutdown",
+    description:
+      "Approve a pending shutdown request for a team member. " +
+      "Transitions member from 'awaiting_shutdown' to 'removed', concluding their participation.",
+    schema: {
+      teamRunId: z.string().optional().describe("Unique team run identifier."),
+      team_id: z.string().optional().describe("Alias for teamRunId."),
+      targetMemberName: z.string().optional().describe("Name of the member to approve shutdown for."),
+      memberName: z.string().optional().describe("Alias for targetMemberName."),
+      cwd: z.string().optional().describe("Project root working directory."),
+    },
+    chain: [],
+    timeoutSec: 30,
+    buildPrompt: () => "",
+    kind: "team",
+  },
+  {
+    name: "team_reject_shutdown",
+    description:
+      "Reject a pending shutdown request for a team member with a mandatory explanation. " +
+      "Restores member from 'awaiting_shutdown' back to 'idle'.",
+    schema: {
+      teamRunId: z.string().optional().describe("Unique team run identifier."),
+      team_id: z.string().optional().describe("Alias for teamRunId."),
+      targetMemberName: z.string().optional().describe("Name of the member to reject shutdown for."),
+      memberName: z.string().optional().describe("Alias for targetMemberName."),
+      reason: z.string().describe("Mandatory justification for rejecting shutdown."),
+      cwd: z.string().optional().describe("Project root working directory."),
+    },
+    chain: [],
+    timeoutSec: 30,
+    buildPrompt: () => "",
+    kind: "team",
+  },
+  {
+    name: "team_send_message",
+    description:
+      "Send a message to a specific team member or broadcast to all members (to='*'). " +
+      "Subject to inbox payload (32 KB) and unread backpressure (256 KB) limits.",
+    schema: {
+      teamRunId: z.string().optional().describe("Unique team run identifier."),
+      team_id: z.string().optional().describe("Alias for teamRunId."),
+      to: z.string().describe("Recipient member name or '*' for broadcast."),
+      body: z.union([z.string(), z.record(z.unknown())]).describe("Message content payload."),
+      from: z.string().optional().describe("Sender name (defaults to 'lead')."),
+      cwd: z.string().optional().describe("Project root working directory."),
+    },
+    chain: [],
+    timeoutSec: 30,
+    buildPrompt: () => "",
+    kind: "team",
+  },
+  {
+    name: "team_task_create",
+    description:
+      "Create a new task in the shared team tasklist with subject, description, assigned owner, and blocker dependencies.",
+    schema: {
+      teamRunId: z.string().optional().describe("Unique team run identifier."),
+      team_id: z.string().optional().describe("Alias for teamRunId."),
+      subject: z.string().describe("Task title or summary."),
+      description: z.string().optional().describe("Detailed task description and acceptance criteria."),
+      owner: z.string().optional().describe("Assigned member name."),
+      blockedBy: z
+        .array(z.string())
+        .optional()
+        .describe("Task IDs that must complete before this task can be claimed."),
+      blocked_by: z.array(z.string()).optional().describe("Alias for blockedBy."),
+      cwd: z.string().optional().describe("Project root working directory."),
+    },
+    chain: [],
+    timeoutSec: 30,
+    buildPrompt: () => "",
+    kind: "team",
+  },
+  {
+    name: "team_task_list",
+    description:
+      "List tasks in the shared team tasklist, optionally filtered by status ('pending', 'claimed', 'in_progress', 'completed', 'deleted') or owner.",
+    schema: {
+      teamRunId: z.string().optional().describe("Unique team run identifier."),
+      team_id: z.string().optional().describe("Alias for teamRunId."),
+      status: z
+        .string()
+        .optional()
+        .describe("Filter by task status ('pending', 'claimed', 'in_progress', 'completed', 'deleted')."),
+      owner: z.string().optional().describe("Filter by assigned owner member name."),
+      cwd: z.string().optional().describe("Project root working directory."),
+    },
+    chain: [],
+    timeoutSec: 30,
+    buildPrompt: () => "",
+    kind: "team",
+  },
+  {
+    name: "team_task_get",
+    description:
+      "Retrieve full details of a specific task from the team tasklist by ID.",
+    schema: {
+      teamRunId: z.string().optional().describe("Unique team run identifier."),
+      team_id: z.string().optional().describe("Alias for teamRunId."),
+      taskId: z.string().optional().describe("Task identifier to retrieve."),
+      task_id: z.string().optional().describe("Alias for taskId."),
+      id: z.string().optional().describe("Alias for taskId."),
+      cwd: z.string().optional().describe("Project root working directory."),
+    },
+    chain: [],
+    timeoutSec: 30,
+    buildPrompt: () => "",
+    kind: "team",
+  },
+  {
+    name: "team_task_update",
+    description:
+      "Update task status or owner in the shared team tasklist. " +
+      "Enforces atomic claims ('claimed' requires owner) and forward-only status transitions ('claimed' -> 'in_progress' -> 'completed').",
+    schema: {
+      teamRunId: z.string().optional().describe("Unique team run identifier."),
+      team_id: z.string().optional().describe("Alias for teamRunId."),
+      taskId: z.string().optional().describe("Task identifier to update."),
+      task_id: z.string().optional().describe("Alias for taskId."),
+      id: z.string().optional().describe("Alias for taskId."),
+      status: z
+        .string()
+        .optional()
+        .describe("New status ('claimed', 'in_progress', 'completed', 'deleted')."),
+      owner: z.string().optional().describe("Assigned owner member name (required when status is 'claimed')."),
+      cwd: z.string().optional().describe("Project root working directory."),
+    },
+    chain: [],
+    timeoutSec: 30,
+    buildPrompt: () => "",
+    kind: "team",
   },
 ];

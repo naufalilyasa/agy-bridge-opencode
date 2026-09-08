@@ -1,9 +1,14 @@
 import { describe, it, expect } from "vitest";
+import { z } from "zod";
 import { TOOLS, resolveFiles } from "../src/tools.js";
 
 describe("TOOLS", () => {
-  it("defines the eight tools", () => {
-    expect(TOOLS.map((t) => t.name).sort()).toEqual([
+  it("defines the eight standard tools", () => {
+    expect(
+      TOOLS.filter((t) => t.kind !== "team")
+        .map((t) => t.name)
+        .sort(),
+    ).toEqual([
       "adversarial_review",
       "analyze_files",
       "deep_search",
@@ -15,8 +20,8 @@ describe("TOOLS", () => {
     ]);
   });
 
-  it("every tool except get_session_status and list_sessions has a non-empty model chain", () => {
-    for (const t of TOOLS) {
+  it("every standard tool except get_session_status and list_sessions has a non-empty model chain", () => {
+    for (const t of TOOLS.filter((t) => t.kind !== "team")) {
       if (t.name === "get_session_status" || t.name === "list_sessions")
         expect(t.chain).toEqual([]);
       else expect(t.chain.length).toBeGreaterThan(0);
@@ -32,6 +37,159 @@ describe("TOOLS", () => {
 
   it("web_lookup fails fast (well under the old 20-minute default)", () => {
     expect(TOOLS.find((t) => t.name === "web_lookup")!.timeoutSec).toBeLessThanOrEqual(180);
+  });
+});
+
+describe("TEAM TOOLS (kind: 'team')", () => {
+  const teamTools = TOOLS.filter((t) => t.kind === "team");
+
+  it("registers exactly 12 team tools with kind 'team'", () => {
+    expect(teamTools.length).toBe(12);
+  });
+
+  it("contains all 12 expected team tool names", () => {
+    const expectedNames = [
+      "team_create",
+      "team_list",
+      "team_status",
+      "team_delete",
+      "team_shutdown_request",
+      "team_approve_shutdown",
+      "team_reject_shutdown",
+      "team_send_message",
+      "team_task_create",
+      "team_task_list",
+      "team_task_get",
+      "team_task_update",
+    ].sort();
+
+    expect(teamTools.map((t) => t.name).sort()).toEqual(expectedNames);
+  });
+
+  it("assigns 60s timeout for create/delete and 30s for the rest", () => {
+    for (const t of teamTools) {
+      if (t.name === "team_create" || t.name === "team_delete") {
+        expect(t.timeoutSec).toBe(60);
+      } else {
+        expect(t.timeoutSec).toBe(30);
+      }
+    }
+  });
+
+  it("validates team_create schema parsing", () => {
+    const tool = teamTools.find((t) => t.name === "team_create")!;
+    const schema = z.object(tool.schema);
+
+    expect(schema.safeParse({}).success).toBe(true);
+    expect(schema.safeParse({ name: "my-team", members: ["lead", "dev"] }).success).toBe(true);
+    expect(
+      schema.safeParse({
+        inline_spec: JSON.stringify({ name: "my-team", members: [] }),
+      }).success,
+    ).toBe(true);
+    expect(
+      schema.safeParse({
+        inline_spec: { name: "my-team", members: [] },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("validates team_list schema parsing", () => {
+    const tool = teamTools.find((t) => t.name === "team_list")!;
+    const schema = z.object(tool.schema);
+
+    expect(schema.safeParse({}).success).toBe(true);
+    expect(schema.safeParse({ cwd: "/path/to/project" }).success).toBe(true);
+  });
+
+  it("validates team_status schema parsing", () => {
+    const tool = teamTools.find((t) => t.name === "team_status")!;
+    const schema = z.object(tool.schema);
+
+    expect(schema.safeParse({ teamRunId: "team-123" }).success).toBe(true);
+    expect(schema.safeParse({ team_id: "team-123" }).success).toBe(true);
+  });
+
+  it("validates team_delete schema parsing", () => {
+    const tool = teamTools.find((t) => t.name === "team_delete")!;
+    const schema = z.object(tool.schema);
+
+    expect(schema.safeParse({ teamRunId: "team-123" }).success).toBe(true);
+    expect(schema.safeParse({ team_id: "team-123" }).success).toBe(true);
+  });
+
+  it("validates team_shutdown_request and approve schemas", () => {
+    const reqTool = teamTools.find((t) => t.name === "team_shutdown_request")!;
+    const appTool = teamTools.find((t) => t.name === "team_approve_shutdown")!;
+
+    expect(z.object(reqTool.schema).safeParse({ teamRunId: "t1", targetMemberName: "m1" }).success).toBe(true);
+    expect(z.object(reqTool.schema).safeParse({ team_id: "t1", memberName: "m1" }).success).toBe(true);
+
+    expect(z.object(appTool.schema).safeParse({ teamRunId: "t1", targetMemberName: "m1" }).success).toBe(true);
+    expect(z.object(appTool.schema).safeParse({ team_id: "t1", memberName: "m1" }).success).toBe(true);
+  });
+
+  it("validates team_reject_shutdown requires reason", () => {
+    const tool = teamTools.find((t) => t.name === "team_reject_shutdown")!;
+    const schema = z.object(tool.schema);
+
+    expect(
+      schema.safeParse({
+        teamRunId: "t1",
+        targetMemberName: "m1",
+        reason: "Need more work done",
+      }).success,
+    ).toBe(true);
+
+    // Missing reason fails Zod schema
+    expect(schema.safeParse({ teamRunId: "t1", targetMemberName: "m1" }).success).toBe(false);
+  });
+
+  it("validates team_send_message schema requirements", () => {
+    const tool = teamTools.find((t) => t.name === "team_send_message")!;
+    const schema = z.object(tool.schema);
+
+    expect(schema.safeParse({ to: "lead", body: "hello" }).success).toBe(true);
+    expect(schema.safeParse({ to: "*", body: { task: "sync" }, from: "lead" }).success).toBe(true);
+
+    // Missing to or body fails
+    expect(schema.safeParse({ to: "lead" }).success).toBe(false);
+    expect(schema.safeParse({ body: "hello" }).success).toBe(false);
+  });
+
+  it("validates team_task_create schema requirements", () => {
+    const tool = teamTools.find((t) => t.name === "team_task_create")!;
+    const schema = z.object(tool.schema);
+
+    expect(
+      schema.safeParse({
+        teamRunId: "t1",
+        subject: "Implement API",
+        description: "REST endpoints",
+        owner: "lead",
+        blockedBy: ["t0"],
+      }).success,
+    ).toBe(true);
+
+    // Missing subject fails
+    expect(schema.safeParse({ teamRunId: "t1" }).success).toBe(false);
+  });
+
+  it("validates team_task_list, get, and update schemas", () => {
+    const listTool = teamTools.find((t) => t.name === "team_task_list")!;
+    const getTool = teamTools.find((t) => t.name === "team_task_get")!;
+    const updateTool = teamTools.find((t) => t.name === "team_task_update")!;
+
+    expect(z.object(listTool.schema).safeParse({ teamRunId: "t1", status: "pending" }).success).toBe(true);
+    expect(z.object(getTool.schema).safeParse({ teamRunId: "t1", taskId: "task-1" }).success).toBe(true);
+    expect(
+      z.object(updateTool.schema).safeParse({
+        teamRunId: "t1",
+        taskId: "task-1",
+        status: "in_progress",
+        owner: "lead",
+      }).success,
+    ).toBe(true);
   });
 });
 
