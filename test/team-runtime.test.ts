@@ -499,15 +499,11 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
       await expect(
         runtime.buildWakePrompt({}, {}),
       ).rejects.toThrow(TeamError);
-      expect(() => runtime.startLoop(testDir, "team-123")).toThrow(
-        /not implemented \(T10/,
-      );
-      expect(() => runtime.stopLoop("team-123")).toThrow(
-        /not implemented \(T10/,
-      );
-      await expect(runtime.deleteTeam(testDir, "team-123")).rejects.toThrow(
-        /not implemented \(T10/,
-      );
+      // startLoop, stopLoop, deleteTeam are now implemented (T10)
+      expect(runtime.startLoop(testDir, "team-123")).toBe(true);
+      expect(runtime.stopLoop("team-123")).toBe(true);
+      const delResult = await runtime.deleteTeam(testDir, "team-123");
+      expect(delResult.status).toBe("deleted");
     });
   });
 
@@ -1520,6 +1516,303 @@ describe("src/team/runtime T9: effective semaphore & wakeMember wiring", () => {
     // Active concurrency must reach exactly 4 (cap) and NEVER exceed 4
     expect(maxActiveRuns).toBe(4);
     expect(activeRuns).toBe(0);
+  });
+});
+
+describe("src/team/runtime T10: wake loop and deleteTeam drain", () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = path.join(os.tmpdir(), `team-loop-test-${randomUUID()}`);
+    await fs.mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    try {
+      await fs.rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  const twoMemberSpec: TeamSpec = {
+    version: 1,
+    name: "loop-team",
+    leadAgentId: "worker-busy",
+    backendType: "cli",
+    members: [
+      {
+        name: "worker-busy",
+        kind: "subagent_type",
+        subagent_type: "quick",
+        backendType: "cli",
+      },
+      {
+        name: "worker-idle",
+        kind: "subagent_type",
+        subagent_type: "quick",
+        backendType: "cli",
+      },
+    ],
+  };
+
+  it("startLoop wakes members with pending work and skips idle ones", async () => {
+    const woken: string[] = [];
+    const fakeRunWake = async (opts: WakeOptions): Promise<WakeResult> => {
+      woken.push(opts.member);
+      return { output: "done", sessionId: "sess", model: opts.model };
+    };
+
+    const runtime = new TeamRuntime({
+      cfg: { teamPollMs: 15 },
+      spawnWorktree: async (_pr, teamRunId, member) => {
+        const wt = resolveMemberWorktree(teamRunId, member);
+        return { worktreePath: wt, cwd: wt, sessionCwd: path.resolve(testDir) };
+      },
+      removeWorktrees: async () => {},
+      runWake: fakeRunWake,
+      resolveModelChain: (m) => [m.resolvedRole],
+    });
+
+    const { teamRunId } = await runtime.createTeam(twoMemberSpec, testDir);
+
+    // Mark both members as previously woken so neverWoken does not trigger worker-idle
+    await updateTeamState(testDir, teamRunId, (s) => {
+      for (const m of s.members) {
+        m.lastWakeAt = Date.now();
+      }
+      return s;
+    });
+
+    // Send a message to worker-busy inbox only
+    const rd = runDir(testDir, teamRunId);
+    await sendMessage(rd, { from: "lead", to: "worker-busy", body: "Pending task" });
+
+    // Start loop
+    const started = runtime.startLoop(testDir, teamRunId);
+    expect(started).toBe(true);
+
+    // Wait for at least one tick
+    await new Promise((r) => setTimeout(r, 60));
+    runtime.stopLoop(teamRunId);
+
+    // worker-busy should have been woken, worker-idle should not
+    expect(woken).toContain("worker-busy");
+    expect(woken).not.toContain("worker-idle");
+  });
+
+  it("loop survives a failing member (one wake throws, others still run)", async () => {
+    const runs: string[] = [];
+    const fakeRunWake = async (opts: WakeOptions): Promise<WakeResult> => {
+      runs.push(opts.member);
+      if (opts.member === "worker-busy") {
+        throw new Error("worker-busy wake failure");
+      }
+      return { output: "ok", sessionId: "sess", model: opts.model };
+    };
+
+    const runtime = new TeamRuntime({
+      cfg: { teamPollMs: 15 },
+      spawnWorktree: async (_pr, teamRunId, member) => {
+        const wt = resolveMemberWorktree(teamRunId, member);
+        return { worktreePath: wt, cwd: wt, sessionCwd: path.resolve(testDir) };
+      },
+      removeWorktrees: async () => {},
+      runWake: fakeRunWake,
+      resolveModelChain: (m) => [m.resolvedRole],
+    });
+
+    const { teamRunId } = await runtime.createTeam(twoMemberSpec, testDir);
+
+    // Give both members work so both get triggered
+    const rd = runDir(testDir, teamRunId);
+    await sendMessage(rd, { from: "lead", to: "worker-busy", body: "Job 1" });
+    await sendMessage(rd, { from: "lead", to: "worker-idle", body: "Job 2" });
+
+    runtime.startLoop(testDir, teamRunId);
+    const start = Date.now();
+    while (runs.length < 2 && Date.now() - start < 1000) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    runtime.stopLoop(teamRunId);
+
+    // Both members were attempted, failure of worker-busy did not stop worker-idle
+    expect(runs).toContain("worker-busy");
+    expect(runs).toContain("worker-idle");
+  });
+
+  it("double startLoop returns false", async () => {
+    const runtime = new TeamRuntime({
+      cfg: { teamPollMs: 100 },
+      spawnWorktree: async (_pr, teamRunId, member) => {
+        const wt = resolveMemberWorktree(teamRunId, member);
+        return { worktreePath: wt, cwd: wt, sessionCwd: path.resolve(testDir) };
+      },
+      removeWorktrees: async () => {},
+    });
+
+    const { teamRunId } = await runtime.createTeam(twoMemberSpec, testDir);
+
+    const first = runtime.startLoop(testDir, teamRunId);
+    expect(first).toBe(true);
+
+    const second = runtime.startLoop(testDir, teamRunId);
+    expect(second).toBe(false);
+
+    expect(runtime.stopLoop(teamRunId)).toBe(true);
+    expect(runtime.stopLoop(teamRunId)).toBe(false);
+  });
+
+  it("stopLoop stops waking", async () => {
+    let wakeCount = 0;
+    const fakeRunWake = async (_opts: WakeOptions): Promise<WakeResult> => {
+      wakeCount++;
+      return { output: "ok", sessionId: "sess", model: "model" };
+    };
+
+    const runtime = new TeamRuntime({
+      cfg: { teamPollMs: 15 },
+      spawnWorktree: async (_pr, teamRunId, member) => {
+        const wt = resolveMemberWorktree(teamRunId, member);
+        return { worktreePath: wt, cwd: wt, sessionCwd: path.resolve(testDir) };
+      },
+      removeWorktrees: async () => {},
+      runWake: fakeRunWake,
+      resolveModelChain: (m) => [m.resolvedRole],
+    });
+
+    const singleSpec: TeamSpec = {
+      version: 1,
+      name: "single-team",
+      leadAgentId: "worker-solo",
+      backendType: "cli",
+      members: [
+        {
+          name: "worker-solo",
+          kind: "subagent_type",
+          subagent_type: "quick",
+          backendType: "cli",
+        },
+      ],
+    };
+
+    const { teamRunId } = await runtime.createTeam(singleSpec, testDir);
+
+    // Start loop and wait until at least 1 wake completes
+    runtime.startLoop(testDir, teamRunId);
+    const start = Date.now();
+    while (wakeCount === 0 && Date.now() - start < 1000) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    const countAtStop = wakeCount;
+    expect(countAtStop).toBeGreaterThan(0);
+
+    // Stop loop
+    expect(runtime.stopLoop(teamRunId)).toBe(true);
+
+    // Wait more intervals and verify count does not increase
+    await new Promise((r) => setTimeout(r, 60));
+    expect(wakeCount).toBe(countAtStop);
+  });
+
+  it("deleteTeam: stopLoop called, worktrees removed, runDir gone, idempotent second call", async () => {
+    let removed = 0;
+    const runtime = new TeamRuntime({
+      cfg: { teamPollMs: 15 },
+      spawnWorktree: async (_pr, teamRunId, member) => {
+        const wt = resolveMemberWorktree(teamRunId, member);
+        return { worktreePath: wt, cwd: wt, sessionCwd: path.resolve(testDir) };
+      },
+      removeWorktrees: async () => {
+        removed += 2;
+      },
+      runWake: async () => ({ output: "ok", sessionId: "sess", model: "model" }),
+      resolveModelChain: (m) => [m.resolvedRole],
+    });
+
+    const { teamRunId } = await runtime.createTeam(twoMemberSpec, testDir);
+    const rd = runDir(testDir, teamRunId);
+    expect(existsSync(rd)).toBe(true);
+
+    runtime.startLoop(testDir, teamRunId);
+
+    // Delete team
+    const res = await runtime.deleteTeam(testDir, teamRunId);
+    expect(res.status).toBe("deleted");
+    expect(res.teamRunId).toBe(teamRunId);
+    expect(res.removedWorktrees).toBe(2);
+    expect(removed).toBe(2);
+
+    // runDir is gone
+    expect(existsSync(rd)).toBe(false);
+
+    // Loop was stopped
+    expect(runtime.stopLoop(teamRunId)).toBe(false);
+
+    // Idempotent second call returns status: 'deleted' without error
+    const res2 = await runtime.deleteTeam(testDir, teamRunId);
+    expect(res2.status).toBe("deleted");
+    expect(res2.teamRunId).toBe(teamRunId);
+    expect(res2.removedWorktrees).toBe(0);
+  });
+
+  it("deleteTeam with running member waits (fake runWake with controllable resolve) then cleans", async () => {
+    let resolveRun!: () => void;
+    let wakeStarted = false;
+    let wakeCompleted = false;
+
+    const fakeRunWake = async (opts: WakeOptions): Promise<WakeResult> => {
+      wakeStarted = true;
+      await new Promise<void>((r) => {
+        resolveRun = r;
+      });
+      wakeCompleted = true;
+      return { output: "delayed ok", sessionId: "sess", model: opts.model };
+    };
+
+    const runtime = new TeamRuntime({
+      spawnWorktree: async (_pr, teamRunId, member) => {
+        const wt = resolveMemberWorktree(teamRunId, member);
+        return { worktreePath: wt, cwd: wt, sessionCwd: path.resolve(testDir) };
+      },
+      removeWorktrees: async () => {},
+      runWake: fakeRunWake,
+      resolveModelChain: (m) => [m.resolvedRole],
+    });
+
+    const { teamRunId } = await runtime.createTeam(twoMemberSpec, testDir);
+    const rd = runDir(testDir, teamRunId);
+
+    // Start a wake in the background
+    const wakePromise = runtime.wakeMember(testDir, teamRunId, "worker-busy");
+
+    // Wait until runWake has started
+    while (!wakeStarted) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+
+    // Call deleteTeam while wake is in-flight
+    let deleteDone = false;
+    const deletePromise = runtime.deleteTeam(testDir, teamRunId).then((res) => {
+      deleteDone = true;
+      return res;
+    });
+
+    // Verify deleteTeam is waiting and hasn't finished yet
+    await new Promise((r) => setTimeout(r, 30));
+    expect(deleteDone).toBe(false);
+    expect(wakeCompleted).toBe(false);
+
+    // Now resolve the in-flight wake
+    resolveRun();
+    await wakePromise;
+    expect(wakeCompleted).toBe(true);
+
+    // Now deleteTeam should finish
+    const delRes = await deletePromise;
+    expect(delRes.status).toBe("deleted");
+    expect(existsSync(rd)).toBe(false);
   });
 });
 

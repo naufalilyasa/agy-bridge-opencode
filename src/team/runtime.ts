@@ -21,7 +21,7 @@ import {
   withLock,
   resolveReal,
 } from "./store.js";
-import { drainInbox, type Message } from "./mailbox.js";
+import { drainInbox, getInboxUnreadBytes, type Message } from "./mailbox.js";
 import { listTasks, type Task } from "./tasklist.js";
 
 const execFileAsync = promisify(execFile);
@@ -112,6 +112,8 @@ export interface TeamRuntimeConfig {
   teamMaxParallel?: number;
   teamMemberTimeoutSec?: number;
   pollIntervalMs?: number;
+  teamPollMs?: number;
+  killGraceMs?: number;
   [key: string]: unknown;
 }
 
@@ -229,6 +231,8 @@ export interface TeamRuntimeDeps {
   resolveModelChain?: (member: TeamRunMember) => string[];
   semaphore?: TeamSemaphore;
   onProgress?: (elapsedSec: number) => void;
+  setInterval?: typeof setInterval;
+  clearInterval?: typeof clearInterval;
   [key: string]: unknown;
 }
 
@@ -584,6 +588,11 @@ export class TeamRuntime {
   readonly deps: TeamRuntimeDeps;
   private readonly teamRoots = new Map<string, string>();
   readonly semaphore: TeamSemaphore;
+  private readonly loops = new Map<string, NodeJS.Timeout>();
+  private readonly activeRuns = new Map<
+    string,
+    Set<{ promise: Promise<unknown>; controller: AbortController }>
+  >();
 
   constructor(deps: TeamRuntimeDeps = {}) {
     this.deps = deps;
@@ -964,6 +973,32 @@ export class TeamRuntime {
     // --- Acquire semaphore slot ---
     await this.semaphore.acquire();
 
+    const abortController = new AbortController();
+    if (opts?.signal) {
+      if (opts.signal.aborted) {
+        abortController.abort(opts.signal.reason);
+      } else {
+        opts.signal.addEventListener("abort", () => {
+          abortController.abort(opts.signal?.reason);
+        });
+      }
+    }
+
+    let resolveRunPromise!: () => void;
+    const runPromise = new Promise<void>((r) => {
+      resolveRunPromise = r;
+    });
+    const runRecord = {
+      promise: runPromise,
+      controller: abortController,
+    };
+
+    if (!this.activeRuns.has(teamRunId)) {
+      this.activeRuns.set(teamRunId, new Set());
+    }
+    const currentTeamRuns = this.activeRuns.get(teamRunId)!;
+    currentTeamRuns.add(runRecord);
+
     try {
       // --- Mark member as running ---
       await updateTeamState(projectRoot, teamRunId, (s) => {
@@ -1008,7 +1043,7 @@ export class TeamRuntime {
             model,
             conversationId,
             timeoutSec,
-            signal: opts?.signal,
+            signal: abortController.signal,
             onProgress: opts?.onProgress ?? this.deps.onProgress,
           });
           usedModel = model;
@@ -1078,6 +1113,12 @@ export class TeamRuntime {
         model: result.model ?? usedModel,
       };
     } finally {
+      currentTeamRuns.delete(runRecord);
+      if (currentTeamRuns.size === 0) {
+        this.activeRuns.delete(teamRunId);
+      }
+      resolveRunPromise();
+
       // --- ALWAYS: release semaphore + reset status ---
       this.semaphore.release();
 
@@ -1101,16 +1142,178 @@ export class TeamRuntime {
     return buildWakePrompt(stateOrMember, memberNameOrCtx, cfg ?? this.deps.cfg);
   }
 
-  // T10 loop stub seams
-  startLoop(_projectRoot: string, _teamRunId: string): void {
-    throw new Error("not implemented (T10: startLoop)");
+  startLoop(
+    projectRootOrTeamRunId: string,
+    maybeTeamRunId?: string,
+  ): boolean {
+    const { projectRoot, teamRunId } = this.resolveRootAndId(
+      projectRootOrTeamRunId,
+      maybeTeamRunId,
+    );
+
+    if (this.loops.has(teamRunId)) {
+      return false;
+    }
+
+    const pollMs =
+      this.deps.cfg?.teamPollMs ??
+      this.deps.cfg?.pollIntervalMs ??
+      3000;
+
+    const setIntervalFn = this.deps.setInterval ?? setInterval;
+
+    const tick = async () => {
+      try {
+        const state = await loadTeamState(projectRoot, teamRunId);
+        if (!state || state.status === "deleted") {
+          this.stopLoop(teamRunId);
+          return;
+        }
+
+        const rd = runDir(projectRoot, teamRunId);
+
+        for (const member of state.members) {
+          if (
+            member.status === "awaiting_shutdown" ||
+            member.status === "removed" ||
+            member.status === "running"
+          ) {
+            continue;
+          }
+
+          const neverWoken = member.lastWakeAt == null;
+
+          let hasUnread = false;
+          try {
+            const inboxDir = path.join(rd, "inboxes", member.name);
+            hasUnread = (await getInboxUnreadBytes(inboxDir)) > 0;
+          } catch {
+            hasUnread = false;
+          }
+
+          let hasTasks = false;
+          try {
+            const tasks = await listTasks(rd, { owner: member.name });
+            hasTasks = tasks.some(
+              (t) =>
+                t.status === "pending" ||
+                t.status === "in_progress" ||
+                t.status === "claimed",
+            );
+          } catch {
+            hasTasks = false;
+          }
+
+          if (neverWoken || hasUnread || hasTasks) {
+            this.wakeMember(projectRoot, teamRunId, member.name).catch((_err) => {
+              // Failures on one member never abort loop or other members
+            });
+          }
+        }
+      } catch {
+        // State read failure or loop error, ignore so loop continues
+      }
+    };
+
+    const handle = setIntervalFn(tick, pollMs);
+    this.loops.set(teamRunId, handle as NodeJS.Timeout);
+    return true;
   }
 
-  stopLoop(_teamRunId: string): void {
-    throw new Error("not implemented (T10: stopLoop)");
+  stopLoop(projectRootOrTeamRunId: string, maybeTeamRunId?: string): boolean {
+    const teamRunId = maybeTeamRunId ?? projectRootOrTeamRunId;
+    const handle = this.loops.get(teamRunId);
+    if (!handle) {
+      return false;
+    }
+    const clearIntervalFn = this.deps.clearInterval ?? clearInterval;
+    clearIntervalFn(handle);
+    this.loops.delete(teamRunId);
+    return true;
   }
 
-  async deleteTeam(_projectRoot: string, _teamRunId: string): Promise<unknown> {
-    throw new Error("not implemented (T10: deleteTeam)");
+  async deleteTeam(
+    projectRootOrTeamRunId: string,
+    maybeTeamRunId?: string,
+  ): Promise<{ teamRunId: string; status: "deleted"; removedWorktrees: number }> {
+    const { projectRoot, teamRunId } = this.resolveRootAndId(
+      projectRootOrTeamRunId,
+      maybeTeamRunId,
+    );
+
+    // (a) stopLoop
+    this.stopLoop(teamRunId);
+
+    // (b) abort all active runs
+    const runs = this.activeRuns.get(teamRunId);
+    if (runs) {
+      for (const r of runs) {
+        r.controller.abort("Team deleted");
+      }
+    }
+
+    // (c) await Promise.allSettled(activeRuns) with 5000ms cap
+    if (runs && runs.size > 0) {
+      const promises = Array.from(runs).map((r) => r.promise);
+      const killGraceMs = this.deps.cfg?.killGraceMs ?? 5000;
+      await Promise.race([
+        Promise.allSettled(promises),
+        new Promise((resolve) => setTimeout(resolve, killGraceMs)),
+      ]);
+    }
+
+    // (d) removeWorktrees (best-effort per member)
+    const rd = runDir(projectRoot, teamRunId);
+    let memberNames: string[] = [];
+    let removedWorktrees = 0;
+
+    try {
+      const state = await loadTeamState(projectRoot, teamRunId);
+      memberNames = state.members.map((m) => m.name);
+    } catch {
+      try {
+        const inboxesDir = path.join(rd, "inboxes");
+        const entries = await fsp.readdir(inboxesDir);
+        memberNames = entries.filter(
+          (e) => !e.startsWith(".") && !e.endsWith(".lock"),
+        );
+      } catch {
+        memberNames = [];
+      }
+    }
+
+    if (memberNames.length > 0) {
+      try {
+        await this.removeWorktrees(projectRoot, teamRunId, memberNames);
+        removedWorktrees = memberNames.length;
+      } catch {
+        // best-effort per member
+      }
+    }
+
+    // (e) rm -rf runDir. Update state status -> 'deleted' before rm
+    try {
+      await updateTeamState(projectRoot, teamRunId, (s) => {
+        s.status = "deleted";
+        return s;
+      });
+    } catch {
+      // ignore if state already gone
+    }
+
+    try {
+      await fsp.rm(rd, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+
+    this.teamRoots.delete(teamRunId);
+    this.activeRuns.delete(teamRunId);
+
+    return {
+      teamRunId,
+      status: "deleted",
+      removedWorktrees,
+    };
   }
 }
