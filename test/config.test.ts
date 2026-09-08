@@ -13,6 +13,7 @@ describe("loadConfig", () => {
       perToolTimeouts: {},
       maxOutputChars: 50_000,
       defaultModel: undefined,
+      toolModels: {},
       roleModels: {},
       skipPermissions: true,
       sandbox: false,
@@ -76,11 +77,41 @@ describe("loadConfig", () => {
     });
   });
 
+  it("parses per-tool AGY_TOOL_MODEL_<TOOL> overrides", () => {
+    const c = loadConfig({
+      AGY_TOOL_MODEL_WEB_LOOKUP: "gemini-3.8-flash-medium",
+      AGY_TOOL_MODEL_DELEGATE: "claude-sonnet-4-6,gemini-3.7-flash-high",
+    });
+    expect(c.toolModels).toEqual({
+      web_lookup: ["gemini-3.8-flash-medium"],
+      delegate: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
+    });
+  });
+
+  it("normalizes toolModels string and array from config file", () => {
+    const jsonc = `{
+      "toolModels": {
+        "web_lookup": "gemini-3.8-flash-medium",
+        "deep_search": ["gemini-3.8-flash-medium", "claude-sonnet-4-6"],
+        "follow-up": "claude-sonnet-4-6"
+      }
+    }`;
+    const parsed = JSON.parse(stripJsonComments(jsonc));
+    // simulate file load with temporary AGY_CONFIG_PATH or directly check loader logic
+    const c = loadConfig({
+      AGY_CONFIG_PATH: path.resolve(__dirname, "../agy.config.json.example"),
+    });
+    expect(c.toolModels?.web_lookup).toEqual(["gemini-3.7-flash-high"]);
+    expect(c.toolModels?.deep_search).toEqual(["gemini-3.7-flash-high", "claude-sonnet-4-6"]);
+  });
+
   it("loads config from AGY_CONFIG_PATH JSON file", () => {
     const c = loadConfig({
       AGY_CONFIG_PATH: path.resolve(__dirname, "../agy.config.json.example"),
     });
     expect(c.defaultModel).toBe("gemini-3.7-flash-high");
+    expect(c.toolModels?.web_lookup).toEqual(["gemini-3.7-flash-high"]);
+    expect(c.toolModels?.deep_search).toEqual(["gemini-3.7-flash-high", "claude-sonnet-4-6"]);
     expect(c.roleModels.oracle).toEqual(["claude-sonnet-4-6", "gemini-3.7-flash-high"]);
     expect(c.roleModels["git-master"]).toEqual(["gemini-3.7-flash-high", "claude-sonnet-4-6"]);
   });

@@ -99,6 +99,17 @@ Example snippet for `~/.gemini/config/agy_bridge.jsonc`:
 }
 ```
 
+### 2.3 Model Configuration & Resolution Precedence
+
+Model selection follows a strict precedence ladder:
+1. **Explicit Model (`args.model`)**: One-shot override; bypasses cooldown and is not persisted across turns.
+2. **Per-Tool Overrides (`toolModels[tool.name]`)**: Overrides configured per tool name (e.g. `web_lookup`, `delegate`, `follow_up`). Normalizes string or string array.
+3. **Per-Role Overrides (`roleModels[roleKey]`)**: Overrides configured per agent role (e.g. `oracle`, `git-master`).
+4. **Default Model (`defaultModel`)**: Global fallback model when configured.
+5. **Builtin Chain (`OMO_ROLES[roleKey]?.chain` / `tool.chain`)**: Hardcoded defaults per role or tool.
+
+If all candidate models in the resolved chain are exhausted by quota or server errors, `agy-bridge` raises `ALL_MODELS_EXHAUSTED` with a dynamic candidate list and quota reset wait instructions. Follow-up calls (`follow_up`) without an explicit model restart resolution from the primary model of the chain rather than locking onto the previous turn's failover model.
+
 ---
 
 ## 3. Quick Start & Usage Guide

@@ -15,6 +15,7 @@ const cfg: Config = {
   perToolTimeouts: {},
   maxOutputChars: 50_000,
   defaultModel: undefined,
+  toolModels: {},
   roleModels: {},
   skipPermissions: true,
   sandbox: false,
@@ -317,5 +318,106 @@ describe("createToolHandler", () => {
 
     cooldowns.clear();
     expect(cooldowns.cooling("gemini-3.8-flash-high")).toBe(false);
+  });
+
+  it("cfg.toolModels overrides cfg.roleModels and builtin chain", async () => {
+    const f = fakeDeps();
+    // oracle role default is Claude Sonnet 4.6 (Thinking), but toolModels[delegate] specifies Gemini
+    const handler = handlerFor("delegate", f, {
+      roleModels: { oracle: ["Claude Sonnet 4.6 (Thinking)"] },
+      toolModels: { delegate: ["Gemini 3.7 Flash (High)"] },
+    });
+    await handler({ role: "oracle", task: "Review architecture" });
+    expect(f.runs).toHaveLength(1);
+    expect(f.modelOf(f.runs[0])).toBe("Gemini 3.7 Flash (High)");
+  });
+
+  it("explicit model overrides cfg.toolModels and bypasses cooldown", async () => {
+    const f = fakeDeps();
+    const cooldowns = new CooldownRegistry();
+    cooldowns.set("gemini-3.8-flash-high", 9999);
+
+    const handler = handlerFor(
+      "delegate",
+      f,
+      {
+        toolModels: { delegate: ["Claude Sonnet 4.6 (Thinking)"] },
+      },
+      cooldowns,
+    );
+    // Explicit model overrides toolModels AND bypasses cooling status
+    await handler({ prompt: "do work", model: "gemini-3.8-flash-high" });
+    expect(f.runs).toHaveLength(1);
+    expect(f.modelOf(f.runs[0])).toBe("gemini-3.8-flash-high");
+  });
+
+  it("returns ALL_MODELS_EXHAUSTED error with dynamic candidate list and wait quota instructions", async () => {
+    const f = fakeDeps(["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"]);
+    const handler = handlerFor("web_lookup", f);
+    const res = await handler({ query: "docs" });
+    expect(res.isError).toBe(true);
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("ALL_MODELS_EXHAUSTED");
+    expect(text).toContain("Candidate models (Gemini 3.7 Flash (High), Claude Sonnet 4.6 (Thinking))");
+    expect(text).toMatch(/Retry after the quota resets, or pass an explicit `model`/i);
+  });
+
+  it("follow_up without explicit model restarts from beginning of chain rather than locking to session last used model", async () => {
+    // delegate chain for tester: Gemini 3.7 Flash then Claude Sonnet 4.6
+    // In first run, Gemini hits 429 quota, so delegate fails over to Claude Sonnet
+    const quotaModels = ["Gemini 3.7 Flash (High)"];
+    const f = fakeDeps(quotaModels);
+    const cooldowns = new CooldownRegistry();
+    const delegateHandler = handlerFor(
+      "delegate",
+      f,
+      {
+        roleModels: { tester: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"] },
+      },
+      cooldowns,
+    );
+
+    const res1 = await delegateHandler({ task: "run tests", role: "tester" });
+    expect(res1.isError).toBeUndefined();
+    expect(f.runs).toHaveLength(2);
+    expect(f.modelOf(f.runs[0])).toBe("Gemini 3.7 Flash (High)"); // failed on quota
+    expect(f.modelOf(f.runs[1])).toBe("Claude Sonnet 4.6 (Thinking)"); // succeeded on fallback
+
+    // Quota resets: Gemini is working again and cooldown is cleared
+    quotaModels.length = 0;
+    cooldowns.clear();
+
+    // Now call follow_up without explicit model
+    const followUpHandler = handlerFor(
+      "follow_up",
+      f,
+      {
+        roleModels: { tester: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"] },
+      },
+      cooldowns,
+    );
+
+    const res2 = await followUpHandler({ session_id: "sess-1", question: "continue" });
+    expect(res2.isError).toBeUndefined();
+    // follow_up must restart from the FIRST model in the chain (Gemini 3.7 Flash), not lock to Claude Sonnet
+    expect(f.runs).toHaveLength(3);
+    expect(f.modelOf(f.runs[2])).toBe("Gemini 3.7 Flash (High)");
+  });
+
+  it("follow_up respects cfg.toolModels[follow_up] over remembered role", async () => {
+    const f = fakeDeps();
+    // delegate saved role tester (Gemini)
+    await handlerFor("delegate", f)({
+      task: "build it",
+      role: "tester",
+      expected_outcome: "tests pass",
+    });
+
+    // follow_up has toolModels specifying Claude
+    const followUpHandler = handlerFor("follow_up", f, {
+      toolModels: { follow_up: ["Claude Sonnet 4.6 (Thinking)"] },
+    });
+    await followUpHandler({ session_id: "sess-1", question: "continue" });
+    expect(f.modelOf(f.runs[1])).toBe("Claude Sonnet 4.6 (Thinking)");
   });
 });

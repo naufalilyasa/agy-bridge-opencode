@@ -21,6 +21,22 @@ import {
   type TeamCooldownRegistry,
 } from "./team/runtime.js";
 
+export class AllModelsExhaustedError extends Error {
+  readonly code = "ALL_MODELS_EXHAUSTED";
+  readonly field?: string;
+
+  constructor(
+    message: string,
+    public readonly models: (string | undefined)[] = [],
+    public readonly attempts: string[] = [],
+    field?: string,
+  ) {
+    super(message);
+    this.name = "AllModelsExhaustedError";
+    this.field = field;
+  }
+}
+
 interface ToolResponse {
   [key: string]: unknown;
   content: { type: "text"; text: string }[];
@@ -206,8 +222,9 @@ export function createToolHandler(
         } catch {}
       }
       const effectiveChain =
-        (roleKey ? cfg.roleModels[roleKey] : undefined) ||
-        (roleKey ? OMO_ROLES[roleKey]?.chain : undefined) ||
+        cfg.toolModels?.[tool.name] ??
+        (roleKey ? cfg.roleModels[roleKey] : undefined) ??
+        (roleKey ? OMO_ROLES[roleKey]?.chain : undefined) ??
         tool.chain;
 
       const explicitModel = args.model as string | undefined;
@@ -281,10 +298,12 @@ export function createToolHandler(
 
       if (!result) {
         const modelList = resolution.models.filter(Boolean).join(", ") || "agy default";
-        throw new Error(
-          `Candidate models (${modelList}) are quota-exhausted or encountered server errors:\n` +
+        throw new AllModelsExhaustedError(
+          `[ALL_MODELS_EXHAUSTED] Candidate models (${modelList}) are quota-exhausted or encountered server errors:\n` +
             `${attempts.map((a) => `- ${a}`).join("\n")}\n` +
             `Retry after the quota resets, or pass an explicit \`model\`.`,
+          resolution.models,
+          attempts,
         );
       }
 

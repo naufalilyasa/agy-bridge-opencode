@@ -26,6 +26,13 @@
   // Default model jika tidak ada model yang ditentukan oleh role atau tool
   "defaultModel": "gemini-3.7-flash-high",
 
+  // Model chain overrides per tool (Urutan prioritas: explicit > toolModels > roles/roleModels > defaultModel > builtin chain)
+  // Nilai bisa berupa string tunggal atau array string
+  "toolModels": {
+    "web_lookup": "gemini-3.7-flash-high",
+    "deep_search": ["gemini-3.7-flash-high", "claude-sonnet-4-6"]
+  },
+
   // Konfigurasi Team Mode (Orkestrasi Multi-Agent)
   // Jumlah maksimum subagent yang dieksekusi secara paralel (default: 4)
   "teamMaxParallel": 4,

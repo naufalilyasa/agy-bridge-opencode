@@ -18,6 +18,11 @@ export interface Config {
   maxOutputChars: number;
   defaultModel: string | undefined;
   /**
+   * Per-tool model chain overrides (e.g. { web_lookup: ["gemini-3.8-flash-medium"] })
+   * loaded from config file toolModels or AGY_TOOL_MODEL_<TOOL> env vars.
+   */
+  toolModels?: Record<string, string[]>;
+  /**
    * Per-role model chain overrides (e.g. { oracle: ["Claude Sonnet 4.6 (Thinking)"] })
    * loaded from config file or AGY_ROLE_MODEL_<ROLE> env vars.
    */
@@ -77,6 +82,40 @@ function loadRoleModels(
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+  }
+
+  return out;
+}
+
+function loadToolModels(
+  env: Record<string, string | undefined>,
+  fileToolModels: Record<string, unknown> = {},
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+
+  for (const [tool, val] of Object.entries(fileToolModels)) {
+    const normKey = tool.toLowerCase().replace(/-/g, "_");
+    if (Array.isArray(val)) {
+      const arr = val.map((s) => String(s).trim()).filter(Boolean);
+      if (arr.length) out[normKey] = arr;
+    } else if (typeof val === "string" && val.trim()) {
+      const arr = val
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (arr.length) out[normKey] = arr;
+    }
+  }
+
+  for (const [key, raw] of Object.entries(env)) {
+    if (!key.startsWith("AGY_TOOL_MODEL_") || !raw) continue;
+    const tool = key.slice("AGY_TOOL_MODEL_".length).toLowerCase().replace(/-/g, "_");
+    if (!tool) continue;
+    const arr = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (arr.length) out[tool] = arr;
   }
 
   return out;
@@ -165,6 +204,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     string,
     string | string[]
   >;
+  const fileToolModels = (fileConfig.toolModels || {}) as Record<string, unknown>;
   const fileTimeouts = (fileConfig.perToolTimeouts || {}) as Record<string, number>;
 
   const cfg: Config = {
@@ -183,6 +223,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       50_000,
     ),
     defaultModel: env.AGY_DEFAULT_MODEL || (fileConfig.defaultModel as string) || undefined,
+    toolModels: loadToolModels(env, fileToolModels),
     roleModels: loadRoleModels(env, fileRoles),
     skipPermissions: env.AGY_SKIP_PERMISSIONS !== "false" && fileConfig.skipPermissions !== false,
     sandbox: env.AGY_SANDBOX === "true" || fileConfig.sandbox === true,
