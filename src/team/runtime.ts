@@ -5,6 +5,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { QuotaError } from "../quota.js";
 import {
   validateTeamSpec,
   TeamError,
@@ -118,6 +119,37 @@ export interface WorktreeResult {
   sessionCwd: string;
 }
 
+export interface WakeOptions {
+  member: string;
+  projectRoot: string;
+  teamRunId: string;
+  prompt: string;
+  model: string;
+  conversationId?: string;
+  timeoutSec: number;
+  signal?: AbortSignal;
+  onProgress?: (elapsedSec: number) => void;
+}
+
+export interface WakeResult {
+  output: string;
+  sessionId: string | null;
+  model: string | null;
+}
+
+export interface WakeMemberResult {
+  ok: boolean;
+  output?: string;
+  sessionId?: string | null;
+  model?: string | null;
+  error?: string;
+}
+
+export interface TeamSemaphore {
+  acquire(): Promise<void>;
+  release(): void;
+}
+
 export interface TeamRuntimeDeps {
   cooldowns?: TeamCooldownRegistry;
   cfg?: TeamRuntimeConfig;
@@ -131,8 +163,11 @@ export interface TeamRuntimeDeps {
     teamRunId: string,
     members: string[],
   ) => Promise<void>;
-  runWake?: (options: unknown) => Promise<unknown>;
+  runWake?: (options: WakeOptions) => Promise<WakeResult>;
   spawnChild?: (command: string, args: string[], options?: unknown) => Promise<unknown>;
+  resolveModelChain?: (member: TeamRunMember) => string[];
+  semaphore?: TeamSemaphore;
+  onProgress?: (elapsedSec: number) => void;
   [key: string]: unknown;
 }
 
@@ -658,16 +693,201 @@ export class TeamRuntime {
     return removeWorktrees(projectRoot, teamRunId, members);
   }
 
-  // T8 wakeMember stub seam
+  // T8 wakeMember — full implementation
+  private async appendTranscript(
+    transcriptPath: string,
+    entry: Record<string, unknown>,
+  ): Promise<void> {
+    const dir = path.dirname(transcriptPath);
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.appendFile(transcriptPath, JSON.stringify(entry) + "\n", "utf8");
+  }
+
   async wakeMember(
     projectRoot: string,
     teamRunId: string,
     memberName: string,
-  ): Promise<unknown> {
-    if (this.deps.runWake) {
-      return this.deps.runWake({ projectRoot, teamRunId, memberName });
+    opts?: {
+      prompt?: string;
+      signal?: AbortSignal;
+      onProgress?: (elapsedSec: number) => void;
+    },
+  ): Promise<WakeMemberResult> {
+    // --- Load state and validate member ---
+    const state = await loadTeamState(projectRoot, teamRunId);
+    const member = state.members.find((m) => m.name === memberName);
+    if (!member) {
+      throw new TeamError(
+        `Member '${memberName}' not found in team '${teamRunId}'`,
+        "memberName",
+        "MEMBER_NOT_FOUND",
+      );
     }
-    throw new Error("not implemented (T8: wakeMember)");
+
+    // Guard: removed members cannot be woken
+    if (member.status === "removed") {
+      throw new TeamError(
+        `Member '${memberName}' has been removed and cannot be woken`,
+        "memberName",
+        "MEMBER_REMOVED",
+      );
+    }
+
+    // Guard: no double-wake — member already running
+    if (member.status === "running") {
+      throw new TeamError(
+        `Member '${memberName}' is already running (no double-wake)`,
+        "memberName",
+        "ALREADY_RUNNING",
+      );
+    }
+
+    // --- Resolve model chain ---
+    const modelChain: string[] = this.deps.resolveModelChain
+      ? this.deps.resolveModelChain(member)
+      : [member.resolvedRole];
+
+    if (modelChain.length === 0) {
+      throw new TeamError(
+        `No models available in chain for member '${memberName}'`,
+        "memberName",
+        "NO_MODEL_CHAIN",
+      );
+    }
+
+    // --- Acquire semaphore slot ---
+    if (this.deps.semaphore) {
+      await this.deps.semaphore.acquire();
+    }
+
+    // --- Mark member as running ---
+    await updateTeamState(projectRoot, teamRunId, (s) => {
+      const m = s.members.find((x) => x.name === memberName);
+      if (m) {
+        validateTransition(m.status, "running");
+        m.status = "running";
+        m.lastWakeAt = Date.now();
+      }
+      return s;
+    });
+
+    const timeoutSec = this.deps.cfg?.teamMemberTimeoutSec ?? 300;
+    const prompt = opts?.prompt ?? `Wake ${memberName}`;
+    const transcriptPath = member.transcriptPath;
+    // Use existing sessionId for conversation resume
+    let conversationId = member.sessionId ?? undefined;
+
+    try {
+      // --- Chain failover loop ---
+      const attempts: string[] = [];
+      let result: WakeResult | null = null;
+      let usedModel: string | null = null;
+
+      for (const model of modelChain) {
+        // Skip cooled-down models
+        if (model && this.deps.cooldowns?.isCooled(model)) {
+          attempts.push(`${model}: quota cooldown`);
+          continue;
+        }
+
+        if (!this.deps.runWake) {
+          throw new Error("deps.runWake is not configured");
+        }
+
+        try {
+          result = await this.deps.runWake({
+            member: memberName,
+            projectRoot,
+            teamRunId,
+            prompt,
+            model,
+            conversationId,
+            timeoutSec,
+            signal: opts?.signal,
+            onProgress: opts?.onProgress ?? this.deps.onProgress,
+          });
+          usedModel = model;
+          break;
+        } catch (err) {
+          if (err instanceof QuotaError && model) {
+            // Register cooldown for this model
+            const resetSec = (err as QuotaError).resetSeconds;
+            this.deps.cooldowns?.set(model, resetSec ?? 900);
+
+            // Append failure line to transcript
+            await this.appendTranscript(transcriptPath, {
+              ts: Date.now(),
+              kind: "error",
+              model,
+              error: `QuotaError: ${err.message}`,
+              resetSeconds: resetSec,
+            });
+
+            attempts.push(`${model}: quota exhausted`);
+            continue;
+          }
+          // Non-quota errors: log and rethrow
+          await this.appendTranscript(transcriptPath, {
+            ts: Date.now(),
+            kind: "error",
+            model,
+            error: `${(err as Error).name}: ${(err as Error).message}`,
+          });
+          throw err;
+        }
+      }
+
+      if (!result) {
+        // All models exhausted
+        const errMsg = `All models exhausted for member '${memberName}': ${attempts.join("; ")}`;
+        await this.appendTranscript(transcriptPath, {
+          ts: Date.now(),
+          kind: "error",
+          error: errMsg,
+        });
+
+        return { ok: false, error: errMsg };
+      }
+
+      // --- Success: persist sessionId + write transcript ---
+      await updateTeamState(projectRoot, teamRunId, (s) => {
+        const m = s.members.find((x) => x.name === memberName);
+        if (m) {
+          m.sessionId = result!.sessionId;
+        }
+        return s;
+      });
+
+      await this.appendTranscript(transcriptPath, {
+        ts: Date.now(),
+        kind: "output",
+        model: usedModel,
+        sessionId: result.sessionId,
+        output: result.output,
+      });
+
+      return {
+        ok: true,
+        output: result.output,
+        sessionId: result.sessionId,
+        model: result.model ?? usedModel,
+      };
+    } finally {
+      // --- ALWAYS: release semaphore + reset status ---
+      if (this.deps.semaphore) {
+        this.deps.semaphore.release();
+      }
+
+      // Reset status: if shutdown was requested mid-run → awaiting_shutdown; else → idle
+      await updateTeamState(projectRoot, teamRunId, (s) => {
+        const m = s.members.find((x) => x.name === memberName);
+        if (m && m.status === "running") {
+          m.status = "idle";
+        }
+        // If status was changed to awaiting_shutdown during the run, leave it
+        return s;
+      });
+    }
   }
 
   // T9 buildWakePrompt stub seam

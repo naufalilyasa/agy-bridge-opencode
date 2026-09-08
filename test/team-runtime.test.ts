@@ -20,8 +20,14 @@ import {
   ALLOWED_MEMBER_TRANSITIONS,
   type MemberStatus,
   type TeamRuntimeDeps,
+  type WakeOptions,
+  type WakeResult,
+  type WakeMemberResult,
+  type TeamSemaphore,
+  type TeamRunMember,
 } from "../src/team/runtime.js";
 import { TeamError, type TeamSpec } from "../src/team/spec.js";
+import { QuotaError } from "../src/quota.js";
 import { runDir, readJson } from "../src/team/store.js";
 
 describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", () => {
@@ -480,9 +486,10 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
       expect(runtime.deps.cooldowns).toBe(fakeCooldowns);
       expect(runtime.deps.cfg?.maxParallel).toBe(4);
 
+      // wakeMember is now implemented (T8) — without a valid team state it throws TEAM_NOT_FOUND
       await expect(
         runtime.wakeMember(testDir, "team-123", "worker"),
-      ).rejects.toThrow(/not implemented \(T8/);
+      ).rejects.toThrow(TeamError);
 
       expect(() => runtime.buildWakePrompt({}, {})).toThrow(
         /not implemented \(T9/,
@@ -743,5 +750,336 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
         await fs.rm(gitRepoDir, { recursive: true, force: true });
       }
     });
+  });
+});
+
+describe("src/team/runtime T8: wakeMember with failover + session persistence", () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = path.join(os.tmpdir(), `team-wake-test-${randomUUID()}`);
+    await fs.mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    try {
+      await fs.rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+
+  const multiSpec: TeamSpec = {
+    version: 1,
+    name: "wake-team",
+    leadAgentId: "alpha",
+    backendType: "cli",
+    members: [
+      {
+        name: "alpha",
+        kind: "subagent_type",
+        subagent_type: "deep",
+        backendType: "cli",
+      },
+      {
+        name: "beta",
+        kind: "category",
+        category: "visual-engineering",
+        backendType: "cli",
+      },
+    ],
+  };
+
+  function makeSemaphore(): TeamSemaphore & { count: number } {
+    let count = 0;
+    return {
+      get count() { return count; },
+      acquire: async () => { count++; },
+      release: () => { count--; },
+    };
+  }
+
+  function createWakeRuntime(
+    runWake: (opts: WakeOptions) => Promise<WakeResult>,
+    extra: Partial<TeamRuntimeDeps> = {},
+  ): TeamRuntime {
+    return new TeamRuntime({
+      spawnWorktree: async (projectRoot, teamRunId, member) => {
+        const wt = resolveMemberWorktree(teamRunId, member);
+        return {
+          worktreePath: wt,
+          cwd: wt,
+          sessionCwd: path.resolve(projectRoot),
+        };
+      },
+      removeWorktrees: async () => {},
+      runWake,
+      resolveModelChain: (member) => [member.resolvedRole],
+      ...extra,
+    });
+  }
+
+  it("first wake passes no conversationId; second wake reuses member.sessionId", async () => {
+    const wakeCalls: WakeOptions[] = [];
+    const fakeRunWake = async (opts: WakeOptions): Promise<WakeResult> => {
+      wakeCalls.push({ ...opts });
+      return { output: `done-${wakeCalls.length}`, sessionId: "sess-abc", model: opts.model };
+    };
+
+    const runtime = createWakeRuntime(fakeRunWake);
+    const { teamRunId } = await runtime.createTeam(multiSpec, testDir);
+
+    // First wake: no prior sessionId → conversationId should be undefined
+    const res1 = await runtime.wakeMember(testDir, teamRunId, "alpha", { prompt: "task1" });
+    expect(res1.ok).toBe(true);
+    expect(res1.sessionId).toBe("sess-abc");
+    expect(wakeCalls[0].conversationId).toBeUndefined();
+
+    // Verify sessionId persisted in state
+    const stateAfter1 = await runtime.loadState(testDir, teamRunId);
+    expect(stateAfter1.members.find((m) => m.name === "alpha")?.sessionId).toBe("sess-abc");
+
+    // Second wake: reuses sessionId from state as conversationId
+    const res2 = await runtime.wakeMember(testDir, teamRunId, "alpha", { prompt: "task2" });
+    expect(res2.ok).toBe(true);
+    expect(wakeCalls[1].conversationId).toBe("sess-abc");
+  });
+
+  it("rejects double-wake with ALREADY_RUNNING when member is running", async () => {
+    const runtime = createWakeRuntime(async () => ({ output: "x", sessionId: null, model: null }));
+    const { teamRunId } = await runtime.createTeam(multiSpec, testDir);
+
+    // Manually set alpha to running
+    await runtime.updateState(testDir, teamRunId, (s) => {
+      const m = s.members.find((x) => x.name === "alpha");
+      if (m) m.status = "running";
+      return s;
+    });
+
+    await expect(
+      runtime.wakeMember(testDir, teamRunId, "alpha"),
+    ).rejects.toThrow(TeamError);
+
+    try {
+      await runtime.wakeMember(testDir, teamRunId, "alpha");
+    } catch (err) {
+      const teamErr = err as TeamError;
+      expect(teamErr.code).toBe("ALREADY_RUNNING");
+    }
+  });
+
+  it("rejects wake on removed member", async () => {
+    const runtime = createWakeRuntime(async () => ({ output: "x", sessionId: null, model: null }));
+    const { teamRunId } = await runtime.createTeam(multiSpec, testDir);
+
+    // Set to awaiting_shutdown then removed
+    await runtime.requestShutdown(testDir, teamRunId, "alpha");
+    await runtime.approveShutdown(testDir, teamRunId, "alpha");
+
+    await expect(
+      runtime.wakeMember(testDir, teamRunId, "alpha"),
+    ).rejects.toThrow(TeamError);
+
+    try {
+      await runtime.wakeMember(testDir, teamRunId, "alpha");
+    } catch (err) {
+      expect((err as TeamError).code).toBe("MEMBER_REMOVED");
+    }
+  });
+
+  it("quota failover: QuotaError on model A → succeeds on B, cooldowns.set called with A", async () => {
+    const cooldownCalls: Array<{ model: string; sec: number }> = [];
+    const fakeCooldowns = {
+      isCooled: () => false,
+      set: (model: string, sec: number) => { cooldownCalls.push({ model, sec }); },
+      get: () => null,
+    };
+
+    let callCount = 0;
+    const fakeRunWake = async (opts: WakeOptions): Promise<WakeResult> => {
+      callCount++;
+      if (opts.model === "model-A") {
+        throw new QuotaError("model-A", { resetText: "1h0m0s", resetSeconds: 3600 });
+      }
+      return { output: "ok-from-B", sessionId: "sess-B", model: "model-B" };
+    };
+
+    const runtime = createWakeRuntime(fakeRunWake, {
+      cooldowns: fakeCooldowns,
+      resolveModelChain: () => ["model-A", "model-B"],
+    });
+    const { teamRunId } = await runtime.createTeam(multiSpec, testDir);
+
+    const res = await runtime.wakeMember(testDir, teamRunId, "alpha", { prompt: "failover test" });
+    expect(res.ok).toBe(true);
+    expect(res.sessionId).toBe("sess-B");
+
+    // Verify cooldowns.set was called with model-A
+    expect(cooldownCalls.length).toBeGreaterThanOrEqual(1);
+    expect(cooldownCalls[0].model).toBe("model-A");
+    expect(cooldownCalls[0].sec).toBe(3600);
+
+    // Verify sessionId from B is persisted
+    const state = await runtime.loadState(testDir, teamRunId);
+    expect(state.members.find((m) => m.name === "alpha")?.sessionId).toBe("sess-B");
+  });
+
+  it("finally releases semaphore even on throw", async () => {
+    const sem = makeSemaphore();
+    const fakeRunWake = async (): Promise<WakeResult> => {
+      throw new Error("boom");
+    };
+
+    const runtime = createWakeRuntime(fakeRunWake, { semaphore: sem });
+    const { teamRunId } = await runtime.createTeam(multiSpec, testDir);
+
+    await expect(
+      runtime.wakeMember(testDir, teamRunId, "alpha", { prompt: "crash" }),
+    ).rejects.toThrow("boom");
+
+    // Semaphore was acquired (+1) then released (-1) → back to 0
+    expect(sem.count).toBe(0);
+
+    // Member status reset to idle after failure
+    const state = await runtime.loadState(testDir, teamRunId);
+    expect(state.members.find((m) => m.name === "alpha")?.status).toBe("idle");
+  });
+
+  it("shutdown-requested-mid-run → member ends awaiting_shutdown, not idle", async () => {
+    let runWakeResolve: ((v: WakeResult) => void) | undefined;
+    const fakeRunWake = async (): Promise<WakeResult> => {
+      // Simulate a long-running wake that we can control
+      return new Promise<WakeResult>((resolve) => {
+        runWakeResolve = resolve;
+      });
+    };
+
+    const runtime = createWakeRuntime(fakeRunWake);
+    const { teamRunId } = await runtime.createTeam(multiSpec, testDir);
+
+    // Start wake in background
+    const wakePromise = runtime.wakeMember(testDir, teamRunId, "alpha", { prompt: "long task" });
+
+    // Wait for member to be marked running
+    await new Promise((r) => setTimeout(r, 100));
+    const midState = await runtime.loadState(testDir, teamRunId);
+    expect(midState.members.find((m) => m.name === "alpha")?.status).toBe("running");
+
+    // Request shutdown mid-run
+    await runtime.requestShutdown(testDir, teamRunId, "alpha");
+
+    // Verify the running→awaiting_shutdown transition is valid and was applied
+    const shutdownState = await runtime.loadState(testDir, teamRunId);
+    expect(shutdownState.members.find((m) => m.name === "alpha")?.status).toBe("awaiting_shutdown");
+
+    // Now resolve the wake
+    runWakeResolve!({ output: "done", sessionId: "sess-x", model: null });
+    const res = await wakePromise;
+    expect(res.ok).toBe(true);
+
+    // After finally block, status should remain awaiting_shutdown (not reset to idle)
+    const finalState = await runtime.loadState(testDir, teamRunId);
+    expect(finalState.members.find((m) => m.name === "alpha")?.status).toBe("awaiting_shutdown");
+  });
+
+  it("transcript file gets output line on success + error line on quota failure", async () => {
+    let callCount = 0;
+    const fakeRunWake = async (opts: WakeOptions): Promise<WakeResult> => {
+      callCount++;
+      if (callCount === 1 && opts.model === "model-A") {
+        throw new QuotaError("model-A", { resetSeconds: 60 });
+      }
+      return { output: "final-output", sessionId: "sess-final", model: opts.model };
+    };
+
+    const runtime = createWakeRuntime(fakeRunWake, {
+      cooldowns: {
+        isCooled: () => false,
+        set: () => {},
+        get: () => null,
+      },
+      resolveModelChain: () => ["model-A", "model-B"],
+    });
+    const { teamRunId } = await runtime.createTeam(multiSpec, testDir);
+
+    const res = await runtime.wakeMember(testDir, teamRunId, "alpha", { prompt: "transcript test" });
+    expect(res.ok).toBe(true);
+
+    // Read transcript file
+    const state = await runtime.loadState(testDir, teamRunId);
+    const transcriptPath = state.members.find((m) => m.name === "alpha")!.transcriptPath;
+    const lines = (await fs.readFile(transcriptPath, "utf8")).trim().split("\n");
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+
+    const errorLine = JSON.parse(lines[0]);
+    expect(errorLine.kind).toBe("error");
+    expect(errorLine.model).toBe("model-A");
+    expect(errorLine.error).toContain("QuotaError");
+
+    const outputLine = JSON.parse(lines[1]);
+    expect(outputLine.kind).toBe("output");
+    expect(outputLine.model).toBe("model-B");
+    expect(outputLine.output).toBe("final-output");
+    expect(outputLine.sessionId).toBe("sess-final");
+  });
+
+  it("all models exhausted returns ok:false without throwing", async () => {
+    const fakeRunWake = async (opts: WakeOptions): Promise<WakeResult> => {
+      throw new QuotaError(opts.model, { resetSeconds: 120 });
+    };
+
+    const runtime = createWakeRuntime(fakeRunWake, {
+      cooldowns: {
+        isCooled: () => false,
+        set: () => {},
+        get: () => null,
+      },
+      resolveModelChain: () => ["only-model"],
+    });
+    const { teamRunId } = await runtime.createTeam(multiSpec, testDir);
+
+    const res = await runtime.wakeMember(testDir, teamRunId, "alpha", { prompt: "exhaust" });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("All models exhausted");
+
+    // Member status should be idle after finally
+    const state = await runtime.loadState(testDir, teamRunId);
+    expect(state.members.find((m) => m.name === "alpha")?.status).toBe("idle");
+  });
+
+  it("semaphore acquire is called before runWake and release after", async () => {
+    const sem = makeSemaphore();
+    let semDuringWake = -1;
+
+    const fakeRunWake = async (): Promise<WakeResult> => {
+      semDuringWake = sem.count;
+      return { output: "ok", sessionId: null, model: null };
+    };
+
+    const runtime = createWakeRuntime(fakeRunWake, { semaphore: sem });
+    const { teamRunId } = await runtime.createTeam(multiSpec, testDir);
+
+    expect(sem.count).toBe(0);
+    await runtime.wakeMember(testDir, teamRunId, "alpha", { prompt: "sem test" });
+
+    // During runWake, semaphore was held (count = 1)
+    expect(semDuringWake).toBe(1);
+    // After completion, semaphore released (count = 0)
+    expect(sem.count).toBe(0);
+  });
+
+  it("member not found throws MEMBER_NOT_FOUND", async () => {
+    const runtime = createWakeRuntime(async () => ({ output: "", sessionId: null, model: null }));
+    const { teamRunId } = await runtime.createTeam(multiSpec, testDir);
+
+    await expect(
+      runtime.wakeMember(testDir, teamRunId, "ghost"),
+    ).rejects.toThrow(TeamError);
+
+    try {
+      await runtime.wakeMember(testDir, teamRunId, "ghost");
+    } catch (err) {
+      expect((err as TeamError).code).toBe("MEMBER_NOT_FOUND");
+    }
   });
 });
