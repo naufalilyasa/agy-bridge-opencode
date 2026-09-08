@@ -85,6 +85,51 @@ describe("loadConfig", () => {
     expect(c.roleModels["git-master"]).toEqual(["gemini-3.7-flash-high", "claude-sonnet-4-6"]);
   });
 
+  it("parses team keys from file config", () => {
+    const c = loadConfig({
+      AGY_CONFIG_PATH: path.resolve(__dirname, "../agy.config.json.example"),
+    });
+    expect(c.teamMaxParallel).toBe(4);
+    expect(c.teamPollMs).toBe(3000);
+    expect(c.teamMemberTimeoutSec).toBe(300);
+    expect(c.teamKillGraceMs).toBe(5000);
+  });
+
+  it("allows env AGY_TEAM_MAX_PARALLEL to override file value", () => {
+    const c = loadConfig({
+      AGY_CONFIG_PATH: path.resolve(__dirname, "../agy.config.json.example"),
+      AGY_TEAM_MAX_PARALLEL: "8",
+      AGY_TEAM_POLL_MS: "1500",
+      AGY_TEAM_MEMBER_TIMEOUT_SEC: "600",
+      AGY_TEAM_KILL_GRACE_MS: "10000",
+    });
+    expect(c.teamMaxParallel).toBe(8);
+    expect(c.teamPollMs).toBe(1500);
+    expect(c.teamMemberTimeoutSec).toBe(600);
+    expect(c.teamKillGraceMs).toBe(10000);
+  });
+
+  it("returns default team keys when absent from config and env", () => {
+    const c = loadConfig({});
+    expect(c.teamMaxParallel).toBe(4);
+    expect(c.teamPollMs).toBe(3000);
+    expect(c.teamMemberTimeoutSec).toBe(300);
+    expect(c.teamKillGraceMs).toBe(5000);
+  });
+
+  it("falls back to default team keys on non-numeric or non-positive values", () => {
+    const c = loadConfig({
+      AGY_TEAM_MAX_PARALLEL: "not-a-number",
+      AGY_TEAM_POLL_MS: "-3000",
+      AGY_TEAM_MEMBER_TIMEOUT_SEC: "0",
+      AGY_TEAM_KILL_GRACE_MS: "xyz",
+    });
+    expect(c.teamMaxParallel).toBe(4);
+    expect(c.teamPollMs).toBe(3000);
+    expect(c.teamMemberTimeoutSec).toBe(300);
+    expect(c.teamKillGraceMs).toBe(5000);
+  });
+
   it("handles JSON with single-line and multi-line comments", () => {
     const jsonc = `
       // Top-level comment

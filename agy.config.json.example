@@ -26,6 +26,16 @@
   // Default model jika tidak ada model yang ditentukan oleh role atau tool
   "defaultModel": "gemini-3.7-flash-high",
 
+  // Konfigurasi Team Mode (Orkestrasi Multi-Agent)
+  // Jumlah maksimum subagent yang dieksekusi secara paralel (default: 4)
+  "teamMaxParallel": 4,
+  // Interval polling status runner dalam milidetik (default: 3000)
+  "teamPollMs": 3000,
+  // Batas waktu eksekusi tiap anggota tim dalam detik sebelum timeout (default: 300)
+  "teamMemberTimeoutSec": 300,
+  // Jeda waktu toleransi proses shutdown paksa / kill grace period dalam milidetik (default: 5000)
+  "teamKillGraceMs": 5000,
+
   // Model Failover Chain per OMO Subagent Role (Urutan prioritas: [Utama, Fallback])
   "roles": {
     // 🧠 REASONING & QUALITY CRITIC ROLES (Claude Sonnet -> Gemini 3.7 Flash)
