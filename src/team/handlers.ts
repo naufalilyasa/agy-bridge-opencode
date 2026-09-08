@@ -13,13 +13,31 @@ import {
   listNamedTeams,
   type TeamSpec,
 } from "./spec.js";
-import { runDir, readJson } from "./store.js";
-import { listTasks, type Task } from "./tasklist.js";
-import { getInboxUnreadBytes } from "./mailbox.js";
+import {
+  runDir,
+  readJson,
+  TeamError as StoreTeamError,
+} from "./store.js";
+import {
+  listTasks,
+  createTask,
+  getTask,
+  updateTaskStatus,
+  claimTask,
+  type Task,
+  type TaskStatus,
+} from "./tasklist.js";
+import {
+  sendMessage,
+  getInboxUnreadBytes,
+  PayloadTooLargeError,
+  RecipientBackpressureError,
+} from "./mailbox.js";
 
 export interface TeamHandlerContext {
   projectRoot: string;
   runtime: TeamRuntime;
+  runDir?: string;
 }
 
 export interface TeamToolResponse {
@@ -42,18 +60,19 @@ function resolveContext(
       ? args.cwd.trim()
       : process.cwd());
   const runtime = ctx?.runtime ?? new TeamRuntime();
-  return { projectRoot, runtime };
+  return { projectRoot, runtime, runDir: ctx?.runDir };
 }
 
 function formatErrorResponse(err: unknown): TeamToolResponse {
-  if (
-    err instanceof TeamError ||
-    (err && typeof err === "object" && (err as { name?: string }).name === "TeamError")
-  ) {
-    const teamErr = err as { code?: string; message: string };
-    const code = teamErr.code ?? "TeamError";
+  if (err && typeof err === "object") {
+    const anyErr = err as { code?: string; name?: string; message?: string };
+    const code =
+      anyErr.code ??
+      (anyErr.name && anyErr.name !== "Error" ? anyErr.name : undefined) ??
+      "TeamError";
+    const message = anyErr.message ?? String(err);
     return {
-      content: [{ type: "text", text: `${code}: ${teamErr.message}` }],
+      content: [{ type: "text", text: `${code}: ${message}` }],
       isError: true,
     };
   }
@@ -722,6 +741,405 @@ export async function handleTeamShutdownReject(
 }
 
 /**
+ * T14: handleSendMessage
+ * Validates non-empty body and recipient, resolves memberNames for broadcast,
+ * routes through mailbox.sendMessage, and handles caps errors.
+ */
+export async function handleSendMessage(
+  args: Record<string, unknown>,
+  ctx?: TeamHandlerContext,
+): Promise<TeamToolResponse> {
+  try {
+    const { projectRoot, runtime, runDir: ctxRunDir } = resolveContext(args, ctx);
+
+    const rawId = (args.teamRunId ?? args.team_id) as string | undefined;
+    if (!rawId || typeof rawId !== "string" || rawId.trim().length === 0) {
+      return {
+        content: [{ type: "text", text: "INVALID_ARGUMENT: teamRunId is required" }],
+        isError: true,
+      };
+    }
+
+    const to = (args.to as string | undefined)?.trim();
+    if (!to) {
+      return {
+        content: [{ type: "text", text: "INVALID_ARGUMENT: recipient 'to' is required" }],
+        isError: true,
+      };
+    }
+
+    const body = args.body;
+    if (
+      body === undefined ||
+      body === null ||
+      (typeof body === "string" && body.trim().length === 0)
+    ) {
+      return {
+        content: [{ type: "text", text: "INVALID_ARGUMENT: body is required and cannot be empty" }],
+        isError: true,
+      };
+    }
+
+    const from =
+      typeof args.from === "string" && args.from.trim().length > 0
+        ? args.from.trim()
+        : "lead";
+
+    const teamRunId = rawId.trim();
+    const rd = ctxRunDir ?? runDir(projectRoot, teamRunId);
+
+    // Resolve memberNames from state or inboxes
+    let memberNames: string[] = [];
+    try {
+      const state = await runtime.loadState(projectRoot, teamRunId);
+      memberNames = state.members.map((m) => m.name);
+    } catch {
+      try {
+        const inboxesDir = path.join(rd, "inboxes");
+        const entries = await fsp.readdir(inboxesDir);
+        memberNames = entries.filter((e) => !e.startsWith(".") && !e.endsWith(".lock"));
+      } catch {}
+    }
+
+    if (to !== "*" && memberNames.length > 0 && !memberNames.includes(to)) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `MEMBER_NOT_FOUND: Recipient member '${to}' not found in team '${teamRunId}'`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const result = ctxRunDir
+      ? await sendMessage(ctxRunDir, { from, to, body }, memberNames)
+      : await sendMessage(projectRoot, teamRunId, from, to, body, memberNames);
+
+    const isBroadcast = to === "*";
+    const summary = {
+      messageId: result.id,
+      from,
+      to,
+      broadcast: isBroadcast,
+      delivered: result.deliveredTo,
+    };
+
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `[team_send_message] Message delivered to ${result.deliveredTo.length} recipient(s): ${result.deliveredTo.join(", ")}\n` +
+            JSON.stringify(summary, null, 2),
+        },
+      ],
+    };
+  } catch (err) {
+    return formatErrorResponse(err);
+  }
+}
+
+/**
+ * T15: handleTeamTaskCreate
+ * Creates a new task in the team tasklist.
+ */
+export async function handleTeamTaskCreate(
+  args: Record<string, unknown>,
+  ctx?: TeamHandlerContext,
+): Promise<TeamToolResponse> {
+  try {
+    const { projectRoot, runDir: ctxRunDir } = resolveContext(args, ctx);
+
+    const rawId = (args.teamRunId ?? args.team_id) as string | undefined;
+    if (!rawId || typeof rawId !== "string" || rawId.trim().length === 0) {
+      return {
+        content: [{ type: "text", text: "INVALID_ARGUMENT: teamRunId is required" }],
+        isError: true,
+      };
+    }
+
+    const subject = args.subject;
+    if (typeof subject !== "string" || subject.trim().length === 0) {
+      return {
+        content: [{ type: "text", text: "INVALID_ARGUMENT: subject is required" }],
+        isError: true,
+      };
+    }
+
+    const teamRunId = rawId.trim();
+    const rd = ctxRunDir ?? runDir(projectRoot, teamRunId);
+
+    const createdBy =
+      typeof args.createdBy === "string" && args.createdBy.trim().length > 0
+        ? args.createdBy.trim()
+        : typeof args.created_by === "string" && args.created_by.trim().length > 0
+          ? args.created_by.trim()
+          : "lead";
+
+    const blockedBy = Array.isArray(args.blockedBy)
+      ? (args.blockedBy as string[])
+      : Array.isArray(args.blocked_by)
+        ? (args.blocked_by as string[])
+        : undefined;
+
+    const id = (args.id ?? args.taskId ?? args.task_id) as string | undefined;
+
+    const task = await createTask(rd, {
+      id: id ? id.trim() : undefined,
+      teamRunId,
+      subject: subject.trim(),
+      description: typeof args.description === "string" ? args.description : undefined,
+      owner: typeof args.owner === "string" && args.owner.trim().length > 0 ? args.owner.trim() : null,
+      blockedBy,
+      createdBy,
+    });
+
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `[team_task_create] Task '${task.id}' created: ${task.subject}\n` +
+            JSON.stringify(task, null, 2),
+        },
+      ],
+    };
+  } catch (err) {
+    return formatErrorResponse(err);
+  }
+}
+
+/**
+ * T15: handleTeamTaskList
+ * Lists tasks in the team tasklist formatted as "- [<status>] <taskId>: <subject> (owner: <owner|unassigned>)".
+ * Returns "(no tasks)" if empty.
+ */
+export async function handleTeamTaskList(
+  args: Record<string, unknown>,
+  ctx?: TeamHandlerContext,
+): Promise<TeamToolResponse> {
+  try {
+    const { projectRoot, runDir: ctxRunDir } = resolveContext(args, ctx);
+
+    const rawId = (args.teamRunId ?? args.team_id) as string | undefined;
+    if (!rawId || typeof rawId !== "string" || rawId.trim().length === 0) {
+      return {
+        content: [{ type: "text", text: "INVALID_ARGUMENT: teamRunId is required" }],
+        isError: true,
+      };
+    }
+
+    const teamRunId = rawId.trim();
+    const rd = ctxRunDir ?? runDir(projectRoot, teamRunId);
+
+    const filter: { status?: TaskStatus; owner?: string } = {};
+    if (typeof args.status === "string" && args.status.trim().length > 0) {
+      filter.status = args.status.trim() as TaskStatus;
+    }
+    if (typeof args.owner === "string" && args.owner.trim().length > 0) {
+      filter.owner = args.owner.trim();
+    }
+
+    const tasks = await listTasks(rd, filter);
+
+    if (tasks.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "(no tasks)",
+          },
+        ],
+      };
+    }
+
+    const lines = tasks.map(
+      (t) => `- [${t.status}] ${t.id}: ${t.subject} (owner: ${t.owner ?? "unassigned"})`,
+    );
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: lines.join("\n"),
+        },
+      ],
+    };
+  } catch (err) {
+    return formatErrorResponse(err);
+  }
+}
+
+/**
+ * T15: handleTeamTaskGet
+ * Retrieves full detail of a task by id. Returns isError TASK_NOT_FOUND if missing.
+ */
+export async function handleTeamTaskGet(
+  args: Record<string, unknown>,
+  ctx?: TeamHandlerContext,
+): Promise<TeamToolResponse> {
+  try {
+    const { projectRoot, runDir: ctxRunDir } = resolveContext(args, ctx);
+
+    const rawId = (args.teamRunId ?? args.team_id) as string | undefined;
+    if (!rawId || typeof rawId !== "string" || rawId.trim().length === 0) {
+      return {
+        content: [{ type: "text", text: "INVALID_ARGUMENT: teamRunId is required" }],
+        isError: true,
+      };
+    }
+
+    const rawTaskId = (args.taskId ?? args.id ?? args.task_id) as string | undefined;
+    if (!rawTaskId || typeof rawTaskId !== "string" || rawTaskId.trim().length === 0) {
+      return {
+        content: [{ type: "text", text: "INVALID_ARGUMENT: taskId is required" }],
+        isError: true,
+      };
+    }
+
+    const teamRunId = rawId.trim();
+    const taskId = rawTaskId.trim();
+    const rd = ctxRunDir ?? runDir(projectRoot, teamRunId);
+
+    const task = await getTask(rd, taskId);
+    if (!task) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `TASK_NOT_FOUND: Task '${taskId}' not found in team '${teamRunId}'`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `[team_task_get] Task: ${task.id}\n` +
+            `- Subject: ${task.subject}\n` +
+            `- Description: ${task.description}\n` +
+            `- Status: ${task.status}\n` +
+            `- Owner: ${task.owner ?? "unassigned"}\n` +
+            `- Created At: ${new Date(task.createdAt).toISOString()}\n` +
+            `- Updated At: ${new Date(task.updatedAt).toISOString()}\n` +
+            `- Blocked By: ${task.blockedBy.length ? task.blockedBy.join(", ") : "(none)"}\n\n` +
+            JSON.stringify(task, null, 2),
+        },
+      ],
+    };
+  } catch (err) {
+    return formatErrorResponse(err);
+  }
+}
+
+/**
+ * T15: handleTeamTaskUpdate
+ * Updates status or owner of a task. Enforces forward-only transitions,
+ * atomic claims (owner required), and cross-owner update checks.
+ */
+export async function handleTeamTaskUpdate(
+  args: Record<string, unknown>,
+  ctx?: TeamHandlerContext,
+): Promise<TeamToolResponse> {
+  try {
+    const { projectRoot, runDir: ctxRunDir } = resolveContext(args, ctx);
+
+    const rawId = (args.teamRunId ?? args.team_id) as string | undefined;
+    if (!rawId || typeof rawId !== "string" || rawId.trim().length === 0) {
+      return {
+        content: [{ type: "text", text: "INVALID_ARGUMENT: teamRunId is required" }],
+        isError: true,
+      };
+    }
+
+    const rawTaskId = (args.taskId ?? args.id ?? args.task_id) as string | undefined;
+    if (!rawTaskId || typeof rawTaskId !== "string" || rawTaskId.trim().length === 0) {
+      return {
+        content: [{ type: "text", text: "INVALID_ARGUMENT: taskId is required" }],
+        isError: true,
+      };
+    }
+
+    if (args.status === undefined && args.owner === undefined) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "INVALID_ARGUMENT: At least one of 'status' or 'owner' must be provided",
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const teamRunId = rawId.trim();
+    const taskId = rawTaskId.trim();
+    const rd = ctxRunDir ?? runDir(projectRoot, teamRunId);
+
+    const existing = await getTask(rd, taskId);
+    if (!existing) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `TASK_NOT_FOUND: Task '${taskId}' not found in team '${teamRunId}'`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const rawStatus = args.status as string | undefined;
+    const status = (rawStatus ? rawStatus.trim() : undefined) as TaskStatus | undefined;
+    const owner = typeof args.owner === "string" ? args.owner.trim() : undefined;
+
+    let updated: Task;
+    if (status === "claimed") {
+      if (!owner) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "OWNER_REQUIRED: owner is required to claim task",
+            },
+          ],
+          isError: true,
+        };
+      }
+      updated = await claimTask(rd, taskId, owner);
+    } else if (status !== undefined) {
+      updated = await updateTaskStatus(rd, taskId, { status, owner });
+    } else {
+      // Only owner provided (no status specified)
+      if (existing.status === "pending") {
+        updated = await claimTask(rd, taskId, owner!);
+      } else {
+        updated = await updateTaskStatus(rd, taskId, { status: existing.status, owner });
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `[team_task_update] Task '${updated.id}' updated: status=${updated.status}, owner=${updated.owner ?? "unassigned"}\n` +
+            JSON.stringify(updated, null, 2),
+        },
+      ],
+    };
+  } catch (err) {
+    return formatErrorResponse(err);
+  }
+}
+
+/**
  * TEAM_HANDLERS map for MCP server registration
  */
 export const TEAM_HANDLERS: Record<string, TeamHandlerFn> = {
@@ -734,4 +1152,14 @@ export const TEAM_HANDLERS: Record<string, TeamHandlerFn> = {
   team_shutdown_approve: handleTeamShutdownApprove,
   team_reject_shutdown: handleTeamShutdownReject,
   team_shutdown_reject: handleTeamShutdownReject,
+  team_send_message: handleSendMessage,
+  team_task_create: handleTeamTaskCreate,
+  team_task_list: handleTeamTaskList,
+  team_task_get: handleTeamTaskGet,
+  team_task_update: handleTeamTaskUpdate,
+  send_message: handleSendMessage,
+  task_create: handleTeamTaskCreate,
+  task_list: handleTeamTaskList,
+  task_get: handleTeamTaskGet,
+  task_update: handleTeamTaskUpdate,
 };
