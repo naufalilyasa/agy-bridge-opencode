@@ -25,6 +25,10 @@ export interface Config {
   skipPermissions: boolean;
   sandbox: boolean;
   onFailure: "strict" | "fallback";
+  teamMaxParallel?: number;
+  teamPollMs?: number;
+  teamMemberTimeoutSec?: number;
+  teamKillGraceMs?: number;
 }
 
 function positiveInt(raw: string | number | undefined, fallback: number): number {
@@ -163,7 +167,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   >;
   const fileTimeouts = (fileConfig.perToolTimeouts || {}) as Record<string, number>;
 
-  return {
+  const cfg: Config = {
     agyPath: env.AGY_PATH || (fileConfig.agyPath as string) || "agy",
     timeoutSec: positiveInt(env.AGY_TIMEOUT ?? (fileConfig.timeoutSec as number | undefined), 1200),
     timeoutExplicit:
@@ -184,4 +188,26 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     sandbox: env.AGY_SANDBOX === "true" || fileConfig.sandbox === true,
     onFailure: (env.AGY_ON_FAILURE || fileConfig.onFailure) === "strict" ? "strict" : "fallback",
   };
+
+  const teamDefs: Array<[keyof Config, string, number]> = [
+    ["teamMaxParallel", "AGY_TEAM_MAX_PARALLEL", 4],
+    ["teamPollMs", "AGY_TEAM_POLL_MS", 3000],
+    ["teamMemberTimeoutSec", "AGY_TEAM_MEMBER_TIMEOUT_SEC", 300],
+    ["teamKillGraceMs", "AGY_TEAM_KILL_GRACE_MS", 5000],
+  ];
+
+  for (const [key, envVar, fallback] of teamDefs) {
+    const val = positiveInt(
+      env[envVar] ?? (fileConfig[key] as number | undefined),
+      fallback,
+    );
+    Object.defineProperty(cfg, key, {
+      value: val,
+      writable: true,
+      configurable: true,
+      enumerable: env[envVar] !== undefined || fileConfig[key] !== undefined,
+    });
+  }
+
+  return cfg;
 }

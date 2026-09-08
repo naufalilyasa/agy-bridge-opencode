@@ -14,11 +14,25 @@ import {
 } from "./runner.js";
 import { CooldownRegistry, QuotaError } from "./quota.js";
 import { TOOLS, OMO_ROLES, type ToolDef } from "./tools.js";
+import { TEAM_HANDLERS, type TeamHandlerContext } from "./team/handlers.js";
+import {
+  TeamRuntime,
+  type TeamRuntimeConfig,
+  type TeamCooldownRegistry,
+} from "./team/runtime.js";
 
 interface ToolResponse {
   [key: string]: unknown;
   content: { type: "text"; text: string }[];
   isError?: boolean;
+}
+
+function adaptCooldowns(cooldowns: CooldownRegistry): TeamCooldownRegistry {
+  return {
+    isCooled: (model: string) => cooldowns.cooling(model),
+    set: (model: string, resetSeconds: number) => cooldowns.set(model, resetSeconds),
+    get: (model: string) => (cooldowns.cooling(model) ? 1 : null),
+  };
 }
 
 interface HandlerExtra {
@@ -34,11 +48,54 @@ export function createToolHandler(
   registry: ModelRegistry,
   deps: RunnerDeps = defaultDeps,
   cooldowns: CooldownRegistry = new CooldownRegistry(),
-  server?: McpServer,
+  serverOrRuntime?: McpServer | TeamRuntime,
+  runtime?: TeamRuntime,
 ): (args: Record<string, unknown>, extra?: HandlerExtra) => Promise<ToolResponse> {
+  const isMcpServer =
+    serverOrRuntime !== undefined &&
+    (serverOrRuntime instanceof McpServer || "registerTool" in serverOrRuntime);
+  const server = isMcpServer ? (serverOrRuntime as McpServer) : undefined;
+  const teamRuntime =
+    runtime ??
+    (!isMcpServer && serverOrRuntime !== undefined
+      ? (serverOrRuntime as TeamRuntime)
+      : new TeamRuntime({
+          cfg: cfg as unknown as TeamRuntimeConfig,
+          cooldowns: adaptCooldowns(cooldowns),
+        }));
+
   return async (args, extra) => {
     try {
       const cwd = (args.cwd as string | undefined) ?? process.cwd();
+
+      if (tool.kind === "team") {
+        const handler = TEAM_HANDLERS[tool.name];
+        if (!handler) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `[agy-bridge] Unknown team tool handler: ${tool.name}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+        const projectRoot = path.resolve(
+          typeof args.cwd === "string" && args.cwd.trim().length > 0
+            ? args.cwd.trim()
+            : process.cwd(),
+        );
+        const ctx: TeamHandlerContext = {
+          projectRoot,
+          runtime: teamRuntime,
+        };
+        const res = await handler(args, ctx);
+        return {
+          content: res.content,
+          isError: res.isError,
+        };
+      }
 
       if (tool.name === "get_session_status") {
         let sessionId: string | undefined;
@@ -311,8 +368,10 @@ export function createToolHandler(
   };
 }
 
-export function createServer(): McpServer {
-  const cfg = loadConfig();
+export function createServer(
+  runtime?: TeamRuntime,
+  cfg: Config = loadConfig(),
+): McpServer {
   const registry = new ModelRegistry(async () => {
     const { stdout } = await execWithClosedStdin(cfg.agyPath, ["models"], {
       cwd: process.cwd(),
@@ -322,13 +381,19 @@ export function createServer(): McpServer {
     return stdout;
   });
   const cooldowns = new CooldownRegistry();
+  const teamRuntime =
+    runtime ??
+    new TeamRuntime({
+      cfg: cfg as unknown as TeamRuntimeConfig,
+      cooldowns: adaptCooldowns(cooldowns),
+    });
 
   const server = new McpServer({ name: "agy-bridge", version: "0.4.1" });
   for (const tool of TOOLS) {
     server.registerTool(
       tool.name,
       { description: tool.description, inputSchema: tool.schema },
-      createToolHandler(tool, cfg, registry, defaultDeps, cooldowns, server),
+      createToolHandler(tool, cfg, registry, defaultDeps, cooldowns, server, teamRuntime),
     );
   }
   return server;
