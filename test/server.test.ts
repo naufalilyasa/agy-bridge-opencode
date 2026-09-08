@@ -21,7 +21,8 @@ const cfg: Config = {
   onFailure: "fallback",
 };
 
-const LISTING = "Gemini 3.7 Flash (High)\nClaude Sonnet 4.6 (Thinking)\n";
+const LISTING =
+  "Gemini 3.7 Flash (High)\nClaude Sonnet 4.6 (Thinking)\ngemini-3.8-flash-high\n";
 
 const LOG_429 =
   "E0613 log.go:398] agent executor error: RESOURCE_EXHAUSTED (code 429): " +
@@ -270,5 +271,51 @@ describe("createToolHandler", () => {
     await handler({ role: "oracle", task: "Adversarial plan review" });
     expect(f.runs).toHaveLength(1);
     expect(f.modelOf(f.runs[0])).toBe("Gemini 3.7 Flash (High)");
+  });
+
+  it("attempts explicit model even when cooling in registry", async () => {
+    const f = fakeDeps();
+    const cooldowns = new CooldownRegistry();
+    cooldowns.set("gemini-3.8-flash-high", 9999);
+    expect(cooldowns.cooling("gemini-3.8-flash-high")).toBe(true);
+
+    const handler = handlerFor("delegate", f, {}, cooldowns);
+    await handler({ prompt: "do work", model: "gemini-3.8-flash-high" });
+
+    expect(f.runs).toHaveLength(1);
+    expect(f.modelOf(f.runs[0])).toBe("gemini-3.8-flash-high");
+  });
+
+  it("skips non-explicit models currently cooling", async () => {
+    const f = fakeDeps();
+    const cooldowns = new CooldownRegistry();
+    cooldowns.set("Gemini 3.7 Flash (High)", 9999);
+
+    const handler = handlerFor("web_lookup", f, {}, cooldowns);
+    await handler({ query: "docs" });
+
+    expect(f.runs).toHaveLength(1);
+    expect(f.modelOf(f.runs[0])).toBe("Claude Sonnet 4.6 (Thinking)");
+  });
+
+  it("includes actual model names dynamically in quota error message", async () => {
+    const f = fakeDeps(["Claude Sonnet 4.6 (Thinking)"]);
+    const handler = handlerFor("delegate", f, {
+      roleModels: { custom: ["Claude Sonnet 4.6 (Thinking)"] },
+    });
+    const res = await handler({ prompt: "hi", role: "custom" });
+    expect(res.isError).toBe(true);
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("Candidate models (Claude Sonnet 4.6 (Thinking))");
+    expect(text).not.toContain("Gemini 3.7 Flash & Claude Sonnet 4.6");
+  });
+
+  it("clears cooling models when CooldownRegistry.clear() is invoked", () => {
+    const cooldowns = new CooldownRegistry();
+    cooldowns.set("gemini-3.8-flash-high", 9999);
+    expect(cooldowns.cooling("gemini-3.8-flash-high")).toBe(true);
+
+    cooldowns.clear();
+    expect(cooldowns.cooling("gemini-3.8-flash-high")).toBe(false);
   });
 });

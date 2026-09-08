@@ -210,8 +210,9 @@ export function createToolHandler(
         (roleKey ? OMO_ROLES[roleKey]?.chain : undefined) ||
         tool.chain;
 
+      const explicitModel = args.model as string | undefined;
       const resolution = await registry.resolveChain({
-        explicit: args.model as string | undefined,
+        explicit: explicitModel,
         chain: effectiveChain,
         defaultModel: cfg.defaultModel,
       });
@@ -254,7 +255,7 @@ export function createToolHandler(
       };
 
       for (const model of resolution.models) {
-        if (model && cooldowns.cooling(model)) {
+        if (model && model !== explicitModel && cooldowns.cooling(model)) {
           attempts.push(`${model}: quota cooldown, ${cooldowns.describe(model)} left`);
           continue;
         }
@@ -279,8 +280,9 @@ export function createToolHandler(
       }
 
       if (!result) {
+        const modelList = resolution.models.filter(Boolean).join(", ") || "agy default";
         throw new Error(
-          `Both primary candidate models (Gemini 3.7 Flash & Claude Sonnet 4.6) are quota-exhausted or encountered server errors:\n` +
+          `Candidate models (${modelList}) are quota-exhausted or encountered server errors:\n` +
             `${attempts.map((a) => `- ${a}`).join("\n")}\n` +
             `Retry after the quota resets, or pass an explicit \`model\`.`,
         );

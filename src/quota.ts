@@ -80,6 +80,10 @@ export class CooldownRegistry {
 
   constructor(private now: () => number = Date.now) {}
 
+  clear(): void {
+    this.until.clear();
+  }
+
   set(model: string, resetSeconds: number | undefined): void {
     this.until.set(model, this.now() + (resetSeconds ?? DEFAULT_COOLDOWN_SEC) * 1000);
   }
