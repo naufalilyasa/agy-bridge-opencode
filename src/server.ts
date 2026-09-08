@@ -19,6 +19,7 @@ import {
   TeamRuntime,
   type TeamRuntimeConfig,
   type TeamCooldownRegistry,
+  type TeamRunMember,
 } from "./team/runtime.js";
 
 export class AllModelsExhaustedError extends Error {
@@ -78,6 +79,10 @@ export function createToolHandler(
       : new TeamRuntime({
           cfg: cfg as unknown as TeamRuntimeConfig,
           cooldowns: adaptCooldowns(cooldowns),
+          resolveModelChain: (member: TeamRunMember) =>
+            cfg.roleModels[member.resolvedRole] ??
+            OMO_ROLES[member.resolvedRole]?.chain ??
+            [member.resolvedRole],
         }));
 
   return async (args, extra) => {
@@ -407,6 +412,10 @@ export function createServer(
     new TeamRuntime({
       cfg: cfg as unknown as TeamRuntimeConfig,
       cooldowns: adaptCooldowns(cooldowns),
+      resolveModelChain: (member: TeamRunMember) =>
+        cfg.roleModels[member.resolvedRole] ??
+        OMO_ROLES[member.resolvedRole]?.chain ??
+        [member.resolvedRole],
     });
 
   const server = new McpServer({ name: "agy-bridge", version: "0.4.1" });

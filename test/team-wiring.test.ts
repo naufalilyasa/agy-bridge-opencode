@@ -3,10 +3,15 @@ import path from "node:path";
 import { loadConfig, type Config } from "../src/config.js";
 import { createToolHandler, createServer } from "../src/server.js";
 import { ModelRegistry } from "../src/models.js";
-import { TOOLS } from "../src/tools.js";
+import { TOOLS, OMO_ROLES } from "../src/tools.js";
 import { CooldownRegistry } from "../src/quota.js";
-import { TeamRuntime, type TeamRuntimeConfig } from "../src/team/runtime.js";
-import { drainActiveTeams } from "../src/index.js";
+import {
+  TeamRuntime,
+  type TeamRuntimeConfig,
+  type TeamRunMember,
+} from "../src/team/runtime.js";
+import { TEAM_HANDLERS } from "../src/team/handlers.js";
+import { drainActiveTeams, runtime as singletonRuntime } from "../src/index.js";
 import type { ChildHandle, RunnerDeps } from "../src/runner.js";
 
 const baseCfg: Config = {
@@ -207,5 +212,104 @@ describe("Graceful shutdown drain", () => {
     expect(deleted).toContain("team-run-1");
     expect(mockRuntime.stopLoop).toHaveBeenCalled();
     expect(mockRuntime.deleteTeam).toHaveBeenCalled();
+  });
+});
+
+describe("Production resolveModelChain wiring", () => {
+  it("wires resolveModelChain on createServer default TeamRuntime with config override and OMO_ROLES fallback", async () => {
+    let capturedRuntime: TeamRuntime | undefined;
+    const origHandler = TEAM_HANDLERS.team_list;
+    TEAM_HANDLERS.team_list = async (args, ctx) => {
+      capturedRuntime = ctx?.runtime;
+      return origHandler(args, ctx);
+    };
+
+    try {
+      const customCfg: Config = {
+        ...baseCfg,
+        roleModels: {
+          "custom-role": ["model-custom-1", "model-custom-2"],
+          quick: ["gemini-override"],
+        },
+      };
+
+      const server = createServer(undefined, customCfg);
+      const registeredTools = (server as unknown as {
+        _registeredTools: Record<string, { handler: (args: Record<string, unknown>) => Promise<unknown> }>;
+      })._registeredTools;
+      expect(registeredTools.team_list).toBeDefined();
+
+      await registeredTools.team_list.handler({ cwd: "/tmp/non-existent-proj" });
+
+      expect(capturedRuntime).toBeDefined();
+      expect(capturedRuntime?.deps.resolveModelChain).toBeDefined();
+      const resolver = capturedRuntime!.deps.resolveModelChain!;
+
+      // 1. cfg.roleModels override wins over OMO_ROLES
+      expect(resolver({ resolvedRole: "quick" } as TeamRunMember)).toEqual(["gemini-override"]);
+
+      // 2. cfg.roleModels for custom role
+      expect(resolver({ resolvedRole: "custom-role" } as TeamRunMember)).toEqual(["model-custom-1", "model-custom-2"]);
+
+      // 3. Fallback to OMO_ROLES.chain when not in cfg.roleModels
+      expect(resolver({ resolvedRole: "git-master" } as TeamRunMember)).toEqual(OMO_ROLES["git-master"].chain);
+
+      // 4. Fallback to [member.resolvedRole] when unknown role
+      expect(resolver({ resolvedRole: "unknown-role" } as TeamRunMember)).toEqual(["unknown-role"]);
+    } finally {
+      TEAM_HANDLERS.team_list = origHandler;
+    }
+  });
+
+  it("wires resolveModelChain on createToolHandler fallback TeamRuntime", async () => {
+    let capturedRuntime: TeamRuntime | undefined;
+    const origHandler = TEAM_HANDLERS.team_list;
+    TEAM_HANDLERS.team_list = async (args, ctx) => {
+      capturedRuntime = ctx?.runtime;
+      return origHandler(args, ctx);
+    };
+
+    try {
+      const f = fakeDeps();
+      const cooldowns = new CooldownRegistry();
+      const customCfg: Config = {
+        ...baseCfg,
+        roleModels: {
+          executor: ["model-exec-1"],
+        },
+      };
+
+      const toolDef = TOOLS.find((t) => t.name === "team_list")!;
+      const handler = createToolHandler(
+        toolDef,
+        customCfg,
+        new ModelRegistry(async () => "test-model\n"),
+        f.deps,
+        cooldowns,
+      );
+
+      await handler({ cwd: "/tmp/non-existent-proj" });
+
+      expect(capturedRuntime).toBeDefined();
+      expect(capturedRuntime?.deps.resolveModelChain).toBeDefined();
+      const resolver = capturedRuntime!.deps.resolveModelChain!;
+
+      expect(resolver({ resolvedRole: "executor" } as TeamRunMember)).toEqual(["model-exec-1"]);
+      expect(resolver({ resolvedRole: "tester" } as TeamRunMember)).toEqual(OMO_ROLES["tester"].chain);
+      expect(resolver({ resolvedRole: "mystery-agent" } as TeamRunMember)).toEqual(["mystery-agent"]);
+    } finally {
+      TEAM_HANDLERS.team_list = origHandler;
+    }
+  });
+
+  it("wires resolveModelChain on singleton runtime exported from index.ts", () => {
+    expect(singletonRuntime.deps.resolveModelChain).toBeDefined();
+    const resolver = singletonRuntime.deps.resolveModelChain!;
+
+    const cfgRoleModels = singletonRuntime.deps.cfg?.roleModels as Record<string, string[]> | undefined;
+    expect(resolver({ resolvedRole: "quick" } as TeamRunMember)).toEqual(
+      cfgRoleModels?.["quick"] ?? OMO_ROLES["quick"].chain,
+    );
+    expect(resolver({ resolvedRole: "unknown-slug" } as TeamRunMember)).toEqual(["unknown-slug"]);
   });
 });

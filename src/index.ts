@@ -3,12 +3,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "./config.js";
-import { TeamRuntime, type TeamRuntimeConfig } from "./team/runtime.js";
+import {
+  TeamRuntime,
+  type TeamRuntimeConfig,
+  type TeamRunMember,
+} from "./team/runtime.js";
+import { OMO_ROLES } from "./tools.js";
 import { createServer } from "./server.js";
 
 const cfg = loadConfig();
 export const runtime = new TeamRuntime({
   cfg: cfg as unknown as TeamRuntimeConfig,
+  resolveModelChain: (member: TeamRunMember) =>
+    cfg.roleModels[member.resolvedRole] ??
+    OMO_ROLES[member.resolvedRole]?.chain ??
+    [member.resolvedRole],
 });
 export const server = createServer(runtime, cfg);
 
