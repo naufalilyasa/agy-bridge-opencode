@@ -440,12 +440,14 @@ export function createServer(
   runtime?: TeamRuntime,
   cfg: Config = loadConfig(),
   deps: RunnerDeps = defaultDeps,
+  cfgProvider?: () => Config,
 ): McpServer {
   // Hot-reload provider: each tool invocation re-checks config file mtime.
-  const cfgProvider = () => loadConfigCached();
+  // Internal default; callers may supply their own cfgProvider for custom hot-reload.
+  const liveCfgProvider = cfgProvider ?? (() => loadConfigCached());
 
   const registry = new ModelRegistry(async () => {
-    const activeCfg = cfgProvider();
+    const activeCfg = liveCfgProvider();
     const { stdout } = await execWithClosedStdin(activeCfg.agyPath, ["models"], {
       cwd: process.cwd(),
       timeout: 30_000,
@@ -454,6 +456,9 @@ export function createServer(
     return stdout;
   });
   const cooldowns = new CooldownRegistry();
+  // getCfg: when caller provides cfgProvider, resolver hot-reloads from it.
+  // When cfg was supplied explicitly (e.g. tests), static capture via (() => cfg) preserves compat.
+  const getCfg = cfgProvider ?? (() => cfg);
   const teamRuntime =
     runtime ??
     new TeamRuntime({
@@ -461,7 +466,7 @@ export function createServer(
       cooldowns: adaptCooldowns(cooldowns),
       runWake: makeDefaultRunWake(cfg, deps),
       resolveModelChain: (member: TeamRunMember) =>
-        cfg.roleModels[member.resolvedRole] ??
+        getCfg().roleModels[member.resolvedRole] ??
         OMO_ROLES[member.resolvedRole]?.chain ?? [member.resolvedRole],
     });
 
@@ -470,7 +475,7 @@ export function createServer(
     server.registerTool(
       tool.name,
       { description: tool.description, inputSchema: tool.schema },
-      createToolHandler(tool, cfg, registry, deps, cooldowns, server, teamRuntime, cfgProvider),
+      createToolHandler(tool, cfg, registry, deps, cooldowns, server, teamRuntime, liveCfgProvider),
     );
   }
   return server;

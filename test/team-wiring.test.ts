@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadConfig, type Config } from "../src/config.js";
+import { loadConfig, loadConfigCached, _resetConfigCache, type Config } from "../src/config.js";
 import { createToolHandler, createServer, makeDefaultRunWake } from "../src/server.js";
 import { ModelRegistry } from "../src/models.js";
 import { TOOLS, OMO_ROLES } from "../src/tools.js";
@@ -496,5 +496,54 @@ describe("Production runWake wiring", () => {
   it("wires runWake on singleton runtime exported from index.ts", () => {
     expect(singletonRuntime.deps.runWake).toBeDefined();
     expect(typeof singletonRuntime.deps.runWake).toBe("function");
+  });
+});
+
+describe("createServer fallback resolver hot-reload via cfgProvider", () => {
+  it("resolver follows cfgProvider when returned config changes", async () => {
+    let capturedRuntime: TeamRuntime | undefined;
+    const origHandler = TEAM_HANDLERS.team_list;
+    TEAM_HANDLERS.team_list = async (args, ctx) => {
+      capturedRuntime = ctx?.runtime;
+      return origHandler(args, ctx);
+    };
+
+    try {
+      // Two config snapshots simulating a config file edit
+      const cfgV1: Config = { ...baseCfg, roleModels: { quick: ["v1-model"] } };
+      const cfgV2: Config = { ...baseCfg, roleModels: { quick: ["v2-model-hot"] } };
+
+      let currentCfg = cfgV1;
+      const hotProvider = () => currentCfg;
+
+      const server = createServer(undefined, cfgV1, undefined, hotProvider);
+      const registeredTools = (
+        server as unknown as {
+          _registeredTools: Record<
+            string,
+            { handler: (args: Record<string, unknown>) => Promise<unknown> }
+          >;
+        }
+      )._registeredTools;
+
+      await registeredTools.team_list.handler({ cwd: "/tmp/non-existent-proj" });
+
+      expect(capturedRuntime).toBeDefined();
+      const resolver = capturedRuntime!.deps.resolveModelChain!;
+
+      // Before config change — resolver reads v1
+      expect(resolver({ resolvedRole: "quick" } as TeamRunMember)).toEqual(["v1-model"]);
+
+      // Simulate hot config swap (e.g. mtime bump on disk)
+      currentCfg = cfgV2;
+
+      // After change — resolver reads v2 via cfgProvider
+      expect(resolver({ resolvedRole: "quick" } as TeamRunMember)).toEqual(["v2-model-hot"]);
+
+      // OMO_ROLES fallback still works for unknown roles
+      expect(resolver({ resolvedRole: "unknown-hot" } as TeamRunMember)).toEqual(["unknown-hot"]);
+    } finally {
+      TEAM_HANDLERS.team_list = origHandler;
+    }
   });
 });

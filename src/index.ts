@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, loadConfigCached } from "./config.js";
 import { TeamRuntime, type TeamRuntimeConfig, type TeamRunMember } from "./team/runtime.js";
 import { OMO_ROLES } from "./tools.js";
 import { createServer, makeDefaultRunWake } from "./server.js";
@@ -9,9 +9,13 @@ const cfg = loadConfig();
 export const runtime = new TeamRuntime({
   cfg: cfg as unknown as TeamRuntimeConfig,
   runWake: makeDefaultRunWake(cfg),
-  resolveModelChain: (member: TeamRunMember) =>
-    cfg.roleModels[member.resolvedRole] ??
-    OMO_ROLES[member.resolvedRole]?.chain ?? [member.resolvedRole],
+  // ponytail: chains hot-reload via loadConfigCached; cfg-proxy on TeamRuntimeConfig
+  // is ceiling — add live cfg knob to runtime if runtime-level live config needed later.
+  resolveModelChain: (member: TeamRunMember) => {
+    const c = loadConfigCached();
+    return c.roleModels[member.resolvedRole] ??
+      OMO_ROLES[member.resolvedRole]?.chain ?? [member.resolvedRole];
+  },
 });
 export const server = createServer(runtime, cfg);
 
