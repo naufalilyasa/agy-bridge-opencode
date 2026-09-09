@@ -1,5 +1,6 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { loadConfig, stripJsonComments } from "../src/config.js";
 
 describe("loadConfig", () => {
@@ -193,5 +194,82 @@ describe("loadConfig", () => {
     const c = JSON.parse(stripJsonComments(jsonc));
     expect(c.note).toBe("a,}b");
     expect(c.list).toEqual(["x", "y,"]);
+  });
+
+  it("(a) parses trailing comma followed by line comment and }", () => {
+    const jsonc = `{
+      "teamMaxParallel": 4,
+      "teamKillGraceMs": 5000, // komentar grace period
+    }`;
+    const parsed = JSON.parse(stripJsonComments(jsonc));
+    expect(parsed.teamMaxParallel).toBe(4);
+    expect(parsed.teamKillGraceMs).toBe(5000);
+  });
+
+  it("(b) parses trailing comma followed by block comment and }", () => {
+    const jsonc = `{
+      "defaultModel": "gemini-3.8-flash-high", /* trailing block comment */
+    }`;
+    const parsed = JSON.parse(stripJsonComments(jsonc));
+    expect(parsed.defaultModel).toBe("gemini-3.8-flash-high");
+  });
+
+  it("(c) parses trailing comma followed by newline and } (regression existing)", () => {
+    const jsonc = `{\n  "timeoutSec": 300,\n}`;
+    const parsed = JSON.parse(stripJsonComments(jsonc));
+    expect(parsed.timeoutSec).toBe(300);
+  });
+
+  it("(d) preserves comma inside string literal even if matching '\"a, }\"'", () => {
+    const jsonc = `{"query": "a, }", "nested": ["b, ]", 1]}`;
+    const parsed = JSON.parse(stripJsonComments(jsonc));
+    expect(parsed.query).toBe("a, }");
+    expect(parsed.nested).toEqual(["b, ]", 1]);
+  });
+
+  it("(e) preserves URL 'https://x.com/a' inside string literal without comment corruption", () => {
+    const jsonc = `{"endpoint": "https://x.com/a", "status": 200}`;
+    const parsed = JSON.parse(stripJsonComments(jsonc));
+    expect(parsed.endpoint).toBe("https://x.com/a");
+    expect(parsed.status).toBe(200);
+  });
+
+  it("(f) prints warning to stderr on parse failure and falls back to defaults", () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const invalidPath = path.resolve(__dirname, "./fixtures-invalid.jsonc");
+    fs.writeFileSync(invalidPath, "{ invalid json content / bad , }");
+
+    try {
+      const c = loadConfig({ AGY_CONFIG_PATH: invalidPath });
+      expect(c.timeoutSec).toBe(1200);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringMatching(
+          new RegExp(`\\[agy-bridge\\] WARNING: gagal parse config ${invalidPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: .*`),
+        ),
+      );
+    } finally {
+      if (fs.existsSync(invalidPath)) fs.unlinkSync(invalidPath);
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it("(g) prints info log to stderr and no warning when valid config is loaded", () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const validPath = path.resolve(__dirname, "../agy.config.json.example");
+      const c = loadConfig({ AGY_CONFIG_PATH: validPath });
+      expect(c.defaultModel).toBe("gemini-3.7-flash-high");
+
+      const errorCalls = consoleErrorSpy.mock.calls.map((call) => call.join(" "));
+      const hasWarning = errorCalls.some((msg) => msg.includes("WARNING: gagal parse config"));
+      expect(hasWarning).toBe(false);
+
+      const hasInfo = errorCalls.some((msg) =>
+        msg.includes(`[agy-bridge] config: ${validPath} (roles:`),
+      );
+      expect(hasInfo).toBe(true);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 });

@@ -122,7 +122,8 @@ function loadToolModels(
 }
 
 export function stripJsonComments(raw: string): string {
-  let out = "";
+  // Pass 1: strip comments while preserving strings
+  let noComments = "";
   let inString = false;
   let inLineComment = false;
   let inBlockComment = false;
@@ -135,7 +136,7 @@ export function stripJsonComments(raw: string): string {
     if (inLineComment) {
       if (c === "\n") {
         inLineComment = false;
-        out += c;
+        noComments += c;
       }
       continue;
     }
@@ -146,6 +147,39 @@ export function stripJsonComments(raw: string): string {
       }
       continue;
     }
+    if (inString) {
+      noComments += c;
+      if (escaped) {
+        escaped = false;
+      } else if (c === "\\") {
+        escaped = true;
+      } else if (c === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      noComments += c;
+    } else if (c === "/" && next === "/") {
+      inLineComment = true;
+      i++;
+    } else if (c === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+    } else {
+      noComments += c;
+    }
+  }
+
+  // Pass 2: strip trailing commas while preserving strings
+  let out = "";
+  inString = false;
+  escaped = false;
+
+  for (let i = 0; i < noComments.length; i++) {
+    const c = noComments[i];
+
     if (inString) {
       out += c;
       if (escaped) {
@@ -160,27 +194,25 @@ export function stripJsonComments(raw: string): string {
     if (c === '"') {
       inString = true;
       out += c;
-    } else if (c === "/" && next === "/") {
-      inLineComment = true;
-      i++;
-    } else if (c === "/" && next === "*") {
-      inBlockComment = true;
-      i++;
     } else if (c === ",") {
       let j = i + 1;
       while (
-        j < raw.length &&
-        (raw[j] === " " || raw[j] === "\t" || raw[j] === "\n" || raw[j] === "\r")
+        j < noComments.length &&
+        (noComments[j] === " " ||
+          noComments[j] === "\t" ||
+          noComments[j] === "\n" ||
+          noComments[j] === "\r")
       ) {
         j++;
       }
-      if (raw[j] !== "}" && raw[j] !== "]") {
+      if (noComments[j] !== "}" && noComments[j] !== "]") {
         out += c;
       }
     } else {
       out += c;
     }
   }
+
   return out;
 }
 
@@ -196,12 +228,19 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     configPath = fs.existsSync(jsoncPath) ? jsoncPath : jsonPath;
   }
 
-  try {
-    if (configPath && fs.existsSync(configPath)) {
+  let parseAttempted = false;
+  let parseFailed = false;
+  if (configPath && fs.existsSync(configPath)) {
+    parseAttempted = true;
+    try {
       const raw = fs.readFileSync(configPath, "utf8");
       fileConfig = JSON.parse(stripJsonComments(raw));
+    } catch (err: unknown) {
+      parseFailed = true;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[agy-bridge] WARNING: gagal parse config ${configPath}: ${msg}`);
     }
-  } catch {}
+  }
 
   const fileRoles = (fileConfig.roles || fileConfig.roleModels || {}) as Record<
     string,
@@ -248,6 +287,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       configurable: true,
       enumerable: env[envVar] !== undefined || fileConfig[key] !== undefined,
     });
+  }
+
+  if (parseAttempted && !parseFailed && configPath) {
+    const rolesCount = Object.keys(cfg.roleModels).length;
+    const toolModelsCount = cfg.toolModels ? Object.keys(cfg.toolModels).length : 0;
+    console.error(
+      `[agy-bridge] config: ${configPath} (roles: ${rolesCount}, toolModels: ${toolModelsCount})`,
+    );
   }
 
   return cfg;
