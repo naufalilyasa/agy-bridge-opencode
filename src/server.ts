@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { loadConfig, type Config } from "./config.js";
+import { loadConfig, loadConfigCached, type Config } from "./config.js";
 import { ModelRegistry } from "./models.js";
 import {
   runAgy,
@@ -95,6 +95,7 @@ export function createToolHandler(
   cooldowns: CooldownRegistry = new CooldownRegistry(),
   serverOrRuntime?: McpServer | TeamRuntime,
   runtime?: TeamRuntime,
+  cfgProvider?: () => Config,
 ): (args: Record<string, unknown>, extra?: HandlerExtra) => Promise<ToolResponse> {
   const isMcpServer =
     serverOrRuntime !== undefined &&
@@ -114,6 +115,8 @@ export function createToolHandler(
         }));
 
   return async (args, extra) => {
+    // Hot-reload: resolve config per call when a provider is available.
+    const activeCfg = cfgProvider ? cfgProvider() : cfg;
     try {
       const cwd = (args.cwd as string | undefined) ?? process.cwd();
 
@@ -255,8 +258,8 @@ export function createToolHandler(
         } catch {}
       }
       const effectiveChain =
-        cfg.toolModels?.[tool.name] ??
-        (roleKey ? cfg.roleModels[roleKey] : undefined) ??
+        activeCfg.toolModels?.[tool.name] ??
+        (roleKey ? activeCfg.roleModels[roleKey] : undefined) ??
         (roleKey ? OMO_ROLES[roleKey]?.chain : undefined) ??
         tool.chain;
 
@@ -264,7 +267,7 @@ export function createToolHandler(
       const resolution = await registry.resolveChain({
         explicit: explicitModel,
         chain: effectiveChain,
-        defaultModel: cfg.defaultModel,
+        defaultModel: activeCfg.defaultModel,
       });
 
       // Build the prompt AFTER resolving the chain so model-family-specific
@@ -282,7 +285,7 @@ export function createToolHandler(
           `- If agentmemory tools are unavailable or return zero results, state it explicitly in your final answer ("MEMORY RECALL: 0 results" / "MEMORY SAVE: unavailable"). Silently skipping this step is a protocol violation.`;
       }
       const timeoutSec =
-        cfg.perToolTimeouts[tool.name] ?? (cfg.timeoutExplicit ? cfg.timeoutSec : tool.timeoutSec);
+        activeCfg.perToolTimeouts[tool.name] ?? (activeCfg.timeoutExplicit ? activeCfg.timeoutSec : tool.timeoutSec);
 
       const attempts: string[] = [];
       let result: RunResult | undefined;
@@ -359,6 +362,11 @@ export function createToolHandler(
       }
 
       const meta: string[] = [`model: ${used ?? "agy default"}`];
+      const chainDisplay = resolution.models.filter(Boolean).join(" → ");
+      if (chainDisplay) meta.push(`chain: ${chainDisplay}`);
+      if (used !== undefined && resolution.models[0] !== undefined && used !== resolution.models[0]) {
+        meta.push(`⚠ downgraded from ${resolution.models[0]}`);
+      }
       if (resolution.note) meta.push(`note: ${resolution.note}`);
       if (attempts.length) meta.push(`failover: ${attempts.join("; ")}`);
       if (result.sessionId) meta.push(`session: ${result.sessionId} (use follow_up to continue)`);
@@ -410,7 +418,7 @@ export function createToolHandler(
       }
 
       let text = (err as Error).message;
-      if (cfg.onFailure === "strict") {
+      if (activeCfg.onFailure === "strict") {
         text +=
           "\n\n[agy-bridge strict mode] Delegation failed. Do NOT perform this work yourself " +
           "in the main context — report the failure to the user and let them decide how to proceed.";
@@ -433,8 +441,12 @@ export function createServer(
   cfg: Config = loadConfig(),
   deps: RunnerDeps = defaultDeps,
 ): McpServer {
+  // Hot-reload provider: each tool invocation re-checks config file mtime.
+  const cfgProvider = () => loadConfigCached();
+
   const registry = new ModelRegistry(async () => {
-    const { stdout } = await execWithClosedStdin(cfg.agyPath, ["models"], {
+    const activeCfg = cfgProvider();
+    const { stdout } = await execWithClosedStdin(activeCfg.agyPath, ["models"], {
       cwd: process.cwd(),
       timeout: 30_000,
       maxBuffer: 1024 * 1024,
@@ -458,7 +470,7 @@ export function createServer(
     server.registerTool(
       tool.name,
       { description: tool.description, inputSchema: tool.schema },
-      createToolHandler(tool, cfg, registry, deps, cooldowns, server, teamRuntime),
+      createToolHandler(tool, cfg, registry, deps, cooldowns, server, teamRuntime, cfgProvider),
     );
   }
   return server;

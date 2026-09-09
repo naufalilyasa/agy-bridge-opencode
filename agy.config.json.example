@@ -26,7 +26,9 @@
   // Default model jika tidak ada model yang ditentukan oleh role atau tool
   "defaultModel": "gemini-3.7-flash-high",
 
-  // Model chain overrides per tool (Urutan prioritas: explicit > toolModels > roles/roleModels > defaultModel > builtin chain)
+  // Model chain overrides per tool.
+  // PRECEDENCE BY DESIGN (highest → lowest):
+  //   explicit model (args.model) > toolModels[tool] > roleModels[role] > defaultModel > builtin chain
   // Nilai bisa berupa string tunggal atau array string
   "toolModels": {
     "web_lookup": "gemini-3.7-flash-high",

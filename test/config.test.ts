@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-import { describe, it, expect, vi } from "vitest";
-import { loadConfig, stripJsonComments } from "../src/config.js";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { loadConfig, loadConfigCached, _resetConfigCache, stripJsonComments } from "../src/config.js";
 
 describe("loadConfig", () => {
   it("returns defaults for empty env", () => {
@@ -271,5 +272,77 @@ describe("loadConfig", () => {
     } finally {
       consoleErrorSpy.mockRestore();
     }
+  });
+});
+
+describe("loadConfigCached (hot-reload mtime cache)", () => {
+  let tmpFile: string;
+
+  beforeEach(() => {
+    _resetConfigCache();
+    tmpFile = path.join(os.tmpdir(), `agy-bridge-test-${Date.now()}.jsonc`);
+  });
+
+  afterEach(() => {
+    _resetConfigCache();
+    if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile);
+  });
+
+  it("returns cached config on repeated calls when file mtime is unchanged", () => {
+    fs.writeFileSync(tmpFile, JSON.stringify({ defaultModel: "gemini-3.7-flash-high" }));
+    const c1 = loadConfigCached({ AGY_CONFIG_PATH: tmpFile });
+    expect(c1.defaultModel).toBe("gemini-3.7-flash-high");
+    // Second call — same mtime, must return same object reference (cache hit)
+    const c2 = loadConfigCached({ AGY_CONFIG_PATH: tmpFile });
+    expect(c2).toBe(c1);
+  });
+
+  it("re-reads config when file mtime changes (touch → new value visible)", async () => {
+    fs.writeFileSync(tmpFile, JSON.stringify({ defaultModel: "gemini-3.7-flash-high" }));
+    const c1 = loadConfigCached({ AGY_CONFIG_PATH: tmpFile });
+    expect(c1.defaultModel).toBe("gemini-3.7-flash-high");
+
+    // Wait ≥1 ms then write a new value — on most filesystems this changes mtime
+    await new Promise((r) => setTimeout(r, 10));
+    fs.writeFileSync(tmpFile, JSON.stringify({ defaultModel: "claude-sonnet-4-6" }));
+
+    // Force a different mtime by touching the file's timestamps explicitly
+    const now = new Date();
+    fs.utimesSync(tmpFile, now, new Date(now.getTime() + 1000));
+
+    const c2 = loadConfigCached({ AGY_CONFIG_PATH: tmpFile });
+    expect(c2.defaultModel).toBe("claude-sonnet-4-6");
+    expect(c2).not.toBe(c1);
+  });
+
+  it("falls back to cached config when file disappears on reload (statSync throws)", () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Populate cache with valid config
+      fs.writeFileSync(tmpFile, JSON.stringify({ defaultModel: "gemini-3.7-flash-high" }));
+      const c1 = loadConfigCached({ AGY_CONFIG_PATH: tmpFile });
+      expect(c1.defaultModel).toBe("gemini-3.7-flash-high");
+
+      // Remove the file — next statSync throws ENOENT
+      fs.unlinkSync(tmpFile);
+
+      // Should fall back to old cache + log warning
+      const c2 = loadConfigCached({ AGY_CONFIG_PATH: tmpFile });
+      expect(c2.defaultModel).toBe("gemini-3.7-flash-high");
+      expect(c2).toBe(c1);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/WARNING: config reload failed/),
+      );
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it("falls back gracefully when config file is absent on first load (no cache yet)", () => {
+    // Point to a file that does not exist — first load, no cache
+    const c = loadConfigCached({ AGY_CONFIG_PATH: "/nonexistent-path/missing.jsonc" });
+    // Should return defaults, not throw
+    expect(c.agyPath).toBe("agy");
+    expect(c.timeoutSec).toBe(1200);
   });
 });
