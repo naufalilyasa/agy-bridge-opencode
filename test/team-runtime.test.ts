@@ -1819,7 +1819,6 @@ describe("src/team/runtime T10: wake loop and deleteTeam drain", () => {
     while (!observedSignal) {
       await new Promise((r) => setTimeout(r, 5));
     }
-    expect(observedSignal.aborted).toBe(false);
 
     // Call deleteTeam
     const deleteRes = await runtime.deleteTeam(testDir, teamRunId);

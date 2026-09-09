@@ -120,6 +120,7 @@ export interface WakeOptions {
   member: string;
   projectRoot: string;
   teamRunId: string;
+  cwd?: string;
   prompt: string;
   model: string;
   conversationId?: string;
@@ -564,6 +565,8 @@ export class TeamRuntime {
 
   constructor(deps: TeamRuntimeDeps = {}) {
     this.deps = deps;
+    // BoundedSemaphore is a constructor snapshot of cfg.teamMaxParallel;
+    // changing the cap requires a new TeamRuntime (pollMs is read fresh per startLoop).
     this.semaphore =
       deps.semaphore ??
       new BoundedSemaphore(deps.cfg?.teamMaxParallel ?? deps.cfg?.maxParallel ?? 4);
@@ -995,6 +998,7 @@ export class TeamRuntime {
             member: memberName,
             projectRoot,
             teamRunId,
+            cwd: member.worktreePath ?? projectRoot,
             prompt,
             model,
             conversationId,
@@ -1117,13 +1121,20 @@ export class TeamRuntime {
     const setIntervalFn = this.deps.setInterval ?? setInterval;
 
     const tick = async () => {
+      let state: TeamRunState | null;
       try {
-        const state = await loadTeamState(projectRoot, teamRunId);
-        if (!state || state.status === "deleted") {
-          this.stopLoop(teamRunId);
-          return;
-        }
+        state = await loadTeamState(projectRoot, teamRunId);
+      } catch {
+        this.stopLoop(teamRunId);
+        return;
+      }
 
+      if (!state || state.status === "deleted") {
+        this.stopLoop(teamRunId);
+        return;
+      }
+
+      try {
         const rd = runDir(projectRoot, teamRunId);
 
         for (const member of state.members) {
@@ -1162,7 +1173,7 @@ export class TeamRuntime {
           }
         }
       } catch {
-        // State read failure or loop error, ignore so loop continues
+        // Loop error, ignore so loop continues
       }
     };
 

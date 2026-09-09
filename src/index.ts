@@ -3,11 +3,14 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { loadConfig, loadConfigCached } from "./config.js";
 import { TeamRuntime, type TeamRuntimeConfig, type TeamRunMember } from "./team/runtime.js";
 import { OMO_ROLES } from "./tools.js";
-import { createServer, makeDefaultRunWake } from "./server.js";
+import { createServer, makeDefaultRunWake, adaptCooldowns } from "./server.js";
+import { CooldownRegistry } from "./quota.js";
 
 const cfg = loadConfig();
+const cooldowns = new CooldownRegistry();
 export const runtime = new TeamRuntime({
   cfg: cfg as unknown as TeamRuntimeConfig,
+  cooldowns: adaptCooldowns(cooldowns),
   runWake: makeDefaultRunWake(cfg),
   // ponytail: chains hot-reload via loadConfigCached; cfg-proxy on TeamRuntimeConfig
   // is ceiling — add live cfg knob to runtime if runtime-level live config needed later.
@@ -17,7 +20,7 @@ export const runtime = new TeamRuntime({
       OMO_ROLES[member.resolvedRole]?.chain ?? [member.resolvedRole];
   },
 });
-export const server = createServer(runtime, cfg);
+export const server = createServer(runtime, cfg, undefined, undefined, cooldowns);
 
 let draining = false;
 

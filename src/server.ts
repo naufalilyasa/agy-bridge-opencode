@@ -46,7 +46,7 @@ interface ToolResponse {
   isError?: boolean;
 }
 
-function adaptCooldowns(cooldowns: CooldownRegistry): TeamCooldownRegistry {
+export function adaptCooldowns(cooldowns: CooldownRegistry): TeamCooldownRegistry {
   return {
     isCooled: (model: string) => cooldowns.cooling(model),
     set: (model: string, resetSeconds: number) => cooldowns.set(model, resetSeconds),
@@ -62,7 +62,7 @@ export function makeDefaultRunWake(
     const res = await runAgy(
       {
         prompt: options.prompt,
-        cwd: options.projectRoot,
+        cwd: options.cwd ?? options.projectRoot,
         model: options.model,
         conversationId: options.conversationId,
         timeoutSec: options.timeoutSec,
@@ -371,6 +371,7 @@ export function createToolHandler(
       if (attempts.length) meta.push(`failover: ${attempts.join("; ")}`);
       if (result.sessionId) meta.push(`session: ${result.sessionId} (use follow_up to continue)`);
 
+      // ponytail: sessions file is last-writer-wins per cwd; role inheritance is best-effort (latest delegate wins); explicit follow_up session_id+role always wins.
       if (tool.name === "delegate" && result.sessionId && roleKey) {
         try {
           const roles = JSON.parse((await deps.readRoleFile()) || "{}") as Record<
@@ -441,6 +442,7 @@ export function createServer(
   cfg: Config = loadConfig(),
   deps: RunnerDeps = defaultDeps,
   cfgProvider?: () => Config,
+  cooldowns: CooldownRegistry = new CooldownRegistry(),
 ): McpServer {
   // Hot-reload provider: each tool invocation re-checks config file mtime.
   // Internal default; callers may supply their own cfgProvider for custom hot-reload.
@@ -455,7 +457,6 @@ export function createServer(
     });
     return stdout;
   });
-  const cooldowns = new CooldownRegistry();
   // getCfg: when caller provides cfgProvider, resolver hot-reloads from it.
   // When cfg was supplied explicitly (e.g. tests), static capture via (() => cfg) preserves compat.
   const getCfg = cfgProvider ?? (() => cfg);
