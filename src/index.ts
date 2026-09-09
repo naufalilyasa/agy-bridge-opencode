@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-import fs from "node:fs";
-import path from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "./config.js";
 import {
@@ -50,27 +48,6 @@ export async function drainActiveTeams(
     }
   }
 
-  // Disk inspection for current project
-  try {
-    const runtimeDir = path.join(process.cwd(), ".omo", "runtime");
-    if (fs.existsSync(runtimeDir)) {
-      const entries = fs.readdirSync(runtimeDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const statePath = path.join(runtimeDir, entry.name, "state.json");
-        if (fs.existsSync(statePath)) {
-          try {
-            const raw = fs.readFileSync(statePath, "utf8");
-            const state = JSON.parse(raw) as { teamRunId?: string; status?: string };
-            if (state?.teamRunId && state.status !== "deleted") {
-              activeTeams.set(state.teamRunId, process.cwd());
-            }
-          } catch {}
-        }
-      }
-    }
-  } catch {}
-
   const drains: Promise<unknown>[] = [];
   for (const [teamRunId, root] of activeTeams.entries()) {
     try {
@@ -98,21 +75,26 @@ export async function drainAndExit(code = 0, rt: TeamRuntime = runtime): Promise
   process.exit(code);
 }
 
-process.on("SIGINT", () => {
-  void drainAndExit(0);
-});
+// ponytail: register only in the real MCP entrypoint — importing this module
+// from tests must not arm stdin-close drain (it wipes real .omo/runtime teams
+// on disk when the vitest worker exits).
+if (!process.env.VITEST) {
+  process.on("SIGINT", () => {
+    void drainAndExit(0);
+  });
 
-process.on("SIGTERM", () => {
-  void drainAndExit(0);
-});
+  process.on("SIGTERM", () => {
+    void drainAndExit(0);
+  });
 
-process.stdin.on("end", () => {
-  void drainAndExit(0);
-});
+  process.stdin.on("end", () => {
+    void drainAndExit(0);
+  });
 
-process.stdin.on("close", () => {
-  void drainAndExit(0);
-});
+  process.stdin.on("close", () => {
+    void drainAndExit(0);
+  });
+}
 
 if (!process.env.VITEST) {
   server

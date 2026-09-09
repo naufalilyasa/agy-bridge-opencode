@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { loadConfig, type Config } from "../src/config.js";
 import { createToolHandler, createServer, makeDefaultRunWake } from "../src/server.js";
@@ -212,6 +214,39 @@ describe("Graceful shutdown drain", () => {
     expect(deleted).toContain("team-run-1");
     expect(mockRuntime.stopLoop).toHaveBeenCalled();
     expect(mockRuntime.deleteTeam).toHaveBeenCalled();
+  });
+
+  it("drain does NOT scan on-disk .omo/runtime — only drains teams owned by this process", async () => {
+    const deleted: string[] = [];
+    const mockRuntime = {
+      loops: new Map(),
+      teamRoots: new Map(),
+      stopLoop: vi.fn(),
+      deleteTeam: vi.fn(async (_root: string, teamRunId: string) => {
+        deleted.push(teamRunId);
+        return { teamRunId, status: "deleted" as const, removedWorktrees: 0 };
+      }),
+    } as unknown as TeamRuntime;
+
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "drain-noscan-"));
+    fs.mkdirSync(path.join(scratch, ".omo", "runtime", "team-disk-ghost-0001"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(scratch, ".omo", "runtime", "team-disk-ghost-0001", "state.json"),
+      JSON.stringify({ teamRunId: "team-disk-ghost-0001", status: "active" }),
+    );
+    const prevCwd = process.cwd();
+    process.chdir(scratch);
+    try {
+      await drainActiveTeams(mockRuntime, 100);
+    } finally {
+      process.chdir(prevCwd);
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+
+    expect(deleted).not.toContain("team-disk-ghost-0001");
+    expect(deleted).toHaveLength(0);
   });
 });
 
