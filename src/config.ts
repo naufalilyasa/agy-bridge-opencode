@@ -2,6 +2,70 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+/** Resolved config file path used by the cached loader. */
+let _cachedPath: string | undefined;
+let _cachedMtimeMs: number = 0;
+let _cachedConfig: Config | undefined;
+
+/**
+ * Hot-reload-friendly config loader.  Re-reads agy_bridge.jsonc only when
+ * its mtime has changed (fs.statSync — cheap).  On file-not-found or
+ * parse error during a *reload* (not first load), the last good Config is
+ * kept and a warning is logged to stderr so the MCP server never crashes.
+ */
+export function loadConfigCached(
+  env: Record<string, string | undefined> = process.env,
+): Config {
+  const cfgPath = resolveConfigPath(env);
+  if (cfgPath) {
+    try {
+      const st = fs.statSync(cfgPath);
+      if (_cachedConfig && cfgPath === _cachedPath && st.mtimeMs === _cachedMtimeMs) {
+        return _cachedConfig;
+      }
+      // File changed or first load — reload.
+      const fresh = loadConfig(env);
+      _cachedPath = cfgPath;
+      _cachedMtimeMs = st.mtimeMs;
+      _cachedConfig = fresh;
+      return fresh;
+    } catch (err: unknown) {
+      // File disappeared or corrupt during reload.
+      if (_cachedConfig) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[agy-bridge] WARNING: config reload failed (${msg}), using cached config`);
+        return _cachedConfig;
+      }
+      // First load — no cache to fall back to; delegate to loadConfig which
+      // already handles errors gracefully.
+    }
+  }
+  const fresh = loadConfig(env);
+  _cachedConfig = fresh;
+  _cachedPath = cfgPath;
+  return fresh;
+}
+
+/** Resolve the config file path without reading it (shared by loadConfig + cached). */
+function resolveConfigPath(
+  env: Record<string, string | undefined>,
+): string | undefined {
+  if (env.AGY_CONFIG_PATH !== undefined) return env.AGY_CONFIG_PATH;
+  if (env.NODE_ENV !== "test" && process.env.NODE_ENV !== "test") {
+    const jsoncPath = path.join(os.homedir(), ".gemini", "config", "agy_bridge.jsonc");
+    const jsonPath = path.join(os.homedir(), ".gemini", "config", "agy_bridge.json");
+    return fs.existsSync(jsoncPath) ? jsoncPath : jsonPath;
+  }
+  return undefined;
+}
+
+/** Reset cached state (for testing only). */
+export function _resetConfigCache(): void {
+  _cachedPath = undefined;
+  _cachedMtimeMs = 0;
+  _cachedConfig = undefined;
+}
+
 export interface Config {
   agyPath: string;
   timeoutSec: number;

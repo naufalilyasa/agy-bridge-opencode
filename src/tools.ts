@@ -225,7 +225,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Clean branch management and conflict resolution",
       "Git history cleanliness and commit integrity",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   git_master: {
     title: "OMO_GIT_MASTER",
@@ -238,7 +238,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Clean branch management and conflict resolution",
       "Git history cleanliness and commit integrity",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   git: {
     title: "OMO_GIT_MASTER",
@@ -251,7 +251,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Clean branch management and conflict resolution",
       "Git history cleanliness and commit integrity",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   oracle: {
     title: "OMO_ORACLE_ARCHITECT",
@@ -264,7 +264,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Integration risks and performance characteristics",
       "Ranking findings by severity (Critical / Major / Minor)",
     ],
-    chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
+    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   librarian: {
     title: "OMO_LIBRARIAN",
@@ -277,7 +277,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Version trade-off evaluation (stability, license, maintenance, breaking changes)",
       "Tooling: MCP context7, MCP exa/web search, built-in webfetch",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   explore: {
     title: "OMO_EXPLORER_RESEARCHER",
@@ -290,7 +290,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "External documentation and API reference lookups",
       "Dependency mapping and caller/callee tracing",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   momus: {
     title: "OMO_MOMUS_VERIFIER",
@@ -302,7 +302,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Internal contradictions and missing QA scenarios",
       "Approval-biased verdict: OKAY or REJECT with ≤3 issues",
     ],
-    chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
+    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   metis: {
     title: "OMO_METIS_PLAN_CONSULTANT",
@@ -314,7 +314,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Ambiguity and AI-slop pattern detection",
       "Clarifying questions and planner directives",
     ],
-    chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
+    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   "multimodal-looker": {
     title: "OMO_MULTIMODAL_LOOKER",
@@ -326,7 +326,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Visual layout verification and asset descriptor checks",
       "External visual reference lookups",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   looker: {
     title: "OMO_MULTIMODAL_LOOKER",
@@ -338,7 +338,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Visual layout verification and asset descriptor checks",
       "External visual reference lookups",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   ultrabrain: {
     title: "OMO_ULTRABRAIN_ARCHITECT",
@@ -351,7 +351,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Trade-off evaluation with alternatives considered",
       "Adversarial validation of critical paths",
     ],
-    chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
+    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   deep: {
     title: "OMO_DEEP_ENGINEER",
@@ -364,7 +364,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Full delivery — no POCs, no simplified versions",
       "Verified changes with file:line citations",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   "visual-engineering": {
     title: "OMO_VISUAL_ENGINEER",
@@ -376,7 +376,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "UI files: .vue/.css/.html/.tsx/Compose components, layout, animation",
       "Zero hardcoded values: colors, spacing, radii all from tokens",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   artistry: {
     title: "OMO_ARTISTRY_ENGINEER",
@@ -388,7 +388,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Bold options explored before committing; pattern-breaking with coherence",
       "Distinctive typography, motion, and visual identity",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   writing: {
     title: "OMO_TECHNICAL_WRITER",
@@ -400,7 +400,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Evidence and audit documentation",
       "API documentation with accurate examples",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   quick: {
     title: "OMO_QUICK_EXECUTOR",
@@ -412,7 +412,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Purely mechanical multi-file edits (delete blocks, rename, readonly toggle)",
       "Fast verification: compile/lint/smallest relevant check",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
 
   // --- CANONICAL SUBAGENT ROLES ---
@@ -426,7 +426,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Edge case and negative scenario validation",
       "Mock/fake repository implementations for tests",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   qa: {
     title: "QA_TEST_ENGINEER",
@@ -438,7 +438,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Edge case and negative scenario validation",
       "Mock/fake repository implementations for tests",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   reviewer: {
     title: "SENIOR_CODE_REVIEWER",
@@ -450,7 +450,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Clean Architecture and quarantine compliance",
       "Actionable recommendations ranked by severity",
     ],
-    chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
+    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   "code-reviewer": {
     title: "SENIOR_CODE_REVIEWER",
@@ -462,7 +462,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Clean Architecture and quarantine compliance",
       "Actionable recommendations ranked by severity",
     ],
-    chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
+    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   security: {
     title: "SECURITY_AUDITOR",
@@ -474,7 +474,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Injection flaws and input sanitization",
       "SDK permission checks and sandbox boundary validation",
     ],
-    chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
+    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   "security-auditor": {
     title: "SECURITY_AUDITOR",
@@ -486,7 +486,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Injection flaws and input sanitization",
       "SDK permission checks and sandbox boundary validation",
     ],
-    chain: ["Claude Sonnet 4.6 (Thinking)", "Gemini 3.7 Flash (High)"],
+    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   devops: {
     title: "DEVOPS_ENGINEER",
@@ -498,7 +498,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "CI/CD workflows and automated quality checks",
       "Environment isolation and dependency management",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   product: {
     title: "PRODUCT_MANAGER",
@@ -510,7 +510,7 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Feature decomposition and milestone planning",
       "Clear success metrics and definition of done",
     ],
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
 };
 
@@ -530,7 +530,7 @@ export const TOOLS: ToolDef[] = [
       question: z.string().describe("What you want to know about these files."),
       ...commonShape,
     },
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
     timeoutSec: 300,
     buildPrompt(args, cwd) {
       const files = resolveFiles(args.files as string[], cwd);
@@ -552,7 +552,7 @@ export const TOOLS: ToolDef[] = [
         .describe("What to find, e.g. 'when was the auth middleware refactored and why'."),
       ...commonShape,
     },
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
     timeoutSec: 180,
     buildPrompt(args) {
       return (
@@ -572,7 +572,7 @@ export const TOOLS: ToolDef[] = [
       query: z.string().describe("What to look up on the web."),
       ...commonShape,
     },
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
     timeoutSec: 120,
     buildPrompt(args) {
       return `Look up on the web: ${args.query}\n\nInclude source URLs for key claims. ${OUTPUT_RULES}`;
@@ -596,7 +596,7 @@ export const TOOLS: ToolDef[] = [
       focus: z.string().optional().describe("Optional focus area, e.g. 'security', 'concurrency'."),
       ...commonShape,
     },
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
     timeoutSec: 300,
     buildPrompt(args, cwd) {
       const files = args.files as string[] | undefined;
@@ -668,7 +668,7 @@ export const TOOLS: ToolDef[] = [
         .describe("Instruction to persist new findings to agentmemory upon finishing."),
       ...commonShape,
     },
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
     timeoutSec: 600,
     buildPrompt(args) {
       const q = (args.instruction as string) || (args.question as string);
@@ -817,7 +817,7 @@ export const TOOLS: ToolDef[] = [
         ),
       ...commonShape,
     },
-    chain: ["Gemini 3.7 Flash (High)", "Claude Sonnet 4.6 (Thinking)"],
+    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
     timeoutSec: 600,
     buildPrompt(args, cwd, model) {
       const taskArg = (args.task as string) || "";
