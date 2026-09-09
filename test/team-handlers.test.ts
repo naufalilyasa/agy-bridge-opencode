@@ -13,11 +13,7 @@ import {
   TEAM_HANDLERS,
   type TeamHandlerContext,
 } from "../src/team/handlers.js";
-import {
-  TeamRuntime,
-  resolveMemberWorktree,
-  type TeamRuntimeDeps,
-} from "../src/team/runtime.js";
+import { TeamRuntime, resolveMemberWorktree, type TeamRuntimeDeps } from "../src/team/runtime.js";
 import { type TeamSpec } from "../src/team/spec.js";
 import { MAX_PAYLOAD_BYTES } from "../src/team/mailbox.js";
 import { atomicWriteJson } from "../src/team/store.js";
@@ -277,7 +273,9 @@ describe("T14-T15: Messaging & Task Tool Handlers", () => {
       // update
       const updateNoArgs = await handleTeamTaskUpdate({ teamRunId, taskId: "t1" }, ctx);
       expect(updateNoArgs.isError).toBe(true);
-      expect(updateNoArgs.content[0].text).toContain("At least one of 'status' or 'owner' must be provided");
+      expect(updateNoArgs.content[0].text).toContain(
+        "At least one of 'status' or 'owner' must be provided",
+      );
     });
 
     it("returns (no tasks) when task list is empty", async () => {
@@ -322,13 +320,19 @@ describe("T14-T15: Messaging & Task Tool Handlers", () => {
     });
 
     it("filters task list by status and owner", async () => {
-      const create1 = await handleTeamTaskCreate({ teamRunId, subject: "Task 1", owner: "lead" }, ctx);
+      const create1 = await handleTeamTaskCreate(
+        { teamRunId, subject: "Task 1", owner: "lead" },
+        ctx,
+      );
       const task1 = JSON.parse(create1.content[0].text.slice(create1.content[0].text.indexOf("{")));
 
       await handleTeamTaskCreate({ teamRunId, subject: "Task 2", owner: "tester" }, ctx);
 
       // Claim task 1
-      await handleTeamTaskUpdate({ teamRunId, taskId: task1.id, status: "claimed", owner: "lead" }, ctx);
+      await handleTeamTaskUpdate(
+        { teamRunId, taskId: task1.id, status: "claimed", owner: "lead" },
+        ctx,
+      );
 
       // Filter by status=claimed
       const claimedList = await handleTeamTaskList({ teamRunId, status: "claimed" }, ctx);
@@ -351,7 +355,9 @@ describe("T14-T15: Messaging & Task Tool Handlers", () => {
         },
         ctx,
       );
-      const created = JSON.parse(createRes.content[0].text.slice(createRes.content[0].text.indexOf("{")));
+      const created = JSON.parse(
+        createRes.content[0].text.slice(createRes.content[0].text.indexOf("{")),
+      );
 
       const getRes = await handleTeamTaskGet({ teamRunId, taskId: created.id }, ctx);
       expect(getRes.isError).toBeFalsy();
@@ -379,7 +385,9 @@ describe("T14-T15: Messaging & Task Tool Handlers", () => {
 
     it("claims a pending task atomically requiring owner", async () => {
       const createRes = await handleTeamTaskCreate({ teamRunId, subject: "Unassigned Task" }, ctx);
-      const created = JSON.parse(createRes.content[0].text.slice(createRes.content[0].text.indexOf("{")));
+      const created = JSON.parse(
+        createRes.content[0].text.slice(createRes.content[0].text.indexOf("{")),
+      );
 
       // Claiming without owner fails
       const noOwner = await handleTeamTaskUpdate(
@@ -409,7 +417,9 @@ describe("T14-T15: Messaging & Task Tool Handlers", () => {
 
     it("executes forward-only status transitions (claimed -> in_progress -> completed)", async () => {
       const createRes = await handleTeamTaskCreate({ teamRunId, subject: "Pipeline Task" }, ctx);
-      const created = JSON.parse(createRes.content[0].text.slice(createRes.content[0].text.indexOf("{")));
+      const created = JSON.parse(
+        createRes.content[0].text.slice(createRes.content[0].text.indexOf("{")),
+      );
 
       // 1. Claim
       await handleTeamTaskUpdate(
@@ -447,7 +457,9 @@ describe("T14-T15: Messaging & Task Tool Handlers", () => {
         { teamRunId, subject: "Owned Task", owner: "lead" },
         ctx,
       );
-      const created = JSON.parse(createRes.content[0].text.slice(createRes.content[0].text.indexOf("{")));
+      const created = JSON.parse(
+        createRes.content[0].text.slice(createRes.content[0].text.indexOf("{")),
+      );
 
       // Claim as lead
       await handleTeamTaskUpdate(

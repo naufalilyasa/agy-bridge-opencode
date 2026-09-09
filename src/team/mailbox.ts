@@ -163,9 +163,7 @@ export async function sendMessage<T = unknown>(
   let recipients: string[];
   if (input.to === "*") {
     if (!resolvedMemberNames || resolvedMemberNames.length === 0) {
-      throw new TeamError(
-        "Broadcast message (to='*') requires non-empty memberNames list",
-      );
+      throw new TeamError("Broadcast message (to='*') requires non-empty memberNames list");
     }
     recipients = [...new Set(resolvedMemberNames)];
   } else if (Array.isArray(input.to)) {
@@ -199,10 +197,7 @@ export async function sendMessage<T = unknown>(
     delete (testRecord as { memberNames?: unknown }).memberNames;
 
     const serializedBytes = Buffer.byteLength(`${JSON.stringify(testRecord, null, 2)}\n`, "utf-8");
-    if (
-      currentUnread + serializedBytes > maxUnread ||
-      currentUnread + payloadSize > maxUnread
-    ) {
+    if (currentUnread + serializedBytes > maxUnread || currentUnread + payloadSize > maxUnread) {
       throw new RecipientBackpressureError(
         `Recipient "${recipient}" inbox unread backpressure exceeds limit of ${maxUnread} bytes (current: ${currentUnread}, additional: ${serializedBytes})`,
       );
@@ -232,10 +227,7 @@ export async function sendMessage<T = unknown>(
         `${JSON.stringify(messageRecord, null, 2)}\n`,
         "utf-8",
       );
-      if (
-        currentUnread + serializedBytes > maxUnread ||
-        currentUnread + payloadSize > maxUnread
-      ) {
+      if (currentUnread + serializedBytes > maxUnread || currentUnread + payloadSize > maxUnread) {
         throw new RecipientBackpressureError(
           `Recipient "${recipient}" inbox unread backpressure exceeds limit of ${maxUnread} bytes`,
         );

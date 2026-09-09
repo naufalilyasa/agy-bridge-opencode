@@ -141,24 +141,25 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 
 The installer establishes configuration across several target directories:
 
-| Component            | Source in Repo                         | Target Path (macOS/Linux)                                                                         | Target Path (Windows)                                                                                                                             |
-| :------------------- | :------------------------------------- | :------------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **OpenCode Config**  | `config/opencode.jsonc.example`        | `~/.config/opencode/opencode.jsonc`                                                               | `%USERPROFILE%\.config\opencode\opencode.jsonc`                                                                                                   |
-| **Guard Plugin**     | `config/agy-delegate-guard.js.example` | `~/.config/opencode/plugins/agy-delegate-guard.js`                                                | `%USERPROFILE%\.config\opencode\plugins\agy-delegate-guard.js`                                                                                    |
-| **OMO Config**       | `config/omo.jsonc.example`             | `~/.omo/omo.jsonc`                                                                                | `%USERPROFILE%\.omo\omo.jsonc`                                                                                                                    |
-| **Model Routing**    | `config/agy_bridge.jsonc.example`      | `~/.gemini/config/agy_bridge.jsonc`                                                               | `%USERPROFILE%\.gemini\config\agy_bridge.jsonc`                                                                                                   |
-| **Toggle Utility**   | `scripts/agy-bridge-toggle`            | `~/.local/bin/agy-bridge-toggle`                                                                  | `%USERPROFILE%\.local\bin\agy-bridge-toggle.cmd`                                                                                                  |
-| **Toggle Shortcuts** | `scripts/install.sh` generated         | `~/.local/bin/agy-bridge-on`<br>`~/.local/bin/agy-bridge-off`<br>`~/.local/bin/agy-bridge-status` | `%USERPROFILE%\.local\bin\agy-bridge-on.cmd`<br>`%USERPROFILE%\.local\bin\agy-bridge-off.cmd`<br>`%USERPROFILE%\.local\bin\agy-bridge-status.cmd` |
-| **Live Monitor**     | `bin/agy-live-runner.js`               | `~/.local/bin/agy-live`                                                                           | `%USERPROFILE%\.local\bin\agy-live.cmd`                                                                                                           |
-| **Live Monitor (TUI)** | `bin/agy-live.ts`                    | alias `agy-live2` (runs via `bun`)                                                                | `%USERPROFILE%\.local\bin\agy-live2.cmd` (bun shim)                                                                                               |
-| **Merge Script**     | `scripts/merge-opencode-config.mjs`    | (used by installer, not installed)                                                                 | (used by installer, not installed)                                                                                                                 |
-| **Delegation Skill** | `SKILL.md`                             | `~/.gemini/config/skills/agy-delegation/SKILL.md`                                                  | `%USERPROFILE%\.gemini\config\skills\agy-delegation\SKILL.md`                                                                                      |
-| **agy CLI MCP**      | `config/agy-cli-mcp-config.json.example` | `~/.gemini/config/mcp_config.json` (5 servers: agentmemory, context7, mobile-mcp, codegraph, XcodeBuildMCP) | `%USERPROFILE%\.gemini\config\mcp_config.json`                                                                                             |
-| **agy CLI Hooks**    | `config/agy-cli-hooks.json.example`    | `~/.gemini/config/hooks.json` (cc-safety-net PreToolUse)                                            | `%USERPROFILE%\.gemini\config\hooks.json`                                                                                                          |
-| **agy CLI Protocol** | `config/agy-cli-gemini.md.example`     | `~/.gemini/config/GEMINI.md` (Caveman + Ponytail engineering protocol)                              | `%USERPROFILE%\.gemini\config\GEMINI.md`                                                                                                           |
-| **Machine-specific (example only, never auto-activated)** | `config/agy-cli-config.json.example`<br>`config/agy-cli-settings.json.example` | `~/.gemini/config/config.json.example`<br>`~/.gemini/config/settings.json.example`                  | `%USERPROFILE%\.gemini\config\config.json.example`<br>`%USERPROFILE%\.gemini\config\settings.json.example`                                          |
+| Component                                                 | Source in Repo                                                                 | Target Path (macOS/Linux)                                                                                   | Target Path (Windows)                                                                                                                             |
+| :-------------------------------------------------------- | :----------------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **OpenCode Config**                                       | `config/opencode.jsonc.example`                                                | `~/.config/opencode/opencode.jsonc`                                                                         | `%USERPROFILE%\.config\opencode\opencode.jsonc`                                                                                                   |
+| **Guard Plugin**                                          | `config/agy-delegate-guard.js.example`                                         | `~/.config/opencode/plugins/agy-delegate-guard.js`                                                          | `%USERPROFILE%\.config\opencode\plugins\agy-delegate-guard.js`                                                                                    |
+| **OMO Config**                                            | `config/omo.jsonc.example`                                                     | `~/.omo/omo.jsonc`                                                                                          | `%USERPROFILE%\.omo\omo.jsonc`                                                                                                                    |
+| **Model Routing**                                         | `config/agy_bridge.jsonc.example`                                              | `~/.gemini/config/agy_bridge.jsonc`                                                                         | `%USERPROFILE%\.gemini\config\agy_bridge.jsonc`                                                                                                   |
+| **Toggle Utility**                                        | `scripts/agy-bridge-toggle`                                                    | `~/.local/bin/agy-bridge-toggle`                                                                            | `%USERPROFILE%\.local\bin\agy-bridge-toggle.cmd`                                                                                                  |
+| **Toggle Shortcuts**                                      | `scripts/install.sh` generated                                                 | `~/.local/bin/agy-bridge-on`<br>`~/.local/bin/agy-bridge-off`<br>`~/.local/bin/agy-bridge-status`           | `%USERPROFILE%\.local\bin\agy-bridge-on.cmd`<br>`%USERPROFILE%\.local\bin\agy-bridge-off.cmd`<br>`%USERPROFILE%\.local\bin\agy-bridge-status.cmd` |
+| **Live Monitor**                                          | `bin/agy-live-runner.js`                                                       | `~/.local/bin/agy-live`                                                                                     | `%USERPROFILE%\.local\bin\agy-live.cmd`                                                                                                           |
+| **Live Monitor (TUI)**                                    | `bin/agy-live.ts`                                                              | alias `agy-live2` (runs via `bun`)                                                                          | `%USERPROFILE%\.local\bin\agy-live2.cmd` (bun shim)                                                                                               |
+| **Merge Script**                                          | `scripts/merge-opencode-config.mjs`                                            | (used by installer, not installed)                                                                          | (used by installer, not installed)                                                                                                                |
+| **Delegation Skill**                                      | `SKILL.md`                                                                     | `~/.gemini/config/skills/agy-delegation/SKILL.md`                                                           | `%USERPROFILE%\.gemini\config\skills\agy-delegation\SKILL.md`                                                                                     |
+| **agy CLI MCP**                                           | `config/agy-cli-mcp-config.json.example`                                       | `~/.gemini/config/mcp_config.json` (5 servers: agentmemory, context7, mobile-mcp, codegraph, XcodeBuildMCP) | `%USERPROFILE%\.gemini\config\mcp_config.json`                                                                                                    |
+| **agy CLI Hooks**                                         | `config/agy-cli-hooks.json.example`                                            | `~/.gemini/config/hooks.json` (cc-safety-net PreToolUse)                                                    | `%USERPROFILE%\.gemini\config\hooks.json`                                                                                                         |
+| **agy CLI Protocol**                                      | `config/agy-cli-gemini.md.example`                                             | `~/.gemini/config/GEMINI.md` (Caveman + Ponytail engineering protocol)                                      | `%USERPROFILE%\.gemini\config\GEMINI.md`                                                                                                          |
+| **Machine-specific (example only, never auto-activated)** | `config/agy-cli-config.json.example`<br>`config/agy-cli-settings.json.example` | `~/.gemini/config/config.json.example`<br>`~/.gemini/config/settings.json.example`                          | `%USERPROFILE%\.gemini\config\config.json.example`<br>`%USERPROFILE%\.gemini\config\settings.json.example`                                        |
 
 > **Note on machine-specific files**: `mcp_config.json`, `hooks.json` and `GEMINI.md` are generic and installed as-is (`.new` fallback if they already exist). `config.json` (contains `remoteControlHostname`) and the agy CLI `settings.json` (contains `trustedWorkspaces`, a per-machine permission allowlist and the default model) are **machine-specific** — the installer only copies them as `.example` references. Rename + edit them yourself:
+>
 > - `config.json.example` → set your hostname, rename to `config.json`.
 > - `settings.json.example` → add your trusted project paths to `trustedWorkspaces`, extend `permissions.allow`, set `model` to an `agy models` entry, rename to `settings.json` (lives in `~/.gemini/antigravity-cli/`).
 
@@ -211,12 +212,14 @@ cp config/agy-cli-gemini.md.example ~/.gemini/config/GEMINI.md
 ```
 
 **ANDROID_HOME**: The mobile-mcp entry in `mcp_config.json` contains `{{ANDROID_HOME}}`. The installer auto-detects it; if doing manual install, set it explicitly:
+
 ```bash
 # macOS default:
 sed -i '' 's|{{ANDROID_HOME}}|/Users/yourname/Library/Android/sdk|g' ~/.gemini/config/mcp_config.json
 ```
 
 **Machine-specific configs** (not auto-installed, reference only):
+
 - `config/agy-cli-config.json.example` → review `remoteControlHostname`, rename to `config.json`.
 - `config/agy-cli-settings.json.example` → add your project paths to `trustedWorkspaces`, extend `permissions.allow`, set `model` to an `agy models` entry, rename to `settings.json` (lives in `~/.gemini/antigravity-cli/`).
 
@@ -353,15 +356,15 @@ powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
 
 ### What It Removes
 
-| Component | Location |
-| :-------- | :------- |
-| Delegate guard plugin | `~/.config/opencode/plugins/agy-delegate-guard.js` |
-| Model routing config | `~/.gemini/config/agy_bridge.jsonc` |
-| agy-delegation skill | `~/.gemini/config/skills/agy-delegation/` |
-| agy CLI runtime configs | `~/.gemini/config/{mcp_config.json,hooks.json,GEMINI.md}` + `.example` files |
-| OMO config + snapshot | `~/.omo/omo.jsonc` + `~/.omo/.agy-toggle/` |
-| opencode.jsonc merge | restored from the timestamped `opencode.jsonc.backup-*` the merge script created |
-| CLI shims | `~/.local/bin/{agy-bridge-toggle,agy-bridge-on,agy-bridge-off,agy-bridge-status,agy-live,agy-live2}` |
+| Component               | Location                                                                                             |
+| :---------------------- | :--------------------------------------------------------------------------------------------------- |
+| Delegate guard plugin   | `~/.config/opencode/plugins/agy-delegate-guard.js`                                                   |
+| Model routing config    | `~/.gemini/config/agy_bridge.jsonc`                                                                  |
+| agy-delegation skill    | `~/.gemini/config/skills/agy-delegation/`                                                            |
+| agy CLI runtime configs | `~/.gemini/config/{mcp_config.json,hooks.json,GEMINI.md}` + `.example` files                         |
+| OMO config + snapshot   | `~/.omo/omo.jsonc` + `~/.omo/.agy-toggle/`                                                           |
+| opencode.jsonc merge    | restored from the timestamped `opencode.jsonc.backup-*` the merge script created                     |
+| CLI shims               | `~/.local/bin/{agy-bridge-toggle,agy-bridge-on,agy-bridge-off,agy-bridge-status,agy-live,agy-live2}` |
 
 ### Safety Guarantees
 

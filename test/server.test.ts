@@ -1,11 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createToolHandler } from "../src/server.js";
 import { ModelRegistry } from "../src/models.js";
 import { OMO_ROLES, TOOLS } from "../src/tools.js";
 import { CooldownRegistry } from "../src/quota.js";
 import type { Config } from "../src/config.js";
-import type { ChildHandle, RunnerDeps } from "../src/runner.js";
+import { IdleStallError, type ChildHandle, type RunnerDeps } from "../src/runner.js";
 import path from "node:path";
+import os from "node:os";
+import fs from "node:fs";
 
 const cfg: Config = {
   agyPath: "agy",
@@ -22,8 +24,7 @@ const cfg: Config = {
   onFailure: "fallback",
 };
 
-const LISTING =
-  "Gemini 3.7 Flash (High)\nClaude Sonnet 4.6 (Thinking)\ngemini-3.8-flash-high\n";
+const LISTING = "Gemini 3.7 Flash (High)\nClaude Sonnet 4.6 (Thinking)\ngemini-3.8-flash-high\n";
 
 const LOG_429 =
   "E0613 log.go:398] agent executor error: RESOURCE_EXHAUSTED (code 429): " +
@@ -116,7 +117,10 @@ describe("createToolHandler", () => {
 
   it("follow_up without role inherits the original delegate's role chain", async () => {
     const f = fakeDeps();
-    await handlerFor("delegate", f)({
+    await handlerFor(
+      "delegate",
+      f,
+    )({
       task: "build it",
       role: "tester",
       expected_outcome: "tests pass",
@@ -358,7 +362,9 @@ describe("createToolHandler", () => {
     expect(res.isError).toBe(true);
     const text = (res.content[0] as { text: string }).text;
     expect(text).toContain("ALL_MODELS_EXHAUSTED");
-    expect(text).toContain("Candidate models (Gemini 3.7 Flash (High), Claude Sonnet 4.6 (Thinking))");
+    expect(text).toContain(
+      "Candidate models (Gemini 3.7 Flash (High), Claude Sonnet 4.6 (Thinking))",
+    );
     expect(text).toMatch(/Retry after the quota resets, or pass an explicit `model`/i);
   });
 
@@ -407,7 +413,10 @@ describe("createToolHandler", () => {
   it("follow_up respects cfg.toolModels[follow_up] over remembered role", async () => {
     const f = fakeDeps();
     // delegate saved role tester (Gemini)
-    await handlerFor("delegate", f)({
+    await handlerFor(
+      "delegate",
+      f,
+    )({
       task: "build it",
       role: "tester",
       expected_outcome: "tests pass",
@@ -419,5 +428,178 @@ describe("createToolHandler", () => {
     });
     await followUpHandler({ session_id: "sess-1", question: "continue" });
     expect(f.modelOf(f.runs[1])).toBe("Claude Sonnet 4.6 (Thinking)");
+  });
+
+  it("get_session_status returns active session information when cwd is recorded", async () => {
+    const f = fakeDeps();
+    const handler = handlerFor("get_session_status", f);
+    const res = await handler({ cwd: process.cwd() });
+    expect(res.isError).toBeUndefined();
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("Active Session");
+    expect(text).toContain("sess-1");
+    expect(text).toContain("Ready for follow_up");
+  });
+
+  it("get_session_status returns no prior session message when cwd is not in session map", async () => {
+    const f = fakeDeps();
+    const handler = handlerFor("get_session_status", f);
+    const res = await handler({ cwd: "/tmp/non-existent-session-dir" });
+    expect(res.isError).toBeUndefined();
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("No prior agy session recorded");
+    expect(text).toContain("/tmp/non-existent-session-dir");
+  });
+
+  it("get_session_status handles unparseable session file gracefully", async () => {
+    const f = fakeDeps();
+    f.deps.readSessionsFile = async () => "corrupt json{";
+    const handler = handlerFor("get_session_status", f);
+    const res = await handler({ cwd: process.cwd() });
+    expect(res.isError).toBeUndefined();
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("No prior agy session recorded");
+  });
+
+  it("list_sessions returns no recorded sessions message when session map is empty", async () => {
+    const f = fakeDeps();
+    f.deps.readSessionsFile = async () => "{}";
+    const handler = handlerFor("list_sessions", f);
+    const res = await handler({});
+    expect(res.isError).toBeUndefined();
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("No recorded Antigravity sessions found");
+  });
+
+  it("list_sessions formats session list with current project indicator and follow_up suggestion", async () => {
+    const f = fakeDeps();
+    f.deps.readSessionsFile = async () =>
+      JSON.stringify({
+        [process.cwd()]: "sess-current",
+        "/other/project": "sess-other",
+      });
+
+    const handler = handlerFor("list_sessions", f);
+    const res = await handler({ cwd: process.cwd() });
+    expect(res.isError).toBeUndefined();
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("### 📋 Antigravity Sessions List");
+    expect(text).toContain("sess-current");
+    expect(text).toContain("(CURRENT PROJECT)");
+    expect(text).toContain("sess-other");
+    expect(text).toContain('follow_up(session_id: "sess-current"');
+  });
+
+  it("list_sessions handles corrupted sessions file gracefully", async () => {
+    const f = fakeDeps();
+    f.deps.readSessionsFile = async () => "invalid json";
+    const handler = handlerFor("list_sessions", f);
+    const res = await handler({});
+    expect(res.isError).toBeUndefined();
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("No recorded Antigravity sessions found");
+  });
+
+  it("detects agy execution error and returns autonomous recovery notice with isError", async () => {
+    const f = fakeDeps();
+    f.deps.spawnChild = () => {
+      const child: ChildHandle = {
+        stdout: () => "Error ID: 12345\nAgent execution terminated due to error",
+        stderr: () => "",
+        wait: () => Promise.resolve({ code: 0 }),
+        kill: () => {},
+      };
+      return child;
+    };
+
+    const handler = handlerFor("delegate", f);
+    const res = await handler({ prompt: "do work" });
+    expect(res.isError).toBe(true);
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("[agy-bridge execution error detected]");
+    expect(text).toContain("AUTONOMOUS RECOVERY REQUIRED");
+    expect(text).toContain("sess-1");
+  });
+
+  it("detects transient server errors (UNAVAILABLE 503 / overloaded) and returns isError with recovery notice", async () => {
+    const f = fakeDeps();
+    f.deps.spawnChild = () => {
+      const child: ChildHandle = {
+        stdout: () => "UNAVAILABLE (code 503): model is overloaded, experiencing high traffic",
+        stderr: () => "",
+        wait: () => Promise.resolve({ code: 0 }),
+        kill: () => {},
+      };
+      return child;
+    };
+
+    const handler = handlerFor("delegate", f);
+    const res = await handler({ prompt: "query" });
+    expect(res.isError).toBe(true);
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("[agy-bridge recovery notice]");
+    expect(text).toContain("AUTONOMOUS ACTION");
+    expect(text).toContain("sess-1");
+  });
+
+  it("handles IdleStallError in createToolHandler with stall recovery advice", async () => {
+    const f = fakeDeps();
+    f.deps.spawnChild = () => {
+      throw new IdleStallError(
+        "Gemini 3.7 Flash",
+        90,
+        "last activity log tail line",
+        "/tmp/agy-bridge-test.log",
+      );
+    };
+
+    const handler = handlerFor("delegate", f);
+    const res = await handler({ prompt: "stalled task" });
+    expect(res.isError).toBe(true);
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("[agy-bridge stall detected]");
+    expect(text).toContain("no log output for 90s");
+    expect(text).toContain("last activity log tail line");
+    expect(text).toContain("/tmp/agy-bridge-test.log");
+    expect(text).toContain("AUTONOMOUS RECOVERY ACTION");
+  });
+
+  it("forwards progress notification to McpServer when progressToken is provided", async () => {
+    const f = fakeDeps();
+    const notificationMock = vi.fn().mockResolvedValue(undefined);
+    const fakeServer = {
+      server: {
+        notification: notificationMock,
+      },
+    };
+
+    const toolDef = TOOLS.find((t) => t.name === "delegate")!;
+    const handler = createToolHandler(
+      toolDef,
+      cfg,
+      new ModelRegistry(async () => LISTING),
+      f.deps,
+      new CooldownRegistry(),
+      fakeServer as any,
+    );
+
+    // Provide onProgress trigger through fake runner
+    f.deps.spawnChild = () => {
+      const child: ChildHandle = {
+        stdout: () => "done",
+        stderr: () => "",
+        wait: () => Promise.resolve({ code: 0 }),
+        kill: () => {},
+      };
+      return child;
+    };
+
+    const res = await handler(
+      { prompt: "progress test" },
+      { _meta: { progressToken: "token-abc-123" } },
+    );
+
+    expect(res).toBeDefined();
+    expect(res.isError).toBeUndefined();
   });
 });

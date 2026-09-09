@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "./config.js";
-import {
-  TeamRuntime,
-  type TeamRuntimeConfig,
-  type TeamRunMember,
-} from "./team/runtime.js";
+import { TeamRuntime, type TeamRuntimeConfig, type TeamRunMember } from "./team/runtime.js";
 import { OMO_ROLES } from "./tools.js";
 import { createServer, makeDefaultRunWake } from "./server.js";
 
@@ -15,8 +11,7 @@ export const runtime = new TeamRuntime({
   runWake: makeDefaultRunWake(cfg),
   resolveModelChain: (member: TeamRunMember) =>
     cfg.roleModels[member.resolvedRole] ??
-    OMO_ROLES[member.resolvedRole]?.chain ??
-    [member.resolvedRole],
+    OMO_ROLES[member.resolvedRole]?.chain ?? [member.resolvedRole],
 });
 export const server = createServer(runtime, cfg);
 
@@ -97,10 +92,8 @@ if (!process.env.VITEST) {
 }
 
 if (!process.env.VITEST) {
-  server
-    .connect(new StdioServerTransport())
-    .catch((err) => {
-      console.error("agy-bridge failed to start:", err);
-      process.exit(1);
-    });
+  server.connect(new StdioServerTransport()).catch((err) => {
+    console.error("agy-bridge failed to start:", err);
+    process.exit(1);
+  });
 }

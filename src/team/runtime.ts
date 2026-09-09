@@ -28,27 +28,20 @@ const execFileAsync = promisify(execFile);
 
 export type MemberStatus = "idle" | "running" | "awaiting_shutdown" | "removed";
 
-export const ALLOWED_MEMBER_TRANSITIONS: Readonly<
-  Record<MemberStatus, ReadonlySet<MemberStatus>>
-> = {
-  idle: new Set(["running", "awaiting_shutdown"]),
-  running: new Set(["idle", "awaiting_shutdown"]),
-  awaiting_shutdown: new Set(["removed", "idle"]),
-  removed: new Set(),
-};
+export const ALLOWED_MEMBER_TRANSITIONS: Readonly<Record<MemberStatus, ReadonlySet<MemberStatus>>> =
+  {
+    idle: new Set(["running", "awaiting_shutdown"]),
+    running: new Set(["idle", "awaiting_shutdown"]),
+    awaiting_shutdown: new Set(["removed", "idle"]),
+    removed: new Set(),
+  };
 
-export function isValidMemberTransition(
-  current: MemberStatus,
-  next: MemberStatus,
-): boolean {
+export function isValidMemberTransition(current: MemberStatus, next: MemberStatus): boolean {
   const allowed = ALLOWED_MEMBER_TRANSITIONS[current];
   return Boolean(allowed && allowed.has(next));
 }
 
-export function validateTransition(
-  current: MemberStatus,
-  next: MemberStatus,
-): boolean {
+export function validateTransition(current: MemberStatus, next: MemberStatus): boolean {
   if (!isValidMemberTransition(current, next)) {
     throw new TeamError(
       `Illegal member transition from '${current}' to '${next}'`,
@@ -161,11 +154,7 @@ export class BoundedSemaphore implements TeamSemaphore {
 
   constructor(cap: number = 4) {
     if (cap < 1) {
-      throw new TeamError(
-        "Semaphore capacity must be at least 1",
-        "capacity",
-        "INVALID_CAPACITY",
-      );
+      throw new TeamError("Semaphore capacity must be at least 1", "capacity", "INVALID_CAPACITY");
     }
     this.cap = cap;
   }
@@ -221,11 +210,7 @@ export interface TeamRuntimeDeps {
     teamRunId: string,
     member: string,
   ) => Promise<WorktreeResult | string>;
-  removeWorktrees?: (
-    projectRoot: string,
-    teamRunId: string,
-    members: string[],
-  ) => Promise<void>;
+  removeWorktrees?: (projectRoot: string, teamRunId: string, members: string[]) => Promise<void>;
   runWake?: (options: WakeOptions) => Promise<WakeResult>;
   spawnChild?: (command: string, args: string[], options?: unknown) => Promise<unknown>;
   resolveModelChain?: (member: TeamRunMember) => string[];
@@ -252,15 +237,9 @@ export function slugifyMemberName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
-export function resolveMemberWorktree(
-  teamRunId: string,
-  memberName: string,
-): string {
+export function resolveMemberWorktree(teamRunId: string, memberName: string): string {
   const tmp = fs.realpathSync(os.tmpdir());
-  return path.join(
-    tmp,
-    `agy-bridge-team-${teamRunId}-${slugifyMemberName(memberName)}`,
-  );
+  return path.join(tmp, `agy-bridge-team-${teamRunId}-${slugifyMemberName(memberName)}`);
 }
 
 function safeResolveReal(p: string): string {
@@ -293,14 +272,10 @@ export async function spawnWorktree(
   await fsp.mkdir(parentDir, { recursive: true });
 
   try {
-    await execFileAsync(
-      "git",
-      ["worktree", "add", "--detach", targetWorktreePath, "HEAD"],
-      {
-        cwd: projectRoot,
-        timeout: 30_000,
-      },
-    );
+    await execFileAsync("git", ["worktree", "add", "--detach", targetWorktreePath, "HEAD"], {
+      cwd: projectRoot,
+      timeout: 30_000,
+    });
   } catch (err: unknown) {
     const message = (err as Error)?.message ?? String(err);
     const notGit =
@@ -406,10 +381,7 @@ export async function getTeamState(
   });
 }
 
-export async function loadTeamState(
-  projectRoot: string,
-  teamRunId: string,
-): Promise<TeamRunState> {
+export async function loadTeamState(projectRoot: string, teamRunId: string): Promise<TeamRunState> {
   const state = await getTeamState(projectRoot, teamRunId);
   if (!state) {
     throw new TeamError(
@@ -553,17 +525,13 @@ export async function buildWakePrompt(
   const activeTasks = tasks.filter((t) => {
     const isOwner = !t.owner || t.owner === memberName;
     const isActiveStatus =
-      t.status === "pending" ||
-      t.status === "in_progress" ||
-      t.status === "claimed";
+      t.status === "pending" || t.status === "in_progress" || t.status === "claimed";
     return isOwner && isActiveStatus;
   });
 
   let tasksText = "(none)";
   if (activeTasks.length > 0) {
-    tasksText = activeTasks
-      .map((t) => `- [${t.status}] ${t.id}: ${t.subject}`)
-      .join("\n");
+    tasksText = activeTasks.map((t) => `- [${t.status}] ${t.id}: ${t.subject}`).join("\n");
   }
 
   return [
@@ -601,10 +569,7 @@ export class TeamRuntime {
       new BoundedSemaphore(deps.cfg?.teamMaxParallel ?? deps.cfg?.maxParallel ?? 4);
   }
 
-  async createTeam(
-    arg1: unknown,
-    arg2?: unknown,
-  ): Promise<CreateTeamResult> {
+  async createTeam(arg1: unknown, arg2?: unknown): Promise<CreateTeamResult> {
     let specRaw: unknown;
     let projectRoot: string;
 
@@ -716,10 +681,7 @@ export class TeamRuntime {
     return getTeamState(projectRoot, teamRunId);
   }
 
-  async loadState(
-    projectRootOrTeamRunId: string,
-    maybeTeamRunId?: string,
-  ): Promise<TeamRunState> {
+  async loadState(projectRootOrTeamRunId: string, maybeTeamRunId?: string): Promise<TeamRunState> {
     const { projectRoot, teamRunId } = this.resolveRootAndId(
       projectRootOrTeamRunId,
       maybeTeamRunId,
@@ -897,11 +859,7 @@ export class TeamRuntime {
     return spawnWorktree(projectRoot, teamRunId, member);
   }
 
-  async removeWorktrees(
-    projectRoot: string,
-    teamRunId: string,
-    members: string[],
-  ): Promise<void> {
+  async removeWorktrees(projectRoot: string, teamRunId: string, members: string[]): Promise<void> {
     if (this.deps.removeWorktrees) {
       return this.deps.removeWorktrees(projectRoot, teamRunId, members);
     }
@@ -1012,9 +970,7 @@ export class TeamRuntime {
       });
 
       const timeoutSec = this.deps.cfg?.teamMemberTimeoutSec ?? 300;
-      const prompt =
-        opts?.prompt ??
-        (await this.buildWakePrompt(state, memberName));
+      const prompt = opts?.prompt ?? (await this.buildWakePrompt(state, memberName));
       const transcriptPath = member.transcriptPath;
       // Use existing sessionId for conversation resume
       let conversationId = member.sessionId ?? undefined;
@@ -1113,24 +1069,28 @@ export class TeamRuntime {
         model: result.model ?? usedModel,
       };
     } finally {
+      // --- ALWAYS: release semaphore + reset status ---
+      this.semaphore.release();
+
+      // Reset status: if shutdown was requested mid-run → awaiting_shutdown; else → idle
+      try {
+        await updateTeamState(projectRoot, teamRunId, (s) => {
+          const m = s.members.find((x) => x.name === memberName);
+          if (m && m.status === "running") {
+            m.status = "idle";
+          }
+          // If status was changed to awaiting_shutdown during the run, leave it
+          return s;
+        });
+      } catch {
+        // Ignore error if team was already deleted concurrently
+      }
+
       currentTeamRuns.delete(runRecord);
       if (currentTeamRuns.size === 0) {
         this.activeRuns.delete(teamRunId);
       }
       resolveRunPromise();
-
-      // --- ALWAYS: release semaphore + reset status ---
-      this.semaphore.release();
-
-      // Reset status: if shutdown was requested mid-run → awaiting_shutdown; else → idle
-      await updateTeamState(projectRoot, teamRunId, (s) => {
-        const m = s.members.find((x) => x.name === memberName);
-        if (m && m.status === "running") {
-          m.status = "idle";
-        }
-        // If status was changed to awaiting_shutdown during the run, leave it
-        return s;
-      });
     }
   }
 
@@ -1142,10 +1102,7 @@ export class TeamRuntime {
     return buildWakePrompt(stateOrMember, memberNameOrCtx, cfg ?? this.deps.cfg);
   }
 
-  startLoop(
-    projectRootOrTeamRunId: string,
-    maybeTeamRunId?: string,
-  ): boolean {
+  startLoop(projectRootOrTeamRunId: string, maybeTeamRunId?: string): boolean {
     const { projectRoot, teamRunId } = this.resolveRootAndId(
       projectRootOrTeamRunId,
       maybeTeamRunId,
@@ -1155,10 +1112,7 @@ export class TeamRuntime {
       return false;
     }
 
-    const pollMs =
-      this.deps.cfg?.teamPollMs ??
-      this.deps.cfg?.pollIntervalMs ??
-      3000;
+    const pollMs = this.deps.cfg?.teamPollMs ?? this.deps.cfg?.pollIntervalMs ?? 3000;
 
     const setIntervalFn = this.deps.setInterval ?? setInterval;
 
@@ -1195,10 +1149,7 @@ export class TeamRuntime {
           try {
             const tasks = await listTasks(rd, { owner: member.name });
             hasTasks = tasks.some(
-              (t) =>
-                t.status === "pending" ||
-                t.status === "in_progress" ||
-                t.status === "claimed",
+              (t) => t.status === "pending" || t.status === "in_progress" || t.status === "claimed",
             );
           } catch {
             hasTasks = false;
@@ -1274,9 +1225,7 @@ export class TeamRuntime {
       try {
         const inboxesDir = path.join(rd, "inboxes");
         const entries = await fsp.readdir(inboxesDir);
-        memberNames = entries.filter(
-          (e) => !e.startsWith(".") && !e.endsWith(".lock"),
-        );
+        memberNames = entries.filter((e) => !e.startsWith(".") && !e.endsWith(".lock"));
       } catch {
         memberNames = [];
       }

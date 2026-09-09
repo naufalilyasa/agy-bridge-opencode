@@ -335,26 +335,29 @@ export async function runAgy(
     // Hard deadline independent of the child's pipes: agy's own --print-timeout
     // should fire first; if it doesn't, reject without waiting for "close".
     timers.push(
-      setTimeout(() => {
-        killChild();
-        void deps.readLog(logPath).then((log) => {
-          finish(() =>
-            reject(
-              new Error(
-                `agy timed out after ${timeoutSec}s (AGY_TIMEOUT to adjust).\n` +
-                  `Runtime log kept at: ${logPath}\n` +
-                  `Log tail (where it was when killed):\n---\n${logTail(log)}\n---`,
+      setTimeout(
+        () => {
+          killChild();
+          void deps.readLog(logPath).then((log) => {
+            finish(() =>
+              reject(
+                new Error(
+                  `agy timed out after ${timeoutSec}s (AGY_TIMEOUT to adjust).\n` +
+                    `Runtime log kept at: ${logPath}\n` +
+                    `Log tail (where it was when killed):\n---\n${logTail(log)}\n---`,
+                ),
               ),
-            ),
-          );
-        });
-      }, timeoutSec * 1000 + graceMs),
+            );
+          });
+        },
+        timeoutSec * 1000 + graceMs,
+      ),
     );
 
     const onAbort = () => {
       killChild();
       keepLog = true;
-        finish(() => reject(new Error("agy run cancelled by client.")));
+      finish(() => reject(new Error("agy run cancelled by client.")));
     };
     if (req.signal?.aborted) {
       onAbort();
@@ -377,7 +380,7 @@ export async function runAgy(
       }
       if (error) {
         keepLog = true;
-          finish(() => reject(new Error(`agy failed: ${error.message}`)));
+        finish(() => reject(new Error(`agy failed: ${error.message}`)));
         return;
       }
       const out = child.stdout().trim();
@@ -388,15 +391,15 @@ export async function runAgy(
 
       if (quota) {
         keepLog = true;
-          finish(() => reject(new QuotaError(req.model, quota)));
+        finish(() => reject(new QuotaError(req.model, quota)));
         return;
       }
 
       if (code !== 0) {
         keepLog = true;
-          finish(() =>
-            reject(new Error(stderr ? `agy failed: ${stderr}` : `agy exited with code ${code}.`)),
-          );
+        finish(() =>
+          reject(new Error(stderr ? `agy failed: ${stderr}` : `agy exited with code ${code}.`)),
+        );
         return;
       }
       if (!out) {

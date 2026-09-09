@@ -19,11 +19,7 @@ import {
   TEAM_HANDLERS,
   type TeamHandlerContext,
 } from "../src/team/handlers.js";
-import {
-  TeamRuntime,
-  resolveMemberWorktree,
-  type TeamRuntimeDeps,
-} from "../src/team/runtime.js";
+import { TeamRuntime, resolveMemberWorktree, type TeamRuntimeDeps } from "../src/team/runtime.js";
 import { saveNamedTeam, type TeamSpec } from "../src/team/spec.js";
 import { atomicWriteJson, runDir } from "../src/team/store.js";
 import { createTask } from "../src/team/tasklist.js";
@@ -131,10 +127,7 @@ describe("T11-T13: Team Lifecycle & Shutdown Handlers", () => {
     });
 
     it("creates a team from inline spec JSON string", async () => {
-      const res = await handleTeamCreate(
-        { inline_spec: JSON.stringify(validPairSpec) },
-        ctx,
-      );
+      const res = await handleTeamCreate({ inline_spec: JSON.stringify(validPairSpec) }, ctx);
 
       expect(res.isError).toBeFalsy();
       expect(res.content[0].text).toContain("lead, reviewer");
@@ -461,10 +454,7 @@ describe("T11-T13: Team Lifecycle & Shutdown Handlers", () => {
       const jsonStart = createRes.content[0].text.indexOf("{");
       const { teamRunId } = JSON.parse(createRes.content[0].text.slice(jsonStart));
 
-      const res = await handleTeamShutdownRequest(
-        { teamRunId, targetMemberName: "ghost" },
-        ctx,
-      );
+      const res = await handleTeamShutdownRequest({ teamRunId, targetMemberName: "ghost" }, ctx);
 
       expect(res.isError).toBe(true);
       expect(res.content[0].text).toContain("MEMBER_NOT_FOUND");
@@ -514,10 +504,7 @@ describe("T11-T13: Team Lifecycle & Shutdown Handlers", () => {
       const { teamRunId } = JSON.parse(createRes.content[0].text.slice(jsonStart));
 
       // 1. Request shutdown
-      const reqRes = await handleTeamShutdownRequest(
-        { teamRunId, targetMemberName: "lead" },
-        ctx,
-      );
+      const reqRes = await handleTeamShutdownRequest({ teamRunId, targetMemberName: "lead" }, ctx);
       expect(reqRes.isError).toBeFalsy();
       expect(reqRes.content[0].text).toContain("awaiting_shutdown");
 
@@ -574,7 +561,9 @@ describe("T11-T13: Team Lifecycle & Shutdown Handlers", () => {
       await saveNamedTeam(testDir, validPairSpec);
       const createNamedRes = await handleTeamCreate({ name: "pair-team" }, ctx);
       expect(createNamedRes.isError).toBeFalsy();
-      const parsedNamed = JSON.parse(createNamedRes.content[0].text.slice(createNamedRes.content[0].text.indexOf("{")));
+      const parsedNamed = JSON.parse(
+        createNamedRes.content[0].text.slice(createNamedRes.content[0].text.indexOf("{")),
+      );
       expect(parsedNamed.status).toBe("creating");
       expect(parsedNamed.members).toEqual(["lead", "reviewer"]);
 
@@ -589,7 +578,9 @@ describe("T11-T13: Team Lifecycle & Shutdown Handlers", () => {
         ctx,
       );
       expect(createInlineRes.isError).toBeFalsy();
-      const parsedInline = JSON.parse(createInlineRes.content[0].text.slice(createInlineRes.content[0].text.indexOf("{")));
+      const parsedInline = JSON.parse(
+        createInlineRes.content[0].text.slice(createInlineRes.content[0].text.indexOf("{")),
+      );
       const runId = parsedInline.teamRunId;
 
       // 3. Status check
@@ -633,12 +624,16 @@ describe("T11-T13: Team Lifecycle & Shutdown Handlers", () => {
         ctx,
       );
       expect(taskCreateRes.isError).toBeFalsy();
-      const createdTask = JSON.parse(taskCreateRes.content[0].text.slice(taskCreateRes.content[0].text.indexOf("{")));
+      const createdTask = JSON.parse(
+        taskCreateRes.content[0].text.slice(taskCreateRes.content[0].text.indexOf("{")),
+      );
       expect(createdTask.status).toBe("pending");
 
       const taskListRes = await handleTeamTaskList({ teamRunId: runId }, ctx);
       expect(taskListRes.isError).toBeFalsy();
-      expect(taskListRes.content[0].text).toContain(`- [pending] ${createdTask.id}: Write end-to-end tests`);
+      expect(taskListRes.content[0].text).toContain(
+        `- [pending] ${createdTask.id}: Write end-to-end tests`,
+      );
 
       const taskGetRes = await handleTeamTaskGet({ teamRunId: runId, taskId: createdTask.id }, ctx);
       expect(taskGetRes.isError).toBeFalsy();

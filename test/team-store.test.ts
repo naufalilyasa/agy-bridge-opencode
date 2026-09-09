@@ -279,11 +279,7 @@ describe("src/team/store fs primitives", () => {
 
       // Calling withLock with staleMs=0 but owner PID is alive -> must NOT reap!
       await expect(
-        withLock(
-          lockPath,
-          async () => {},
-          { staleMs: 0, timeoutMs: 120, pollIntervalMs: 25 },
-        ),
+        withLock(lockPath, async () => {}, { staleMs: 0, timeoutMs: 120, pollIntervalMs: 25 }),
       ).rejects.toThrow(TeamError);
 
       expect(existsSync(lockPath)).toBe(true);
@@ -342,11 +338,7 @@ describe("src/team/store fs primitives", () => {
       await fs.writeFile(lockPath, `${deadPid}\n${Date.now()}\n`, "utf-8");
 
       await expect(
-        withLock(
-          lockPath,
-          async () => {},
-          { staleMs: 30000, timeoutMs: 120, pollIntervalMs: 25 },
-        ),
+        withLock(lockPath, async () => {}, { staleMs: 30000, timeoutMs: 120, pollIntervalMs: 25 }),
       ).rejects.toThrow(TeamError);
 
       expect(existsSync(lockPath)).toBe(true);
@@ -357,11 +349,7 @@ describe("src/team/store fs primitives", () => {
       await fs.writeFile(lockPath, "not-a-pid\nnot-a-ts\n", "utf-8");
 
       await expect(
-        withLock(
-          lockPath,
-          async () => {},
-          { staleMs: 0, timeoutMs: 120, pollIntervalMs: 25 },
-        ),
+        withLock(lockPath, async () => {}, { staleMs: 0, timeoutMs: 120, pollIntervalMs: 25 }),
       ).rejects.toThrow(TeamError);
 
       expect(existsSync(lockPath)).toBe(true);

@@ -110,8 +110,7 @@ export function createToolHandler(
           runWake: makeDefaultRunWake(cfg, deps),
           resolveModelChain: (member: TeamRunMember) =>
             cfg.roleModels[member.resolvedRole] ??
-            OMO_ROLES[member.resolvedRole]?.chain ??
-            [member.resolvedRole],
+            OMO_ROLES[member.resolvedRole]?.chain ?? [member.resolvedRole],
         }));
 
   return async (args, extra) => {
@@ -392,9 +391,15 @@ export function createToolHandler(
         const recoveryMsg =
           `[agy-bridge stall detected] agy process became inactive/stalled (no log output for ${err.idleSeconds}s).\n` +
           `- The stalled process has been automatically terminated.\n` +
-          (sessionId ? `- Session ID of THIS run is ambiguous — the cwd-keyed session map may still point to an older task. Do NOT trust it blindly.\n` : "") +
-          (err.logPath ? `- Runtime log preserved at: ${err.logPath} (inspect with grep/tail if needed)\n` : "") +
-          (err.logTail ? `- Log tail (last activity before the stall):\n---\n${err.logTail}\n---\n` : "") +
+          (sessionId
+            ? `- Session ID of THIS run is ambiguous — the cwd-keyed session map may still point to an older task. Do NOT trust it blindly.\n`
+            : "") +
+          (err.logPath
+            ? `- Runtime log preserved at: ${err.logPath} (inspect with grep/tail if needed)\n`
+            : "") +
+          (err.logTail
+            ? `- Log tail (last activity before the stall):\n---\n${err.logTail}\n---\n`
+            : "") +
           `- BEFORE resuming: run 'git status' / 'git diff' to check what the stalled agent already changed.\n` +
           `- AUTONOMOUS RECOVERY ACTION: invoke 'follow_up' (session_id: "${sessionId || "latest"}") and REPEAT the original task prompt in full — the resumed session has no memory of the stalled run.`;
 
@@ -445,8 +450,7 @@ export function createServer(
       runWake: makeDefaultRunWake(cfg, deps),
       resolveModelChain: (member: TeamRunMember) =>
         cfg.roleModels[member.resolvedRole] ??
-        OMO_ROLES[member.resolvedRole]?.chain ??
-        [member.resolvedRole],
+        OMO_ROLES[member.resolvedRole]?.chain ?? [member.resolvedRole],
     });
 
   const server = new McpServer({ name: "agy-bridge", version: "0.4.1" });

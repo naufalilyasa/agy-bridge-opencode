@@ -10,6 +10,7 @@ execution, analysis, and research to agy subagents so your primary context windo
 only the answers come back, never the intermediate files or tool spam.
 
 **Hard rules** (from the server):
+
 - All prompt content sent to agy-bridge tools MUST be written in **English**.
 - NEVER pass a `model` parameter — the server resolves models automatically from the roles block
   in `~/.gemini/config/agy_bridge.jsonc` (per-role chains, `AGY_DEFAULT_MODEL` fallback).
@@ -27,19 +28,19 @@ web) in the given `cwd`. **The primary workhorse tool.**
 
 **Parameters:**
 
-| Field | Description |
-| :---- | :---------- |
-| `task` / `prompt` | Core objective (Section 1). One of the two is REQUIRED. |
-| `role` | Subagent role (list below). Defaults to `git-master` when omitted. |
-| `expected_outcome` / `outcome` | Deliverable, success criteria, acceptance test (Section 2). |
-| `required_tools` / `tools` | Explicit tool whitelist (Section 3). |
-| `must_do` / `requirements` | Exhaustive mandatory requirements (Section 4). |
-| `must_not_do` / `forbidden` | Forbidden actions / architectural boundaries (Section 5). |
-| `context` | Background, error messages, file hints (Section 6). |
-| `skills` / `skill` | Skill name(s) to inject full SKILL.md content into the prompt. |
-| `load_memories` | Concept(s)/query to recall from agentmemory BEFORE work (mandatory recall). |
-| `save_memory` | Instruction to persist findings to agentmemory BEFORE final answer. |
-| `cwd` | Working directory for the subagent (defaults to server cwd). |
+| Field                          | Description                                                                 |
+| :----------------------------- | :-------------------------------------------------------------------------- |
+| `task` / `prompt`              | Core objective (Section 1). One of the two is REQUIRED.                     |
+| `role`                         | Subagent role (list below). Defaults to `git-master` when omitted.          |
+| `expected_outcome` / `outcome` | Deliverable, success criteria, acceptance test (Section 2).                 |
+| `required_tools` / `tools`     | Explicit tool whitelist (Section 3).                                        |
+| `must_do` / `requirements`     | Exhaustive mandatory requirements (Section 4).                              |
+| `must_not_do` / `forbidden`    | Forbidden actions / architectural boundaries (Section 5).                   |
+| `context`                      | Background, error messages, file hints (Section 6).                         |
+| `skills` / `skill`             | Skill name(s) to inject full SKILL.md content into the prompt.              |
+| `load_memories`                | Concept(s)/query to recall from agentmemory BEFORE work (mandatory recall). |
+| `save_memory`                  | Instruction to persist findings to agentmemory BEFORE final answer.         |
+| `cwd`                          | Working directory for the subagent (defaults to server cwd).                |
 
 **Supported roles (19):** `git-master`, `oracle`, `librarian`, `explore`, `momus`, `metis`,
 `multimodal-looker`, `ultrabrain`, `deep`, `visual-engineering`, `artistry`,
@@ -47,21 +48,21 @@ web) in the given `cwd`. **The primary workhorse tool.**
 
 **Recommended role by task:**
 
-| Task | Role |
-| :--- | :--- |
-| Commit / branch / PR / git conflict | `git-master` |
-| Analyze a request BEFORE planning (intent, ambiguities, AI-slop) | `metis` |
-| Architecture, hard logic, design decisions | `ultrabrain`, `oracle` |
-| Plan / diff review (approval-biased, OKAY/REJECT) | `momus`, `reviewer` |
-| Goal-oriented deep research + implementation | `deep` |
-| UI / Compose / styling | `visual-engineering` |
-| Security audit / vulnerability | `security` |
-| Unit / integration tests & QA | `tester`, `qa` |
-| Technical writing / ADR / PRD | `writing`, `product` |
-| Build / Gradle / CI-CD | `devops` |
-| Fast, low-effort task | `quick` |
-| Creative / unconventional solution | `artistry` |
-| Broad repo exploration | `explore` |
+| Task                                                             | Role                   |
+| :--------------------------------------------------------------- | :--------------------- |
+| Commit / branch / PR / git conflict                              | `git-master`           |
+| Analyze a request BEFORE planning (intent, ambiguities, AI-slop) | `metis`                |
+| Architecture, hard logic, design decisions                       | `ultrabrain`, `oracle` |
+| Plan / diff review (approval-biased, OKAY/REJECT)                | `momus`, `reviewer`    |
+| Goal-oriented deep research + implementation                     | `deep`                 |
+| UI / Compose / styling                                           | `visual-engineering`   |
+| Security audit / vulnerability                                   | `security`             |
+| Unit / integration tests & QA                                    | `tester`, `qa`         |
+| Technical writing / ADR / PRD                                    | `writing`, `product`   |
+| Build / Gradle / CI-CD                                           | `devops`               |
+| Fast, low-effort task                                            | `quick`                |
+| Creative / unconventional solution                               | `artistry`             |
+| Broad repo exploration                                           | `explore`              |
 
 **Canonical 6-section example:**
 
@@ -93,6 +94,7 @@ web) in the given `cwd`. **The primary workhorse tool.**
 ```
 
 **Memory directives** — these are MANDATORY when provided:
+
 - `load_memories`: subagent MUST query `agentmemory` via `memory_recall`/`memory_smart_search`
   before any other work. If tools unavailable or zero results, it MUST state
   `"MEMORY RECALL: 0 results"` explicitly. Silently skipping is a protocol violation.
@@ -201,15 +203,15 @@ Find a session ID to pass to `follow_up`.
 
 ## DECISION TREE (quick pick)
 
-| Situation | Tool |
-| :-------- | :--- |
+| Situation                                         | Tool                                               |
+| :------------------------------------------------ | :------------------------------------------------- |
 | Heavy multi-step implementation / refactor / test | `delegate` (role `deep` / `ultrabrain` / `tester`) |
-| Large files or >3 files | `analyze_files` |
-| Git history / repo-wide grep | `deep_search` |
-| Docs / API / current info | `web_lookup` |
-| Plan / design / pre-merge review | `adversarial_review` |
-| Continue / fix / iterate previous work | `follow_up` |
-| Find or inspect a session | `list_sessions` / `get_session_status` |
+| Large files or >3 files                           | `analyze_files`                                    |
+| Git history / repo-wide grep                      | `deep_search`                                      |
+| Docs / API / current info                         | `web_lookup`                                       |
+| Plan / design / pre-merge review                  | `adversarial_review`                               |
+| Continue / fix / iterate previous work            | `follow_up`                                        |
+| Find or inspect a session                         | `list_sessions` / `get_session_status`             |
 
 ## SESSION TRAILER
 
@@ -220,6 +222,7 @@ Capture the `session_id` — pass it to `follow_up` for iterative work without r
 ## ERROR RECOVERY
 
 On ANY error, timeout, stalled process, or rate-limit notice:
+
 1. Do NOT abandon or hallucinate.
 2. Call `follow_up` with the same `session_id` and an instruction to resume/retry.
 3. The server handles model failover automatically (e.g. Gemini 3.7 Flash -> Claude Sonnet 4.6).

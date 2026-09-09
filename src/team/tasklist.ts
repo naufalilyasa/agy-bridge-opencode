@@ -70,7 +70,11 @@ export class InvalidTaskTransitionError extends TeamError {
   readonly nextStatus: TaskStatus;
 
   constructor(currentStatus: TaskStatus, nextStatus: TaskStatus) {
-    super(`no reverse transitions from ${currentStatus} to ${nextStatus}`, "status", "INVALID_TRANSITION");
+    super(
+      `no reverse transitions from ${currentStatus} to ${nextStatus}`,
+      "status",
+      "INVALID_TRANSITION",
+    );
     this.name = "InvalidTaskTransitionError";
     this.currentStatus = currentStatus;
     this.nextStatus = nextStatus;

@@ -337,9 +337,7 @@ describe("validateTeamSpec - validation errors and edge cases", () => {
     try {
       validateTeamSpec({
         name: "bad-member",
-        members: [
-          { name: "INVALID_MEMBER", kind: "subagent_type", subagent_type: "deep" },
-        ],
+        members: [{ name: "INVALID_MEMBER", kind: "subagent_type", subagent_type: "deep" }],
       });
     } catch (e) {
       expect(e).toBeInstanceOf(TeamError);
@@ -353,9 +351,7 @@ describe("validateTeamSpec - validation errors and edge cases", () => {
     try {
       validateTeamSpec({
         name: "unknown-subagent",
-        members: [
-          { name: "bad-agent", kind: "subagent_type", subagent_type: "nonexistent-bot" },
-        ],
+        members: [{ name: "bad-agent", kind: "subagent_type", subagent_type: "nonexistent-bot" }],
       });
     } catch (e) {
       expect(e).toBeInstanceOf(TeamError);
@@ -521,13 +517,7 @@ describe("validateTeamSpec - validation errors and edge cases", () => {
   });
 
   it("throws TeamError with code INVALID_MEMBER when members are non-flat or non-object items", () => {
-    const nonObjectMembers = [
-      "string-member",
-      null,
-      undefined,
-      123,
-      true,
-    ];
+    const nonObjectMembers = ["string-member", null, undefined, 123, true];
 
     for (const badMember of nonObjectMembers) {
       try {
@@ -549,9 +539,7 @@ describe("validateTeamSpec - validation errors and edge cases", () => {
     try {
       validateTeamSpec({
         name: "nested-array-team",
-        members: [
-          [{ name: "nested-lead", kind: "subagent_type", subagent_type: "deep" }],
-        ],
+        members: [[{ name: "nested-lead", kind: "subagent_type", subagent_type: "deep" }]],
       });
       expect.unreachable("should have thrown TeamError");
     } catch (e) {
@@ -752,4 +740,3 @@ describe("named team spec load/save/list", () => {
     expect(fs.existsSync(omoDir)).toBe(false);
   });
 });
-

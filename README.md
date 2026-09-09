@@ -94,29 +94,29 @@ Removes every component the installer added and restores `opencode.jsonc` from i
 
 ## Tools
 
-| Tool                 | Use for                                                         | Model routing                                                  |
-| -------------------- | --------------------------------------------------------------- | -------------------------------------------------------------- |
-| `analyze_files`      | Files >200 lines, >3 files at once, logs, dumps, generated code | per-tool chain (live: 3.8 via agy_bridge.jsonc)                |
-| `deep_search`        | git log/diff/blame archaeology, repo-wide greps                 | per-tool chain                                                 |
-| `web_lookup`         | Docs, API references, external/current knowledge                | per-tool chain                                                 |
-| `adversarial_review` | Plan critiques, design and code reviews (second model family)   | per-tool chain (critic roles lead with Claude)                 |
-| `follow_up`          | Continue a prior session by `session_id` — no context resend    | inherits the session                                           |
-| `delegate`           | Autonomous execution with 19 subagent roles (6-section prompt)  | per-role chain (see below)                                     |
-| `get_session_status`     | Current/latest session ID, status, directory binding            | —                                                              |
-| `list_sessions`          | All recorded sessions (find IDs to resume with `follow_up`)     | —                                                              |
-| **Team mode**            |                                                                 |                                                                |
-| `team_create`            | Create and initialize parallel agent team run (named or inline) | — (bridge orchestration)                                       |
-| `team_list`              | List active/recent team runs and saved named team specs         | —                                                              |
-| `team_status`            | Status: member states, elapsed time, task stats, unread counts  | —                                                              |
-| `team_delete`            | Stop loop, abort runs, prune git worktrees, delete run state     | —                                                              |
-| `team_shutdown_request`  | Request graceful shutdown for member (`awaiting_shutdown`)      | —                                                              |
-| `team_approve_shutdown`  | Approve pending member shutdown (`removed`)                     | —                                                              |
-| `team_reject_shutdown`   | Reject member shutdown with mandatory reason (resets to `idle`) | —                                                              |
-| `team_send_message`      | Send point-to-point or broadcast (`*`) message to team inboxes  | —                                                              |
-| `team_task_create`       | Create task in shared tasklist with dependencies (`blockedBy`)  | —                                                              |
-| `team_task_list`         | List tasks with optional status or owner filters                | —                                                              |
-| `team_task_get`          | Retrieve task details, status, owner, and blockers              | —                                                              |
-| `team_task_update`       | Atomically claim task or advance forward-only status            | —                                                              |
+| Tool                    | Use for                                                         | Model routing                                   |
+| ----------------------- | --------------------------------------------------------------- | ----------------------------------------------- |
+| `analyze_files`         | Files >200 lines, >3 files at once, logs, dumps, generated code | per-tool chain (live: 3.8 via agy_bridge.jsonc) |
+| `deep_search`           | git log/diff/blame archaeology, repo-wide greps                 | per-tool chain                                  |
+| `web_lookup`            | Docs, API references, external/current knowledge                | per-tool chain                                  |
+| `adversarial_review`    | Plan critiques, design and code reviews (second model family)   | per-tool chain (critic roles lead with Claude)  |
+| `follow_up`             | Continue a prior session by `session_id` — no context resend    | inherits the session                            |
+| `delegate`              | Autonomous execution with 19 subagent roles (6-section prompt)  | per-role chain (see below)                      |
+| `get_session_status`    | Current/latest session ID, status, directory binding            | —                                               |
+| `list_sessions`         | All recorded sessions (find IDs to resume with `follow_up`)     | —                                               |
+| **Team mode**           |                                                                 |                                                 |
+| `team_create`           | Create and initialize parallel agent team run (named or inline) | — (bridge orchestration)                        |
+| `team_list`             | List active/recent team runs and saved named team specs         | —                                               |
+| `team_status`           | Status: member states, elapsed time, task stats, unread counts  | —                                               |
+| `team_delete`           | Stop loop, abort runs, prune git worktrees, delete run state    | —                                               |
+| `team_shutdown_request` | Request graceful shutdown for member (`awaiting_shutdown`)      | —                                               |
+| `team_approve_shutdown` | Approve pending member shutdown (`removed`)                     | —                                               |
+| `team_reject_shutdown`  | Reject member shutdown with mandatory reason (resets to `idle`) | —                                               |
+| `team_send_message`     | Send point-to-point or broadcast (`*`) message to team inboxes  | —                                               |
+| `team_task_create`      | Create task in shared tasklist with dependencies (`blockedBy`)  | —                                               |
+| `team_task_list`        | List tasks with optional status or owner filters                | —                                               |
+| `team_task_get`         | Retrieve task details, status, owner, and blockers              | —                                               |
+| `team_task_update`      | Atomically claim task or advance forward-only status            | —                                               |
 
 All tools accept optional `cwd` (project root). `delegate`/`follow_up` also accept `load_memories` / `save_memory` (agentmemory) and `skills` (inject full SKILL.md protocols). Team tools operate on project-scoped `.omo/` state with member runs isolated in temporary git worktrees.
 
@@ -152,16 +152,16 @@ Each tool has its own default timeout: `web_lookup` 120s, `deep_search` 180s, `a
 
 All optional, via environment variables:
 
-| Variable                | Default    | Description                                                                              |
-| ----------------------- | ---------- | ---------------------------------------------------------------------------------------- |
-| `AGY_PATH`              | `agy`      | Path to the agy binary                                                                   |
-| `AGY_TIMEOUT`           | per-tool   | Seconds; overrides all per-tool timeouts at once                                         |
-| `AGY_TIMEOUT_<TOOL>`    | per-tool   | Seconds; overrides one tool, e.g. `AGY_TIMEOUT_DEEP_SEARCH=300`. Wins over `AGY_TIMEOUT` |
-| `AGY_IDLE_TIMEOUT`      | `90`       | Inactivity threshold (no log output) before a stall is detected and the process killed   |
-| `AGY_MAX_OUTPUT_CHARS`  | `50000`    | Truncation cap for tool output                                                           |
-| `AGY_DEFAULT_MODEL`     | unset      | Fallback model when no chain entry is available                                          |
-| `AGY_ROLE_MODEL_<ROLE>` | unset      | Comma-separated model chain override for a role, e.g. `AGY_ROLE_MODEL_ORACLE`            |
-| `AGY_SKIP_PERMISSIONS`  | `true`     | Pass `--dangerously-skip-permissions` to agy                                             |
+| Variable                      | Default    | Description                                                                              |
+| ----------------------------- | ---------- | ---------------------------------------------------------------------------------------- |
+| `AGY_PATH`                    | `agy`      | Path to the agy binary                                                                   |
+| `AGY_TIMEOUT`                 | per-tool   | Seconds; overrides all per-tool timeouts at once                                         |
+| `AGY_TIMEOUT_<TOOL>`          | per-tool   | Seconds; overrides one tool, e.g. `AGY_TIMEOUT_DEEP_SEARCH=300`. Wins over `AGY_TIMEOUT` |
+| `AGY_IDLE_TIMEOUT`            | `90`       | Inactivity threshold (no log output) before a stall is detected and the process killed   |
+| `AGY_MAX_OUTPUT_CHARS`        | `50000`    | Truncation cap for tool output                                                           |
+| `AGY_DEFAULT_MODEL`           | unset      | Fallback model when no chain entry is available                                          |
+| `AGY_ROLE_MODEL_<ROLE>`       | unset      | Comma-separated model chain override for a role, e.g. `AGY_ROLE_MODEL_ORACLE`            |
+| `AGY_SKIP_PERMISSIONS`        | `true`     | Pass `--dangerously-skip-permissions` to agy                                             |
 | `AGY_SANDBOX`                 | `false`    | Run agy with `--sandbox`                                                                 |
 | `AGY_ON_FAILURE`              | `fallback` | `strict` tells the calling agent not to absorb failed work itself                        |
 | `AGY_TEAM_MAX_PARALLEL`       | `4`        | Maximum parallel member runs across team runs                                            |

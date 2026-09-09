@@ -273,14 +273,23 @@ describe("src/team/tasklist", () => {
       const task = await createTask(runDir, { subject: "Full forward path" });
       expect(task.status).toBe("pending");
 
-      const claimed = await updateTaskStatus(runDir, task.id, { status: "claimed", owner: "worker-1" });
+      const claimed = await updateTaskStatus(runDir, task.id, {
+        status: "claimed",
+        owner: "worker-1",
+      });
       expect(claimed.status).toBe("claimed");
       expect(claimed.owner).toBe("worker-1");
 
-      const inProgress = await updateTaskStatus(runDir, task.id, { status: "in_progress", owner: "worker-1" });
+      const inProgress = await updateTaskStatus(runDir, task.id, {
+        status: "in_progress",
+        owner: "worker-1",
+      });
       expect(inProgress.status).toBe("in_progress");
 
-      const completed = await updateTaskStatus(runDir, task.id, { status: "completed", owner: "worker-1" });
+      const completed = await updateTaskStatus(runDir, task.id, {
+        status: "completed",
+        owner: "worker-1",
+      });
       expect(completed.status).toBe("completed");
 
       const deleted = await updateTaskStatus(runDir, task.id, { status: "deleted" });

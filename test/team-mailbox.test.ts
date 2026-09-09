@@ -87,19 +87,19 @@ describe("src/team/mailbox", () => {
     });
 
     it("throws TeamError if recipient list is empty array", async () => {
-      await expect(
-        sendMessage(runDir, { from: "lead", to: [], body: "hello" }),
-      ).rejects.toThrow(TeamError);
+      await expect(sendMessage(runDir, { from: "lead", to: [], body: "hello" })).rejects.toThrow(
+        TeamError,
+      );
     });
 
     it("throws TeamError if recipient is empty string or only whitespace", async () => {
-      await expect(
-        sendMessage(runDir, { from: "lead", to: "", body: "hello" }),
-      ).rejects.toThrow(TeamError);
+      await expect(sendMessage(runDir, { from: "lead", to: "", body: "hello" })).rejects.toThrow(
+        TeamError,
+      );
 
-      await expect(
-        sendMessage(runDir, { from: "lead", to: "   ", body: "hello" }),
-      ).rejects.toThrow(TeamError);
+      await expect(sendMessage(runDir, { from: "lead", to: "   ", body: "hello" })).rejects.toThrow(
+        TeamError,
+      );
     });
   });
 
@@ -135,17 +135,17 @@ describe("src/team/mailbox", () => {
         sendMessage(runDir, { from: "lead", to: "*", body: "hello" }, []),
       ).rejects.toThrow(TeamError);
 
-      await expect(
-        sendMessage(runDir, { from: "lead", to: "*", body: "hello" }),
-      ).rejects.toThrow(TeamError);
+      await expect(sendMessage(runDir, { from: "lead", to: "*", body: "hello" })).rejects.toThrow(
+        TeamError,
+      );
     });
 
     it("deduplicates memberNames in broadcast delivery", async () => {
-      const result = await sendMessage(
-        runDir,
-        { from: "lead", to: "*", body: "dedup test" },
-        ["worker-1", "worker-2", "worker-1"],
-      );
+      const result = await sendMessage(runDir, { from: "lead", to: "*", body: "dedup test" }, [
+        "worker-1",
+        "worker-2",
+        "worker-1",
+      ]);
       expect(result.deliveredTo).toEqual(["worker-1", "worker-2"]);
 
       for (const member of ["worker-1", "worker-2"]) {
@@ -454,7 +454,9 @@ describe("src/team/mailbox", () => {
 
       // Verify ignored files are preserved
       const remainingFiles = await fs.readdir(inboxDir);
-      expect(remainingFiles.sort()).toEqual([".DS_Store", "msg.tmp.12345.json", "notes.txt"].sort());
+      expect(remainingFiles.sort()).toEqual(
+        [".DS_Store", "msg.tmp.12345.json", "notes.txt"].sort(),
+      );
     });
   });
 
@@ -559,7 +561,13 @@ describe("src/team/mailbox", () => {
       const teamRunId = "run-parity";
       const projectRoot = testDir;
 
-      const sendRes = await sendMessage(projectRoot, teamRunId, "lead", "worker-1", "dual sig body");
+      const sendRes = await sendMessage(
+        projectRoot,
+        teamRunId,
+        "lead",
+        "worker-1",
+        "dual sig body",
+      );
       expect(sendRes.deliveredTo).toEqual(["worker-1"]);
 
       const drained = await drainInbox(projectRoot, teamRunId, "worker-1");

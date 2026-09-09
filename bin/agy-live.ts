@@ -888,7 +888,8 @@ async function main() {
       // from there with zero gaps and zero duplicates.
       currentPos = pos;
       remainder = "";
-    } catch {} finally {
+    } catch {
+    } finally {
       if (fd != null) {
         try {
           fs.closeSync(fd);
@@ -1397,7 +1398,8 @@ async function main() {
       }
       if (newCount > 0) {
         updateSidebar();
-        if (pageMode) updateLiveLabel(); // pages grew in realtime; refresh x/y
+        if (pageMode)
+          updateLiveLabel(); // pages grew in realtime; refresh x/y
         else renderer.requestRender();
       }
     } catch {}

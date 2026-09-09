@@ -108,12 +108,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
   };
 
   describe("member state machine matrix & validateTransition", () => {
-    const allStatuses: MemberStatus[] = [
-      "idle",
-      "running",
-      "awaiting_shutdown",
-      "removed",
-    ];
+    const allStatuses: MemberStatus[] = ["idle", "running", "awaiting_shutdown", "removed"];
 
     const legalTransitions: Array<[MemberStatus, MemberStatus]> = [
       ["idle", "running"],
@@ -132,9 +127,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
     });
 
     it("verifies all illegal transitions throw TeamError with code INVALID_MEMBER_TRANSITION", () => {
-      const legalSet = new Set(
-        legalTransitions.map(([from, to]) => `${from}->${to}`),
-      );
+      const legalSet = new Set(legalTransitions.map(([from, to]) => `${from}->${to}`));
 
       for (const from of allStatuses) {
         for (const to of allStatuses) {
@@ -294,9 +287,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
         ],
       };
 
-      await expect(runtime.createTeam(duplicateSpec, testDir)).rejects.toThrow(
-        TeamError,
-      );
+      await expect(runtime.createTeam(duplicateSpec, testDir)).rejects.toThrow(TeamError);
       try {
         await runtime.createTeam(duplicateSpec, testDir);
       } catch (err: unknown) {
@@ -318,9 +309,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
         ],
       };
 
-      await expect(runtime.createTeam(invalidSpec, testDir)).rejects.toThrow(
-        TeamError,
-      );
+      await expect(runtime.createTeam(invalidSpec, testDir)).rejects.toThrow(TeamError);
     });
   });
 
@@ -335,25 +324,19 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
       const missing = await runtime.getState(testDir, "team-non-existent");
       expect(missing).toBeNull();
 
-      await expect(
-        runtime.loadState(testDir, "team-non-existent"),
-      ).rejects.toThrow(TeamError);
+      await expect(runtime.loadState(testDir, "team-non-existent")).rejects.toThrow(TeamError);
     });
 
     it("updates state atomically under lock", async () => {
       const runtime = createTestRuntime();
       const res = await runtime.createTeam(validSingleSpec, testDir);
 
-      const updated = await runtime.updateState(
-        testDir,
-        res.teamRunId,
-        (current) => {
-          return {
-            ...current,
-            status: "active",
-          };
-        },
-      );
+      const updated = await runtime.updateState(testDir, res.teamRunId, (current) => {
+        return {
+          ...current,
+          status: "active",
+        };
+      });
 
       expect(updated.status).toBe("active");
 
@@ -369,9 +352,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
 
       // 1. Initial status is idle
       let state = await runtime.loadState(testDir, teamRunId);
-      expect(state.members.find((m) => m.name === "worker")?.status).toBe(
-        "idle",
-      );
+      expect(state.members.find((m) => m.name === "worker")?.status).toBe("idle");
 
       // 2. requestShutdown transitions idle -> awaiting_shutdown
       const reqRes = await runtime.requestShutdown(testDir, teamRunId, "worker");
@@ -379,9 +360,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
       expect(reqRes.status).toBe("awaiting_shutdown");
 
       state = await runtime.loadState(testDir, teamRunId);
-      expect(state.members.find((m) => m.name === "worker")?.status).toBe(
-        "awaiting_shutdown",
-      );
+      expect(state.members.find((m) => m.name === "worker")?.status).toBe("awaiting_shutdown");
 
       // 3. approveShutdown transitions awaiting_shutdown -> removed
       const appRes = await runtime.approveShutdown(testDir, teamRunId, "worker");
@@ -389,20 +368,18 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
       expect(appRes.status).toBe("removed");
 
       state = await runtime.loadState(testDir, teamRunId);
-      expect(state.members.find((m) => m.name === "worker")?.status).toBe(
-        "removed",
-      );
+      expect(state.members.find((m) => m.name === "worker")?.status).toBe("removed");
 
       // 4. removed member cannot be shut down or transitioned again
-      await expect(
-        runtime.requestShutdown(testDir, teamRunId, "worker"),
-      ).rejects.toThrow(TeamError);
-      await expect(
-        runtime.approveShutdown(testDir, teamRunId, "worker"),
-      ).rejects.toThrow(TeamError);
-      await expect(
-        runtime.rejectShutdown(testDir, teamRunId, "worker", "reason"),
-      ).rejects.toThrow(TeamError);
+      await expect(runtime.requestShutdown(testDir, teamRunId, "worker")).rejects.toThrow(
+        TeamError,
+      );
+      await expect(runtime.approveShutdown(testDir, teamRunId, "worker")).rejects.toThrow(
+        TeamError,
+      );
+      await expect(runtime.rejectShutdown(testDir, teamRunId, "worker", "reason")).rejects.toThrow(
+        TeamError,
+      );
     });
 
     it("handles requestShutdown -> rejectShutdown -> idle cycle", async () => {
@@ -413,19 +390,12 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
       await runtime.requestShutdown(testDir, teamRunId, "worker");
 
       // rejectShutdown: awaiting_shutdown -> idle
-      const rejRes = await runtime.rejectShutdown(
-        testDir,
-        teamRunId,
-        "worker",
-        "More work needed",
-      );
+      const rejRes = await runtime.rejectShutdown(testDir, teamRunId, "worker", "More work needed");
       expect(rejRes.name).toBe("worker");
       expect(rejRes.status).toBe("idle");
 
       const state = await runtime.loadState(testDir, teamRunId);
-      expect(state.members.find((m) => m.name === "worker")?.status).toBe(
-        "idle",
-      );
+      expect(state.members.find((m) => m.name === "worker")?.status).toBe("idle");
     });
 
     it("rejects direct approveShutdown on idle member without request", async () => {
@@ -433,24 +403,20 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
       const { teamRunId } = await runtime.createTeam(validMultiSpec, testDir);
 
       // approveShutdown on idle member is illegal transition (idle -> removed is invalid)
-      await expect(
-        runtime.approveShutdown(testDir, teamRunId, "worker"),
-      ).rejects.toThrow(TeamError);
+      await expect(runtime.approveShutdown(testDir, teamRunId, "worker")).rejects.toThrow(
+        TeamError,
+      );
     });
 
     it("rejects shutdown operations for non-existent member", async () => {
       const runtime = createTestRuntime();
       const { teamRunId } = await runtime.createTeam(validMultiSpec, testDir);
 
-      await expect(
-        runtime.requestShutdown(testDir, teamRunId, "ghost"),
-      ).rejects.toThrow(TeamError);
-      await expect(
-        runtime.approveShutdown(testDir, teamRunId, "ghost"),
-      ).rejects.toThrow(TeamError);
-      await expect(
-        runtime.rejectShutdown(testDir, teamRunId, "ghost", "reason"),
-      ).rejects.toThrow(TeamError);
+      await expect(runtime.requestShutdown(testDir, teamRunId, "ghost")).rejects.toThrow(TeamError);
+      await expect(runtime.approveShutdown(testDir, teamRunId, "ghost")).rejects.toThrow(TeamError);
+      await expect(runtime.rejectShutdown(testDir, teamRunId, "ghost", "reason")).rejects.toThrow(
+        TeamError,
+      );
     });
 
     it("allows transition from running to awaiting_shutdown mid-run", async () => {
@@ -469,9 +435,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
       expect(res.status).toBe("awaiting_shutdown");
 
       const state = await runtime.loadState(testDir, teamRunId);
-      expect(state.members.find((m) => m.name === "worker")?.status).toBe(
-        "awaiting_shutdown",
-      );
+      expect(state.members.find((m) => m.name === "worker")?.status).toBe("awaiting_shutdown");
     });
   });
 
@@ -491,14 +455,10 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
       expect(runtime.deps.cfg?.maxParallel).toBe(4);
 
       // wakeMember is now implemented (T8) — without a valid team state it throws TEAM_NOT_FOUND
-      await expect(
-        runtime.wakeMember(testDir, "team-123", "worker"),
-      ).rejects.toThrow(TeamError);
+      await expect(runtime.wakeMember(testDir, "team-123", "worker")).rejects.toThrow(TeamError);
 
       // buildWakePrompt is now implemented (T9) — without valid state it rejects with TeamError
-      await expect(
-        runtime.buildWakePrompt({}, {}),
-      ).rejects.toThrow(TeamError);
+      await expect(runtime.buildWakePrompt({}, {})).rejects.toThrow(TeamError);
       // startLoop, stopLoop, deleteTeam are now implemented (T10)
       expect(runtime.startLoop(testDir, "team-123")).toBe(true);
       expect(runtime.stopLoop("team-123")).toBe(true);
@@ -583,9 +543,7 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
     });
 
     it("throws TeamError with NOT_GIT_REPO when projectRoot is not a git repo", async () => {
-      await expect(
-        spawnWorktree(testDir, "team-run-not-git", "worker"),
-      ).rejects.toThrow(TeamError);
+      await expect(spawnWorktree(testDir, "team-run-not-git", "worker")).rejects.toThrow(TeamError);
 
       try {
         await spawnWorktree(testDir, "team-run-not-git", "worker");
@@ -613,8 +571,14 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
       try {
         execFileSync("git", ["init"], { cwd: scratchDir, stdio: "ignore" });
         execFileSync("git", ["config", "user.name", "test"], { cwd: scratchDir, stdio: "ignore" });
-        execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: scratchDir, stdio: "ignore" });
-        execFileSync("git", ["commit", "--allow-empty", "-m", "init"], { cwd: scratchDir, stdio: "ignore" });
+        execFileSync("git", ["config", "user.email", "test@test.com"], {
+          cwd: scratchDir,
+          stdio: "ignore",
+        });
+        execFileSync("git", ["commit", "--allow-empty", "-m", "init"], {
+          cwd: scratchDir,
+          stdio: "ignore",
+        });
 
         const runId = "test-run-best-effort";
         const res1 = await spawnWorktree(scratchDir, runId, "worker1");
@@ -648,8 +612,14 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
       try {
         execFileSync("git", ["init"], { cwd: scratchDir, stdio: "ignore" });
         execFileSync("git", ["config", "user.name", "test"], { cwd: scratchDir, stdio: "ignore" });
-        execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: scratchDir, stdio: "ignore" });
-        execFileSync("git", ["commit", "--allow-empty", "-m", "init"], { cwd: scratchDir, stdio: "ignore" });
+        execFileSync("git", ["config", "user.email", "test@test.com"], {
+          cwd: scratchDir,
+          stdio: "ignore",
+        });
+        execFileSync("git", ["commit", "--allow-empty", "-m", "init"], {
+          cwd: scratchDir,
+          stdio: "ignore",
+        });
 
         const runId = "test-run-all-fail";
         // Create 2 directories that exist, but are NOT valid git worktrees
@@ -659,9 +629,9 @@ describe("src/team/runtime T6: TeamRuntime createTeam + member state machine", (
         await fs.mkdir(p2, { recursive: true });
 
         try {
-          await expect(
-            removeWorktrees(scratchDir, runId, ["fail1", "fail2"]),
-          ).rejects.toThrow(TeamError);
+          await expect(removeWorktrees(scratchDir, runId, ["fail1", "fail2"])).rejects.toThrow(
+            TeamError,
+          );
 
           try {
             await removeWorktrees(scratchDir, runId, ["fail1", "fail2"]);
@@ -794,9 +764,15 @@ describe("src/team/runtime T8: wakeMember with failover + session persistence", 
   function makeSemaphore(): TeamSemaphore & { count: number } {
     let count = 0;
     return {
-      get count() { return count; },
-      acquire: async () => { count++; },
-      release: () => { count--; },
+      get count() {
+        return count;
+      },
+      acquire: async () => {
+        count++;
+      },
+      release: () => {
+        count--;
+      },
     };
   }
 
@@ -857,9 +833,7 @@ describe("src/team/runtime T8: wakeMember with failover + session persistence", 
       return s;
     });
 
-    await expect(
-      runtime.wakeMember(testDir, teamRunId, "alpha"),
-    ).rejects.toThrow(TeamError);
+    await expect(runtime.wakeMember(testDir, teamRunId, "alpha")).rejects.toThrow(TeamError);
 
     try {
       await runtime.wakeMember(testDir, teamRunId, "alpha");
@@ -877,9 +851,7 @@ describe("src/team/runtime T8: wakeMember with failover + session persistence", 
     await runtime.requestShutdown(testDir, teamRunId, "alpha");
     await runtime.approveShutdown(testDir, teamRunId, "alpha");
 
-    await expect(
-      runtime.wakeMember(testDir, teamRunId, "alpha"),
-    ).rejects.toThrow(TeamError);
+    await expect(runtime.wakeMember(testDir, teamRunId, "alpha")).rejects.toThrow(TeamError);
 
     try {
       await runtime.wakeMember(testDir, teamRunId, "alpha");
@@ -892,7 +864,9 @@ describe("src/team/runtime T8: wakeMember with failover + session persistence", 
     const cooldownCalls: Array<{ model: string; sec: number }> = [];
     const fakeCooldowns = {
       isCooled: () => false,
-      set: (model: string, sec: number) => { cooldownCalls.push({ model, sec }); },
+      set: (model: string, sec: number) => {
+        cooldownCalls.push({ model, sec });
+      },
       get: () => null,
     };
 
@@ -1003,7 +977,9 @@ describe("src/team/runtime T8: wakeMember with failover + session persistence", 
     });
     const { teamRunId } = await runtime.createTeam(multiSpec, testDir);
 
-    const res = await runtime.wakeMember(testDir, teamRunId, "alpha", { prompt: "transcript test" });
+    const res = await runtime.wakeMember(testDir, teamRunId, "alpha", {
+      prompt: "transcript test",
+    });
     expect(res.ok).toBe(true);
 
     // Read transcript file
@@ -1073,9 +1049,7 @@ describe("src/team/runtime T8: wakeMember with failover + session persistence", 
     const runtime = createWakeRuntime(async () => ({ output: "", sessionId: null, model: null }));
     const { teamRunId } = await runtime.createTeam(multiSpec, testDir);
 
-    await expect(
-      runtime.wakeMember(testDir, teamRunId, "ghost"),
-    ).rejects.toThrow(TeamError);
+    await expect(runtime.wakeMember(testDir, teamRunId, "ghost")).rejects.toThrow(TeamError);
 
     try {
       await runtime.wakeMember(testDir, teamRunId, "ghost");
@@ -1402,9 +1376,7 @@ describe("src/team/runtime T9: buildWakePrompt", () => {
     const { teamRunId } = await runtime.createTeam(promptSpec, testDir);
     const state = await runtime.loadState(testDir, teamRunId);
 
-    await expect(
-      runtime.buildWakePrompt(state, "nonexistent"),
-    ).rejects.toThrow(TeamError);
+    await expect(runtime.buildWakePrompt(state, "nonexistent")).rejects.toThrow(TeamError);
 
     try {
       await runtime.buildWakePrompt(state, "nonexistent");
@@ -1476,10 +1448,7 @@ describe("src/team/runtime T9: effective semaphore & wakeMember wiring", () => {
         releaseBarrier();
       } else if (activeRuns < 4) {
         // Wait until 4 concurrent runners arrive (or fallback timeout)
-        await Promise.race([
-          barrier,
-          new Promise((r) => setTimeout(r, 2000)),
-        ]);
+        await Promise.race([barrier, new Promise((r) => setTimeout(r, 2000))]);
       }
       // Hold slot briefly to guarantee overlap
       await new Promise((r) => setTimeout(r, 20));
@@ -1910,4 +1879,3 @@ describe("src/team/runtime T10: wake loop and deleteTeam drain", () => {
     }
   });
 });
-

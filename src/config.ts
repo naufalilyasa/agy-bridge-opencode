@@ -168,7 +168,10 @@ export function stripJsonComments(raw: string): string {
       i++;
     } else if (c === ",") {
       let j = i + 1;
-      while (j < raw.length && (raw[j] === " " || raw[j] === "\t" || raw[j] === "\n" || raw[j] === "\r")) {
+      while (
+        j < raw.length &&
+        (raw[j] === " " || raw[j] === "\t" || raw[j] === "\n" || raw[j] === "\r")
+      ) {
         j++;
       }
       if (raw[j] !== "}" && raw[j] !== "]") {
@@ -238,10 +241,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   ];
 
   for (const [key, envVar, fallback] of teamDefs) {
-    const val = positiveInt(
-      env[envVar] ?? (fileConfig[key] as number | undefined),
-      fallback,
-    );
+    const val = positiveInt(env[envVar] ?? (fileConfig[key] as number | undefined), fallback);
     Object.defineProperty(cfg, key, {
       value: val,
       writable: true,

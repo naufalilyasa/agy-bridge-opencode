@@ -51,7 +51,6 @@ function modelFamily(model: string | undefined): string {
   return "other";
 }
 
-
 export function resolveFiles(files: string[], cwd: string): string[] {
   return files.map((f) => (path.isAbsolute(f) ? f : path.resolve(cwd, f)));
 }
@@ -644,7 +643,7 @@ export const TOOLS: ToolDef[] = [
         .string()
         .optional()
         .describe(
-          'Override the role chain for this continuation. Usually omit — the server remembers the original delegate role and reuses its model chain.',
+          "Override the role chain for this continuation. Usually omit — the server remembers the original delegate role and reuses its model chain.",
         ),
       context: z
         .string()
@@ -1064,10 +1063,16 @@ export const TOOLS: ToolDef[] = [
           "List of team members as objects ({name, kind, category, subagent_type, role, prompt}) or string names.",
         ),
       leadAgentId: z.string().optional().describe("Name of the lead agent member in the team."),
-      description: z.string().optional().describe("Human-readable description of the team's objective."),
+      description: z
+        .string()
+        .optional()
+        .describe("Human-readable description of the team's objective."),
       backendType: z.string().optional().describe("Backend execution engine ('cli' subprocess)."),
       sessionPermission: z.string().optional().describe("Session permission mode for the team."),
-      teamAllowedPaths: z.array(z.string()).optional().describe("Allowed filesystem path boundaries."),
+      teamAllowedPaths: z
+        .array(z.string())
+        .optional()
+        .describe("Allowed filesystem path boundaries."),
       cwd: z.string().optional().describe("Project root working directory."),
     },
     chain: [],
@@ -1127,7 +1132,10 @@ export const TOOLS: ToolDef[] = [
     schema: {
       teamRunId: z.string().optional().describe("Unique team run identifier."),
       team_id: z.string().optional().describe("Alias for teamRunId."),
-      targetMemberName: z.string().optional().describe("Name of the member to request shutdown for."),
+      targetMemberName: z
+        .string()
+        .optional()
+        .describe("Name of the member to request shutdown for."),
       memberName: z.string().optional().describe("Alias for targetMemberName."),
       cwd: z.string().optional().describe("Project root working directory."),
     },
@@ -1144,7 +1152,10 @@ export const TOOLS: ToolDef[] = [
     schema: {
       teamRunId: z.string().optional().describe("Unique team run identifier."),
       team_id: z.string().optional().describe("Alias for teamRunId."),
-      targetMemberName: z.string().optional().describe("Name of the member to approve shutdown for."),
+      targetMemberName: z
+        .string()
+        .optional()
+        .describe("Name of the member to approve shutdown for."),
       memberName: z.string().optional().describe("Alias for targetMemberName."),
       cwd: z.string().optional().describe("Project root working directory."),
     },
@@ -1161,7 +1172,10 @@ export const TOOLS: ToolDef[] = [
     schema: {
       teamRunId: z.string().optional().describe("Unique team run identifier."),
       team_id: z.string().optional().describe("Alias for teamRunId."),
-      targetMemberName: z.string().optional().describe("Name of the member to reject shutdown for."),
+      targetMemberName: z
+        .string()
+        .optional()
+        .describe("Name of the member to reject shutdown for."),
       memberName: z.string().optional().describe("Alias for targetMemberName."),
       reason: z.string().describe("Mandatory justification for rejecting shutdown."),
       cwd: z.string().optional().describe("Project root working directory."),
@@ -1197,7 +1211,10 @@ export const TOOLS: ToolDef[] = [
       teamRunId: z.string().optional().describe("Unique team run identifier."),
       team_id: z.string().optional().describe("Alias for teamRunId."),
       subject: z.string().describe("Task title or summary."),
-      description: z.string().optional().describe("Detailed task description and acceptance criteria."),
+      description: z
+        .string()
+        .optional()
+        .describe("Detailed task description and acceptance criteria."),
       owner: z.string().optional().describe("Assigned member name."),
       blockedBy: z
         .array(z.string())
@@ -1221,7 +1238,9 @@ export const TOOLS: ToolDef[] = [
       status: z
         .string()
         .optional()
-        .describe("Filter by task status ('pending', 'claimed', 'in_progress', 'completed', 'deleted')."),
+        .describe(
+          "Filter by task status ('pending', 'claimed', 'in_progress', 'completed', 'deleted').",
+        ),
       owner: z.string().optional().describe("Filter by assigned owner member name."),
       cwd: z.string().optional().describe("Project root working directory."),
     },
@@ -1232,8 +1251,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: "team_task_get",
-    description:
-      "Retrieve full details of a specific task from the team tasklist by ID.",
+    description: "Retrieve full details of a specific task from the team tasklist by ID.",
     schema: {
       teamRunId: z.string().optional().describe("Unique team run identifier."),
       team_id: z.string().optional().describe("Alias for teamRunId."),
@@ -1262,7 +1280,10 @@ export const TOOLS: ToolDef[] = [
         .string()
         .optional()
         .describe("New status ('claimed', 'in_progress', 'completed', 'deleted')."),
-      owner: z.string().optional().describe("Assigned owner member name (required when status is 'claimed')."),
+      owner: z
+        .string()
+        .optional()
+        .describe("Assigned owner member name (required when status is 'claimed')."),
       cwd: z.string().optional().describe("Project root working directory."),
     },
     chain: [],

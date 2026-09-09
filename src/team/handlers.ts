@@ -13,11 +13,7 @@ import {
   listNamedTeams,
   type TeamSpec,
 } from "./spec.js";
-import {
-  runDir,
-  readJson,
-  TeamError as StoreTeamError,
-} from "./store.js";
+import { runDir, readJson, TeamError as StoreTeamError } from "./store.js";
 import {
   listTasks,
   createTask,
@@ -56,9 +52,7 @@ function resolveContext(
 ): TeamHandlerContext {
   const projectRoot =
     ctx?.projectRoot ??
-    (typeof args.cwd === "string" && args.cwd.trim().length > 0
-      ? args.cwd.trim()
-      : process.cwd());
+    (typeof args.cwd === "string" && args.cwd.trim().length > 0 ? args.cwd.trim() : process.cwd());
   const runtime = ctx?.runtime ?? new TeamRuntime();
   return { projectRoot, runtime, runDir: ctx?.runDir };
 }
@@ -137,8 +131,7 @@ export async function handleTeamCreate(
         (args.teamName as string | undefined) ??
         `team-${Date.now()}`;
       const leadAgentId =
-        (args.leadAgentId as string | undefined) ??
-        (args.lead_agent_id as string | undefined);
+        (args.leadAgentId as string | undefined) ?? (args.lead_agent_id as string | undefined);
 
       const normalizedMembers = args.members.map((m) => {
         if (typeof m === "string") {
@@ -152,7 +145,9 @@ export async function handleTeamCreate(
         description: args.description as string | undefined,
         leadAgentId:
           leadAgentId ??
-          (normalizedMembers.length === 1 && typeof normalizedMembers[0] === "object" && normalizedMembers[0] !== null
+          (normalizedMembers.length === 1 &&
+          typeof normalizedMembers[0] === "object" &&
+          normalizedMembers[0] !== null
             ? (normalizedMembers[0] as { name?: string }).name
             : undefined),
         backendType: (topBackendType as string | undefined) ?? "cli",
@@ -205,10 +200,7 @@ export async function handleTeamCreate(
 
     const validatedSpec: TeamSpec = validateTeamSpec(rawSpec);
 
-    const result: CreateTeamResult = await runtime.createTeam(
-      validatedSpec,
-      projectRoot,
-    );
+    const result: CreateTeamResult = await runtime.createTeam(validatedSpec, projectRoot);
 
     // Start background wake loop (non-blocking)
     runtime.startLoop(projectRoot, result.teamRunId);
@@ -317,9 +309,8 @@ export async function handleTeamList(
     const namedTeamsText =
       namedTeams.length === 0
         ? "  (none)\n"
-        : namedTeams
-            .map((t) => `  - ${t.name} (members: ${t.members.join(", ")})`)
-            .join("\n") + "\n";
+        : namedTeams.map((t) => `  - ${t.name} (members: ${t.members.join(", ")})`).join("\n") +
+          "\n";
 
     return {
       content: [
@@ -555,9 +546,9 @@ export async function handleTeamShutdownRequest(
       };
     }
 
-    const rawMember = (args.targetMemberName ??
-      args.memberName ??
-      args.member) as string | undefined;
+    const rawMember = (args.targetMemberName ?? args.memberName ?? args.member) as
+      | string
+      | undefined;
     if (!rawMember || typeof rawMember !== "string" || rawMember.trim().length === 0) {
       return {
         content: [
@@ -618,9 +609,9 @@ export async function handleTeamShutdownApprove(
       };
     }
 
-    const rawMember = (args.targetMemberName ??
-      args.memberName ??
-      args.member) as string | undefined;
+    const rawMember = (args.targetMemberName ?? args.memberName ?? args.member) as
+      | string
+      | undefined;
     if (!rawMember || typeof rawMember !== "string" || rawMember.trim().length === 0) {
       return {
         content: [
@@ -681,9 +672,9 @@ export async function handleTeamShutdownReject(
       };
     }
 
-    const rawMember = (args.targetMemberName ??
-      args.memberName ??
-      args.member) as string | undefined;
+    const rawMember = (args.targetMemberName ?? args.memberName ?? args.member) as
+      | string
+      | undefined;
     if (!rawMember || typeof rawMember !== "string" || rawMember.trim().length === 0) {
       return {
         content: [
@@ -781,9 +772,7 @@ export async function handleSendMessage(
     }
 
     const from =
-      typeof args.from === "string" && args.from.trim().length > 0
-        ? args.from.trim()
-        : "lead";
+      typeof args.from === "string" && args.from.trim().length > 0 ? args.from.trim() : "lead";
 
     const teamRunId = rawId.trim();
     const rd = ctxRunDir ?? runDir(projectRoot, teamRunId);
@@ -891,7 +880,8 @@ export async function handleTeamTaskCreate(
       teamRunId,
       subject: subject.trim(),
       description: typeof args.description === "string" ? args.description : undefined,
-      owner: typeof args.owner === "string" && args.owner.trim().length > 0 ? args.owner.trim() : null,
+      owner:
+        typeof args.owner === "string" && args.owner.trim().length > 0 ? args.owner.trim() : null,
       blockedBy,
       createdBy,
     });

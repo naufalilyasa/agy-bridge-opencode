@@ -13,14 +13,14 @@ Team Mode in `agy-bridge` brings parallel multi-agent collaboration to Antigravi
 
 A fundamental architectural distinction exists between native OMO team mode and `agy-bridge` Team Mode:
 
-| Dimension | Native OMO Team Mode | `agy-bridge` Team Mode |
-| :--- | :--- | :--- |
-| **Agent Execution Model** | Long-running interactive worker sessions (e.g. `opencode attach`, tmux panes) | Detached batch CLI processes (`agy --print`) executed per wake |
-| **Tool Invocation by Members** | Members directly invoke `team_*` tools via their client interface | Members **cannot** invoke MCP tools (no MCP client config in `agy`); the bridge executes all protocol steps on their behalf |
-| **Message Delivery** | Real-time live injection (`promptAsync`) with transient `.delivering-*.json` locks | File-based inbox queue (`.omo/runtime/<teamRunId>/inboxes/<member>/`) consumed at next idle wake turn |
-| **Agent Responses** | Interactive tool calls (`team_send_message`, `team_task_update`, etc.) | Final stdout text captured and appended to `.jsonl` transcript logs |
-| **Concurrency Control** | Process management + tmux pane multiplexing | In-memory FIFO `BoundedSemaphore` (`AGY_TEAM_MAX_PARALLEL`, default 4) |
-| **Session Persistence** | Interactive daemon session IDs | CLI `--conversation <sessionId>` resumed across wake cycles |
+| Dimension                      | Native OMO Team Mode                                                               | `agy-bridge` Team Mode                                                                                                      |
+| :----------------------------- | :--------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------- |
+| **Agent Execution Model**      | Long-running interactive worker sessions (e.g. `opencode attach`, tmux panes)      | Detached batch CLI processes (`agy --print`) executed per wake                                                              |
+| **Tool Invocation by Members** | Members directly invoke `team_*` tools via their client interface                  | Members **cannot** invoke MCP tools (no MCP client config in `agy`); the bridge executes all protocol steps on their behalf |
+| **Message Delivery**           | Real-time live injection (`promptAsync`) with transient `.delivering-*.json` locks | File-based inbox queue (`.omo/runtime/<teamRunId>/inboxes/<member>/`) consumed at next idle wake turn                       |
+| **Agent Responses**            | Interactive tool calls (`team_send_message`, `team_task_update`, etc.)             | Final stdout text captured and appended to `.jsonl` transcript logs                                                         |
+| **Concurrency Control**        | Process management + tmux pane multiplexing                                        | In-memory FIFO `BoundedSemaphore` (`AGY_TEAM_MAX_PARALLEL`, default 4)                                                      |
+| **Session Persistence**        | Interactive daemon session IDs                                                     | CLI `--conversation <sessionId>` resumed across wake cycles                                                                 |
 
 ### 1.2 The Bridge Wake Loop
 
@@ -37,8 +37,8 @@ Members do not continuously consume CPU or GPU tokens while waiting. Instead, th
         |                                |                               |
  Member is running,          Member is idle AND has:            Member has
  awaiting_shutdown,          - unread inbox messages, OR        no pending work
- or removed                  - active owned tasks, OR           
-        |                    - never been woken                 
+ or removed                  - active owned tasks, OR
+        |                    - never been woken
         v                                |                               v
      [ Skip ]                            v                            [ Sleep ]
                            Acquire BoundedSemaphore slot
@@ -73,12 +73,12 @@ Team Mode runtime settings are controlled via environment variables or file conf
 
 ### 2.1 Environment Variables
 
-| Variable | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `AGY_TEAM_MAX_PARALLEL` | `number` | `4` | Maximum number of concurrent detached `agy` member subprocesses across all teams. Regulated via `BoundedSemaphore`. |
-| `AGY_TEAM_POLL_MS` | `number` | `3000` | Polling interval in milliseconds for the background wake loop (`startLoop`). |
-| `AGY_TEAM_MEMBER_TIMEOUT_SEC` | `number` | `300` | Execution timeout in seconds for a single member wake turn before aborting the process. |
-| `AGY_TEAM_KILL_GRACE_MS` | `number` | `5000` | Maximum grace period in milliseconds to wait for in-flight runs to settle during `team_delete` or process SIGINT/SIGTERM before tearing down worktrees and storage. |
+| Variable                      | Type     | Default | Description                                                                                                                                                         |
+| :---------------------------- | :------- | :------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AGY_TEAM_MAX_PARALLEL`       | `number` | `4`     | Maximum number of concurrent detached `agy` member subprocesses across all teams. Regulated via `BoundedSemaphore`.                                                 |
+| `AGY_TEAM_POLL_MS`            | `number` | `3000`  | Polling interval in milliseconds for the background wake loop (`startLoop`).                                                                                        |
+| `AGY_TEAM_MEMBER_TIMEOUT_SEC` | `number` | `300`   | Execution timeout in seconds for a single member wake turn before aborting the process.                                                                             |
+| `AGY_TEAM_KILL_GRACE_MS`      | `number` | `5000`  | Maximum grace period in milliseconds to wait for in-flight runs to settle during `team_delete` or process SIGINT/SIGTERM before tearing down worktrees and storage. |
 
 ### 2.2 Configuration Loading Priority
 
@@ -95,13 +95,14 @@ Example snippet for `~/.gemini/config/agy_bridge.jsonc`:
   "teamMaxParallel": 4,
   "teamPollMs": 3000,
   "teamMemberTimeoutSec": 300,
-  "teamKillGraceMs": 5000
+  "teamKillGraceMs": 5000,
 }
 ```
 
 ### 2.3 Model Configuration & Resolution Precedence
 
 Model selection follows a strict precedence ladder:
+
 1. **Explicit Model (`args.model`)**: One-shot override; bypasses cooldown and is not persisted across turns.
 2. **Per-Tool Overrides (`toolModels[tool.name]`)**: Overrides configured per tool name (e.g. `web_lookup`, `delegate`, `follow_up`). Normalizes string or string array.
 3. **Per-Role Overrides (`roleModels[roleKey]`)**: Overrides configured per agent role (e.g. `oracle`, `git-master`).
@@ -198,7 +199,8 @@ You can pass `inline_spec` directly as a JSON object (or JSON string), or provid
   "members": ["lead", "worker-1", "worker-2"]
 }
 ```
-*Note: String entries in `members` auto-normalize to `{ name, kind: "category", category: "engineering" }`.*
+
+_Note: String entries in `members` auto-normalize to `{ name, kind: "category", category: "engineering" }`._
 
 ### 3.3 Member Specification Syntax & Role Resolution
 
@@ -229,7 +231,7 @@ sequenceDiagram
     Lead->>Bridge: team_create({ name: "refactor-crew" })
     Bridge->>Store: Initialize runDir, state.json, worktrees
     Bridge-->>Lead: { teamRunId: "team-xxx", status: "creating" } (Immediate)
-    
+
     Lead->>Bridge: team_task_create({ subject: "Refactor auth", owner: "coder" })
     Bridge->>Store: Write tasks/<taskId>.json under lock
     Bridge-->>Lead: { id: "<taskId>", status: "pending" }
@@ -264,20 +266,20 @@ sequenceDiagram
 
 `agy-bridge` registers the complete 12-tool surface of OMO Team Mode with full schema compatibility.
 
-| # | Tool Name | Primary Parameters & Aliases | Behavior & Implementation | Parity vs. Native OMO |
-| :---: | :--- | :--- | :--- | :--- |
-| **1** | `team_create` | `name` (`teamName`), `inline_spec` (`spec`), `members`, `leadAgentId`, `backendType`, `cwd` | Validates spec, spawns member worktrees in `os.tmpdir()`, writes initial `state.json` (`"creating"`), starts background wake loop, and returns immediately. | **Full / Batch Adaptation**<br>Returns `{ teamRunId, status: "creating" }` immediately. Restricts `backendType` strictly to `"cli"`. |
-| **2** | `team_list` | `cwd` | Scans `.omo/runtime` for active runs and `.omo/teams` for named specs. Returns active runs sorted descending by timestamp alongside available named specs. | **Full Parity**<br>Returns dual list of active runs and discoverable specifications. |
-| **3** | `team_status` | `teamRunId` (`team_id`), `cwd` | Aggregates wall-clock elapsed time, member states, task breakdown by status, unread message counts, and the tail (up to 500 chars) of member transcripts. | **Full Parity**<br>Dual presentation: LLM-friendly markdown text summary followed by parseable JSON payload. |
-| **4** | `team_delete` | `teamRunId` (`team_id`), `cwd` | Halts wake loop, signals `AbortController` to in-flight runs, awaits drain (bounded by `killGraceMs`), force-removes git worktrees, runs `git worktree prune`, and deletes run directory. | **Full Parity**<br>Strictly idempotent: returns `{ status: "deleted" }` on subsequent calls without error. |
-| **5** | `team_shutdown_request` | `teamRunId` (`team_id`), `targetMemberName` (`memberName`), `cwd` | Transitions member from `idle` or `running` to `awaiting_shutdown` under `state.lock`. Member finishes current run but the wake loop accepts no new work. | **Full Parity**<br>Enforces legal state transition matrix. |
-| **6** | `team_approve_shutdown`<br>*(alias: `team_shutdown_approve`)* | `teamRunId` (`team_id`), `targetMemberName` (`memberName`), `cwd` | Transitions member from `awaiting_shutdown` to `removed`. Marks member concluded; member can no longer be woken. | **Full Parity**<br>Terminal member state transition. |
-| **7** | `team_reject_shutdown`<br>*(alias: `team_shutdown_reject`)* | `teamRunId` (`team_id`), `targetMemberName` (`memberName`), `reason` *(mandatory)*, `cwd` | Rejects shutdown request with mandatory `reason` text, restoring member state from `awaiting_shutdown` back to `idle`. | **Full Parity**<br>Validates required rejection rationale before transitioning. |
-| **8** | `team_send_message`<br>*(alias: `send_message`)* | `teamRunId` (`team_id`), `to` (`*` for broadcast), `body`, `from`, `cwd` | Writes per-message JSON file (`<ts>-<uuid>.json`) to `inboxes/<recipient>/` under lock. Enforces 32 KB payload cap and 256 KB recipient unread backpressure limit. | **Full / Batch Adaptation**<br>Queues messages on disk for wake-prompt consumption instead of live injection. |
-| **9** | `team_task_create`<br>*(alias: `task_create`)* | `teamRunId` (`team_id`), `subject`, `description`, `owner`, `blockedBy` (`blocked_by`), `cwd` | Creates atomic task JSON file under `tasks.lock`. Initializes status as `pending` (or specified status) with dependency tracking. | **Full Parity**<br>Persists structured task entity. |
-| **10** | `team_task_list`<br>*(alias: `task_list`)* | `teamRunId` (`team_id`), `status`, `owner`, `cwd` | Lists tasks filtered by status (`pending`, `claimed`, `in_progress`, `completed`, `deleted`) or owner. Omits `deleted` tasks by default. | **Full Parity**<br>Formatted listing with ID, status, and owner. |
-| **11** | `team_task_get`<br>*(alias: `task_get`)* | `teamRunId` (`team_id`), `taskId` (`task_id`, `id`), `cwd` | Retrieves full JSON definition of a single task including blockers, timestamps, and owner. Returns `TASK_NOT_FOUND` if absent. | **Full Parity**<br>Direct read of task document. |
-| **12** | `team_task_update`<br>*(alias: `task_update`)* | `teamRunId` (`team_id`), `taskId` (`task_id`, `id`), `status`, `owner`, `cwd` | Updates task status or ownership under `tasks.lock`. Enforces atomic claims (`claimed` requires owner), forward-only transitions, dependency checking (`blockedBy`), and cross-owner protections. | **Full Parity**<br>Strict state machine: prevents rollbacks and racing claims. |
+|   #    | Tool Name                                                     | Primary Parameters & Aliases                                                                  | Behavior & Implementation                                                                                                                                                                         | Parity vs. Native OMO                                                                                                                |
+| :----: | :------------------------------------------------------------ | :-------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :----------------------------------------------------------------------------------------------------------------------------------- |
+| **1**  | `team_create`                                                 | `name` (`teamName`), `inline_spec` (`spec`), `members`, `leadAgentId`, `backendType`, `cwd`   | Validates spec, spawns member worktrees in `os.tmpdir()`, writes initial `state.json` (`"creating"`), starts background wake loop, and returns immediately.                                       | **Full / Batch Adaptation**<br>Returns `{ teamRunId, status: "creating" }` immediately. Restricts `backendType` strictly to `"cli"`. |
+| **2**  | `team_list`                                                   | `cwd`                                                                                         | Scans `.omo/runtime` for active runs and `.omo/teams` for named specs. Returns active runs sorted descending by timestamp alongside available named specs.                                        | **Full Parity**<br>Returns dual list of active runs and discoverable specifications.                                                 |
+| **3**  | `team_status`                                                 | `teamRunId` (`team_id`), `cwd`                                                                | Aggregates wall-clock elapsed time, member states, task breakdown by status, unread message counts, and the tail (up to 500 chars) of member transcripts.                                         | **Full Parity**<br>Dual presentation: LLM-friendly markdown text summary followed by parseable JSON payload.                         |
+| **4**  | `team_delete`                                                 | `teamRunId` (`team_id`), `cwd`                                                                | Halts wake loop, signals `AbortController` to in-flight runs, awaits drain (bounded by `killGraceMs`), force-removes git worktrees, runs `git worktree prune`, and deletes run directory.         | **Full Parity**<br>Strictly idempotent: returns `{ status: "deleted" }` on subsequent calls without error.                           |
+| **5**  | `team_shutdown_request`                                       | `teamRunId` (`team_id`), `targetMemberName` (`memberName`), `cwd`                             | Transitions member from `idle` or `running` to `awaiting_shutdown` under `state.lock`. Member finishes current run but the wake loop accepts no new work.                                         | **Full Parity**<br>Enforces legal state transition matrix.                                                                           |
+| **6**  | `team_approve_shutdown`<br>_(alias: `team_shutdown_approve`)_ | `teamRunId` (`team_id`), `targetMemberName` (`memberName`), `cwd`                             | Transitions member from `awaiting_shutdown` to `removed`. Marks member concluded; member can no longer be woken.                                                                                  | **Full Parity**<br>Terminal member state transition.                                                                                 |
+| **7**  | `team_reject_shutdown`<br>_(alias: `team_shutdown_reject`)_   | `teamRunId` (`team_id`), `targetMemberName` (`memberName`), `reason` _(mandatory)_, `cwd`     | Rejects shutdown request with mandatory `reason` text, restoring member state from `awaiting_shutdown` back to `idle`.                                                                            | **Full Parity**<br>Validates required rejection rationale before transitioning.                                                      |
+| **8**  | `team_send_message`<br>_(alias: `send_message`)_              | `teamRunId` (`team_id`), `to` (`*` for broadcast), `body`, `from`, `cwd`                      | Writes per-message JSON file (`<ts>-<uuid>.json`) to `inboxes/<recipient>/` under lock. Enforces 32 KB payload cap and 256 KB recipient unread backpressure limit.                                | **Full / Batch Adaptation**<br>Queues messages on disk for wake-prompt consumption instead of live injection.                        |
+| **9**  | `team_task_create`<br>_(alias: `task_create`)_                | `teamRunId` (`team_id`), `subject`, `description`, `owner`, `blockedBy` (`blocked_by`), `cwd` | Creates atomic task JSON file under `tasks.lock`. Initializes status as `pending` (or specified status) with dependency tracking.                                                                 | **Full Parity**<br>Persists structured task entity.                                                                                  |
+| **10** | `team_task_list`<br>_(alias: `task_list`)_                    | `teamRunId` (`team_id`), `status`, `owner`, `cwd`                                             | Lists tasks filtered by status (`pending`, `claimed`, `in_progress`, `completed`, `deleted`) or owner. Omits `deleted` tasks by default.                                                          | **Full Parity**<br>Formatted listing with ID, status, and owner.                                                                     |
+| **11** | `team_task_get`<br>_(alias: `task_get`)_                      | `teamRunId` (`team_id`), `taskId` (`task_id`, `id`), `cwd`                                    | Retrieves full JSON definition of a single task including blockers, timestamps, and owner. Returns `TASK_NOT_FOUND` if absent.                                                                    | **Full Parity**<br>Direct read of task document.                                                                                     |
+| **12** | `team_task_update`<br>_(alias: `task_update`)_                | `teamRunId` (`team_id`), `taskId` (`task_id`, `id`), `status`, `owner`, `cwd`                 | Updates task status or ownership under `tasks.lock`. Enforces atomic claims (`claimed` requires owner), forward-only transitions, dependency checking (`blockedBy`), and cross-owner protections. | **Full Parity**<br>Strict state machine: prevents rollbacks and racing claims.                                                       |
 
 ---
 
@@ -354,33 +356,41 @@ Tasks in `src/team/tasklist.ts` follow a forward-only lifecycle:
 To provide complete technical transparency, every known limitation of `agy-bridge` Team Mode compared to native OMO team mode is documented below with exact source code citations.
 
 ### 6.1 Batch Engine & No Live Delivery Injection
+
 - **Code Trace**: `src/team/mailbox.ts:212-248`, `src/team/runtime.ts:517-538`, `src/team/runtime.ts:1015-1018`, `src/team/runtime.ts:1101-1114`, `src/team/runtime.ts:1175-1212`.
 - **Technical Detail**: Native OMO uses `promptAsync` to inject incoming messages live into active, running agent loops via transient `.delivering-*.json` files. In `agy-bridge`, messages are written as static JSON files to disk (`src/team/mailbox.ts:221-248`). The bridge poll loop periodically inspects the mailbox (`src/team/runtime.ts:1186-1192`), drains unread messages (`src/team/runtime.ts:517-538`), synthesizes a batch wake prompt (`src/team/runtime.ts:569-584`), and spawns a detached `agy --print` job (`src/team/runtime.ts:1037-1048`). Responses are captured from stdout and appended to JSONL transcript logs (`src/team/runtime.ts:1101-1114`). There is no interactive mid-turn message injection.
 
 ### 6.2 Single Shared Gemini Quota Pool
+
 - **Code Trace**: `src/team/runtime.ts:961-965`, `src/team/runtime.ts:1026-1078`, `src/quota.ts:19-21`, `src/quota.ts:61-75`.
 - **Technical Detail**: All team members execute through the Antigravity CLI and share the same underlying Gemini API quota pool (`src/team/runtime.ts:961-965`). When multiple parallel members (`AGY_TEAM_MAX_PARALLEL = 4`) wake simultaneously, aggregate token and request bursts can trigger HTTP 429 (`RESOURCE_EXHAUSTED`) (`src/quota.ts:19-21, 61-75`). When 429 occurs, `QuotaError` records a cooldown for that model in `deps.cooldowns` (`src/team/runtime.ts:1052-1056`), causing subsequent wake turns on that model to be skipped (`src/team/runtime.ts:1028-1031`).
 
 ### 6.3 In-Memory Per-Process Cooldown Registry
+
 - **Code Trace**: `src/quota.ts:78-96`, `src/team/runtime.ts:1052-1056`.
 - **Technical Detail**: Model cooldowns are tracked via `CooldownRegistry`, which stores reset timestamps in an internal in-memory map (`private until = new Map<string, number>()`, `src/quota.ts:79`). There is no disk persistence for cooldown state. Restarting the `agy-bridge` MCP server completely clears active cooldown records, causing the bridge to immediately re-attempt calls against models that may still be rate-limited upstream.
 
 ### 6.4 Ephemeral Worktrees in OS Temporary Directory
+
 - **Code Trace**: `src/team/runtime.ts:255-264`, `src/team/runtime.ts:291-303`, `src/team/runtime.ts:1265-1292`.
 - **Technical Detail**: Git strictly refuses to create nested worktrees inside an existing working tree (`git worktree add` error). Therefore, `resolveMemberWorktree` provisions worktrees in `os.tmpdir()/agy-bridge-team-<teamRunId>-<member>` using canonical realpaths (`src/team/runtime.ts:259-263`). Because these reside in the OS temp directory, teams are strictly session-scoped. Host reboots or automated OS tmp cleanup sweeps will wipe worktree directories, causing subsequent wake attempts on pre-existing team runs to fail with filesystem errors.
 
 ### 6.5 No tmux Visualization or In-Process Backend
+
 - **Code Trace**: `src/team/spec.ts:33, 59, 72, 140-146`, `src/team/handlers.ts:100-111`.
 - **Technical Detail**: Native OMO supports tmux pane visualization (`tmux_visualization: true`) where each agent runs in an interactive TUI pane, as well as an in-process execution backend. `agy-bridge` supports **only** the `cli` subprocess backend (`src/team/spec.ts:33, 59, 72`). Any team specification or tool argument declaring `backendType: "tmux"` or `backendType: "in-process"` is intercepted and rejected with error code `UNSUPPORTED_BACKEND_TYPE` (`src/team/spec.ts:140-146`, `src/team/handlers.ts:100-111`).
 
 ### 6.6 Soft Limit Enforcement
+
 - **Code Trace**: `src/team/runtime.ts:1175-1212`, `src/team/runtime.ts:1247-1264`.
 - **Technical Detail**: OMO team specifications declare bounds such as `max_wall_clock_minutes`, `max_member_turns`, and `max_messages_per_run`. In `agy-bridge`, while these metrics are tracked in state, enforcement in the wake loop is soft: members reaching completion conditions are bypassed by the scheduler (`src/team/runtime.ts:1176-1182`). Active subprocesses are never forcibly killed mid-turn for exceeding turn limits; hard process termination occurs only upon explicit `team_delete` (`src/team/runtime.ts:1247-1253`) or when exceeding `teamMemberTimeoutSec` (`src/team/runtime.ts:1014`).
 
 ### 6.7 1 CWD = 1 Session Mapping Constraint
+
 - **Code Trace**: `src/runner.ts:69-83`, `src/team/runtime.ts:255-264`, `src/team/runtime.ts:1020, 1092-1099`.
 - **Technical Detail**: Antigravity CLI caches its conversation history in `~/.gemini/antigravity-cli/cache/last_conversations.json`, which is keyed strictly by the absolute path of the working directory (`src/runner.ts:69-75`). If parallel team members shared a single working directory, their session IDs would overwrite each other on every turn. Spawning separate git worktrees per member is a mandatory architectural constraint to provide isolated directory paths for session persistence (`src/team/runtime.ts:1020, 1092-1099`).
 
 ### 6.8 No Member-Invoked Tools (Bridge Orchestrator Proxy)
+
 - **Code Trace**: `src/team/runtime.ts:569-584`, `src/team/runtime.ts:1037-1048`, `src/team/runtime.ts:1101-1114`.
 - **Technical Detail**: Members run as detached `agy --print` CLI subprocesses without an active MCP connection. They cannot invoke `team_task_update`, `team_send_message`, or other MCP tools. Instead, the bridge orchestrator executes the protocol on their behalf: injecting assigned tasks and inbox messages into wake prompts (`src/team/runtime.ts:569-584`), and harvesting the final output text to record in transcripts (`src/team/runtime.ts:1101-1114`). Members operate autonomously by reading their prompt context and producing comprehensive final textual reports.

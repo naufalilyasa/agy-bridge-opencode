@@ -7,11 +7,7 @@ import { createToolHandler, createServer, makeDefaultRunWake } from "../src/serv
 import { ModelRegistry } from "../src/models.js";
 import { TOOLS, OMO_ROLES } from "../src/tools.js";
 import { CooldownRegistry } from "../src/quota.js";
-import {
-  TeamRuntime,
-  type TeamRuntimeConfig,
-  type TeamRunMember,
-} from "../src/team/runtime.js";
+import { TeamRuntime, type TeamRuntimeConfig, type TeamRunMember } from "../src/team/runtime.js";
 import { TEAM_HANDLERS } from "../src/team/handlers.js";
 import { drainActiveTeams, runtime as singletonRuntime } from "../src/index.js";
 import type { ChildHandle, RunnerDeps } from "../src/runner.js";
@@ -269,9 +265,14 @@ describe("Production resolveModelChain wiring", () => {
       };
 
       const server = createServer(undefined, customCfg);
-      const registeredTools = (server as unknown as {
-        _registeredTools: Record<string, { handler: (args: Record<string, unknown>) => Promise<unknown> }>;
-      })._registeredTools;
+      const registeredTools = (
+        server as unknown as {
+          _registeredTools: Record<
+            string,
+            { handler: (args: Record<string, unknown>) => Promise<unknown> }
+          >;
+        }
+      )._registeredTools;
       expect(registeredTools.team_list).toBeDefined();
 
       await registeredTools.team_list.handler({ cwd: "/tmp/non-existent-proj" });
@@ -284,10 +285,15 @@ describe("Production resolveModelChain wiring", () => {
       expect(resolver({ resolvedRole: "quick" } as TeamRunMember)).toEqual(["gemini-override"]);
 
       // 2. cfg.roleModels for custom role
-      expect(resolver({ resolvedRole: "custom-role" } as TeamRunMember)).toEqual(["model-custom-1", "model-custom-2"]);
+      expect(resolver({ resolvedRole: "custom-role" } as TeamRunMember)).toEqual([
+        "model-custom-1",
+        "model-custom-2",
+      ]);
 
       // 3. Fallback to OMO_ROLES.chain when not in cfg.roleModels
-      expect(resolver({ resolvedRole: "git-master" } as TeamRunMember)).toEqual(OMO_ROLES["git-master"].chain);
+      expect(resolver({ resolvedRole: "git-master" } as TeamRunMember)).toEqual(
+        OMO_ROLES["git-master"].chain,
+      );
 
       // 4. Fallback to [member.resolvedRole] when unknown role
       expect(resolver({ resolvedRole: "unknown-role" } as TeamRunMember)).toEqual(["unknown-role"]);
@@ -330,8 +336,12 @@ describe("Production resolveModelChain wiring", () => {
       const resolver = capturedRuntime!.deps.resolveModelChain!;
 
       expect(resolver({ resolvedRole: "executor" } as TeamRunMember)).toEqual(["model-exec-1"]);
-      expect(resolver({ resolvedRole: "tester" } as TeamRunMember)).toEqual(OMO_ROLES["tester"].chain);
-      expect(resolver({ resolvedRole: "mystery-agent" } as TeamRunMember)).toEqual(["mystery-agent"]);
+      expect(resolver({ resolvedRole: "tester" } as TeamRunMember)).toEqual(
+        OMO_ROLES["tester"].chain,
+      );
+      expect(resolver({ resolvedRole: "mystery-agent" } as TeamRunMember)).toEqual([
+        "mystery-agent",
+      ]);
     } finally {
       TEAM_HANDLERS.team_list = origHandler;
     }
@@ -341,7 +351,9 @@ describe("Production resolveModelChain wiring", () => {
     expect(singletonRuntime.deps.resolveModelChain).toBeDefined();
     const resolver = singletonRuntime.deps.resolveModelChain!;
 
-    const cfgRoleModels = singletonRuntime.deps.cfg?.roleModels as Record<string, string[]> | undefined;
+    const cfgRoleModels = singletonRuntime.deps.cfg?.roleModels as
+      | Record<string, string[]>
+      | undefined;
     expect(resolver({ resolvedRole: "quick" } as TeamRunMember)).toEqual(
       cfgRoleModels?.["quick"] ?? OMO_ROLES["quick"].chain,
     );
@@ -405,9 +417,14 @@ describe("Production runWake wiring", () => {
     try {
       const f = fakeDeps();
       const server = createServer(undefined, baseCfg, f.deps);
-      const registeredTools = (server as unknown as {
-        _registeredTools: Record<string, { handler: (args: Record<string, unknown>) => Promise<unknown> }>;
-      })._registeredTools;
+      const registeredTools = (
+        server as unknown as {
+          _registeredTools: Record<
+            string,
+            { handler: (args: Record<string, unknown>) => Promise<unknown> }
+          >;
+        }
+      )._registeredTools;
 
       await registeredTools.team_list.handler({ cwd: "/tmp/non-existent-proj" });
 
@@ -481,4 +498,3 @@ describe("Production runWake wiring", () => {
     expect(typeof singletonRuntime.deps.runWake).toBe("function");
   });
 });
-

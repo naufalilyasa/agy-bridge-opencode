@@ -122,11 +122,19 @@ describe("TEAM TOOLS (kind: 'team')", () => {
     const reqTool = teamTools.find((t) => t.name === "team_shutdown_request")!;
     const appTool = teamTools.find((t) => t.name === "team_approve_shutdown")!;
 
-    expect(z.object(reqTool.schema).safeParse({ teamRunId: "t1", targetMemberName: "m1" }).success).toBe(true);
-    expect(z.object(reqTool.schema).safeParse({ team_id: "t1", memberName: "m1" }).success).toBe(true);
+    expect(
+      z.object(reqTool.schema).safeParse({ teamRunId: "t1", targetMemberName: "m1" }).success,
+    ).toBe(true);
+    expect(z.object(reqTool.schema).safeParse({ team_id: "t1", memberName: "m1" }).success).toBe(
+      true,
+    );
 
-    expect(z.object(appTool.schema).safeParse({ teamRunId: "t1", targetMemberName: "m1" }).success).toBe(true);
-    expect(z.object(appTool.schema).safeParse({ team_id: "t1", memberName: "m1" }).success).toBe(true);
+    expect(
+      z.object(appTool.schema).safeParse({ teamRunId: "t1", targetMemberName: "m1" }).success,
+    ).toBe(true);
+    expect(z.object(appTool.schema).safeParse({ team_id: "t1", memberName: "m1" }).success).toBe(
+      true,
+    );
   });
 
   it("validates team_reject_shutdown requires reason", () => {
@@ -180,8 +188,12 @@ describe("TEAM TOOLS (kind: 'team')", () => {
     const getTool = teamTools.find((t) => t.name === "team_task_get")!;
     const updateTool = teamTools.find((t) => t.name === "team_task_update")!;
 
-    expect(z.object(listTool.schema).safeParse({ teamRunId: "t1", status: "pending" }).success).toBe(true);
-    expect(z.object(getTool.schema).safeParse({ teamRunId: "t1", taskId: "task-1" }).success).toBe(true);
+    expect(
+      z.object(listTool.schema).safeParse({ teamRunId: "t1", status: "pending" }).success,
+    ).toBe(true);
+    expect(z.object(getTool.schema).safeParse({ teamRunId: "t1", taskId: "task-1" }).success).toBe(
+      true,
+    );
     expect(
       z.object(updateTool.schema).safeParse({
         teamRunId: "t1",

@@ -87,13 +87,9 @@ export const TeamSpecSchema = z
     const rawMembers = spec.members;
     const normalizedMembers = rawMembers.map((m) => normalizeMember(m));
 
-    const leadAgentId =
-      spec.leadAgentId ?? (normalizedMembers[0] ? normalizedMembers[0].name : "");
+    const leadAgentId = spec.leadAgentId ?? (normalizedMembers[0] ? normalizedMembers[0].name : "");
 
-    if (
-      leadAgentId &&
-      !normalizedMembers.some((member) => member.name === leadAgentId)
-    ) {
+    if (leadAgentId && !normalizedMembers.some((member) => member.name === leadAgentId)) {
       throw new TeamError(
         `leadAgentId '${leadAgentId}' must match exactly one member name`,
         "leadAgentId",
@@ -110,10 +106,8 @@ export const TeamSpecSchema = z
     };
     if (spec.description !== undefined) result.description = spec.description;
     if (spec.createdAt !== undefined) result.createdAt = spec.createdAt;
-    if (spec.teamAllowedPaths !== undefined)
-      result.teamAllowedPaths = spec.teamAllowedPaths;
-    if (spec.sessionPermission !== undefined)
-      result.sessionPermission = spec.sessionPermission;
+    if (spec.teamAllowedPaths !== undefined) result.teamAllowedPaths = spec.teamAllowedPaths;
+    if (spec.sessionPermission !== undefined) result.sessionPermission = spec.sessionPermission;
 
     return result;
   });
@@ -312,14 +306,9 @@ export function validateTeamSpec(raw: unknown): TeamSpec {
   }
 
   const leadAgentId =
-    typeof input.leadAgentId === "string"
-      ? input.leadAgentId
-      : (normalizedMembers[0]?.name ?? "");
+    typeof input.leadAgentId === "string" ? input.leadAgentId : (normalizedMembers[0]?.name ?? "");
 
-  if (
-    leadAgentId &&
-    !normalizedMembers.some((member) => member.name === leadAgentId)
-  ) {
+  if (leadAgentId && !normalizedMembers.some((member) => member.name === leadAgentId)) {
     throw new TeamError(
       `Team '${input.name}' leadAgentId '${leadAgentId}' must match exactly one member.name.`,
       "leadAgentId",
@@ -351,10 +340,7 @@ export function validateTeamSpec(raw: unknown): TeamSpec {
   return spec;
 }
 
-export async function loadNamedTeam(
-  projectRoot: string,
-  name: string,
-): Promise<TeamSpec | null> {
+export async function loadNamedTeam(projectRoot: string, name: string): Promise<TeamSpec | null> {
   const configPath = path.join(projectRoot, ".omo", "teams", name, "config.json");
   let raw: unknown;
   try {
@@ -372,18 +358,13 @@ export async function loadNamedTeam(
   return validateTeamSpec(raw);
 }
 
-export async function saveNamedTeam(
-  projectRoot: string,
-  spec: unknown,
-): Promise<void> {
+export async function saveNamedTeam(projectRoot: string, spec: unknown): Promise<void> {
   const validated = validateTeamSpec(spec);
   const configPath = path.join(projectRoot, ".omo", "teams", validated.name, "config.json");
   await atomicWriteJson(configPath, validated);
 }
 
-export async function listNamedTeams(
-  projectRoot: string,
-): Promise<TeamSpec[]> {
+export async function listNamedTeams(projectRoot: string): Promise<TeamSpec[]> {
   const teamsDir = path.join(projectRoot, ".omo", "teams");
   let entries: Dirent[] = [];
   try {
@@ -408,4 +389,3 @@ export async function listNamedTeams(
   specs.sort((a, b) => a.name.localeCompare(b.name));
   return specs;
 }
-

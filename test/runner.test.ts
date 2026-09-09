@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   buildArgs,
   truncate,
+  logTail,
+  IdleStallError,
   runAgy,
   execWithClosedStdin,
   type ChildHandle,
@@ -133,6 +135,23 @@ describe("truncate", () => {
   });
 });
 
+describe("logTail", () => {
+  it("returns notice on empty or undefined log", () => {
+    expect(logTail("")).toBe("(log file empty — agy produced no output before stalling)");
+  });
+
+  it("returns short log content verbatim", () => {
+    expect(logTail("line 1\nline 2")).toBe("line 1\nline 2");
+  });
+
+  it("trims log exceeding maxChars and prepends trim notice", () => {
+    const longLog = "prefix-" + "a".repeat(3000);
+    const result = logTail(longLog, 100);
+    expect(result.startsWith("...[earlier log trimmed]...\n")).toBe(true);
+    expect(result.length).toBe(100 + "...[earlier log trimmed]...\n".length);
+  });
+});
+
 describe("execWithClosedStdin", () => {
   it("closes child stdin so stdin-reading commands exit instead of hanging", async () => {
     const r = await execWithClosedStdin("cat", [], {
@@ -236,5 +255,23 @@ describe("runAgy", () => {
     await expect(runAgy({ prompt: "q", cwd: "/repo" }, cfg, f.deps)).rejects.toThrow(
       /auth expired/,
     );
+  });
+
+  it("kills child and throws IdleStallError when log has no activity past idleTimeoutSec", async () => {
+    const f = fakeDeps({ neverExit: true, log: "initial log line\n" });
+    const stallCfg = { ...cfg, idleTimeoutSec: 0.02 };
+    const err = (await runAgy(
+      { prompt: "q", cwd: "/repo", model: "Gemini 3.7 Flash" },
+      stallCfg,
+      f.deps,
+    ).catch((e) => e)) as IdleStallError;
+
+    expect(err).toBeInstanceOf(IdleStallError);
+    expect(err.name).toBe("IdleStallError");
+    expect(err.model).toBe("Gemini 3.7 Flash");
+    expect(err.idleSeconds).toBe(0.02);
+    expect(err.logTail).toContain("initial log line");
+    expect(err.logPath).toBe("/tmp/agy-bridge-test.log");
+    expect(f.kills).toContain("SIGTERM");
   });
 });
