@@ -5,6 +5,7 @@ import { TeamRuntime, type TeamRuntimeConfig, type TeamRunMember } from "./team/
 import { OMO_ROLES } from "./tools.js";
 import { createServer, makeDefaultRunWake, adaptCooldowns } from "./server.js";
 import { CooldownRegistry } from "./quota.js";
+import { killAllActiveRuns } from "./runner.js";
 
 const cfg = loadConfig();
 const cooldowns = new CooldownRegistry();
@@ -72,6 +73,10 @@ export async function drainAndExit(code = 0, rt: TeamRuntime = runtime): Promise
 
   try {
     await drainActiveTeams(rt);
+  } catch {}
+
+  try {
+    killAllActiveRuns();
   } catch {}
 
   process.exit(code);

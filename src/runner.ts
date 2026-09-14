@@ -92,6 +92,16 @@ export const execWithClosedStdin: ExecFn = (file, args, options) => {
 const MAX_STDOUT_CHARS = 64 * 1024 * 1024;
 const MAX_STDERR_CHARS = 1024 * 1024;
 
+const activeRuns = new Set<ChildHandle>();
+
+export function killAllActiveRuns(): void {
+  for (const c of activeRuns) {
+    try {
+      c.kill("SIGTERM");
+    } catch {}
+  }
+}
+
 function spawnDetached(file: string, args: string[], cwd: string): ChildHandle {
   const child = spawn(file, args, { cwd, detached: true });
   child.stdin?.end();
@@ -267,6 +277,7 @@ export async function runAgy(
 
   const stdout = await new Promise<string>((resolve, reject) => {
     const child = deps.spawnChild(cfg.agyPath, buildArgs(req, cfg, logPath), req.cwd);
+    activeRuns.add(child);
 
     let settled = false;
     let polling = false;
@@ -282,6 +293,7 @@ export async function runAgy(
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
+      activeRuns.delete(child);
       clearInterval(poller);
       for (const t of timers) clearTimeout(t);
       req.signal?.removeEventListener("abort", onAbort);
