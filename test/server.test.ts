@@ -602,4 +602,45 @@ describe("createToolHandler", () => {
     expect(res).toBeDefined();
     expect(res.isError).toBeUndefined();
   });
+
+  describe("role routing and validation", () => {
+    it("rejects unknown explicitly-provided delegate role with error listing canonical roles", async () => {
+      const f = fakeDeps();
+      const handler = handlerFor("delegate", f);
+      const res = await handler({ task: "do something", role: "totally-bogus" });
+      expect(res.isError).toBe(true);
+      const text = (res.content[0] as { text: string }).text;
+      expect(text).toContain("Unknown delegate role 'totally-bogus' (resolved: 'totally-bogus'). Valid canonical roles: ");
+      expect(text).toContain("git-master");
+      expect(text).toContain("oracle");
+    });
+
+    it("resolves alias roles 'qa' and 'git_master' to canonical tester and git-master model chains", async () => {
+      const f = fakeDeps();
+      const handler = handlerFor("delegate", f);
+
+      await handler({ task: "run tests", role: "qa" });
+      expect(f.runs).toHaveLength(1);
+      const testerChain = OMO_ROLES["tester"].chain!;
+      expect(f.modelOf(f.runs[0])).toBe(testerChain[0]);
+
+      await handler({ task: "manage git", role: "git_master" });
+      expect(f.runs).toHaveLength(2);
+      const gitMasterChain = OMO_ROLES["git-master"].chain!;
+      expect(f.modelOf(f.runs[1])).toBe(gitMasterChain[0]);
+    });
+
+    it("allows custom role present only in cfg.roleModels without throwing", async () => {
+      const f = fakeDeps();
+      const customChain = ["gemini-3.7-flash-high"];
+      const handler = handlerFor("delegate", f, {
+        roleModels: { "custom-agent": customChain },
+      });
+
+      const res = await handler({ task: "custom task", role: "custom-agent" });
+      expect(res.isError).toBeUndefined();
+      expect(f.runs).toHaveLength(1);
+      expect(f.modelOf(f.runs[0])).toBe("gemini-3.7-flash-high");
+    });
+  });
 });

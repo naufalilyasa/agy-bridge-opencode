@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { TOOLS, resolveFiles } from "../src/tools.js";
+import { TOOLS, OMO_ROLES, ROLE_ALIASES, canonicalRoleKey, resolveFiles } from "../src/tools.js";
 
 describe("TOOLS", () => {
   it("defines the eight standard tools", () => {
@@ -500,5 +500,83 @@ describe("prompt templates", () => {
     );
     expect(p).toContain("Continue fixing test cases");
     expect(p).toContain("3 tests failed with exit code 1");
+  });
+});
+
+describe("OMO_ROLES and role routing rubric", () => {
+  it("contains exactly the 18 canonical roles with whenToUse and whenNotToUse", () => {
+    const expectedRoles = [
+      "git-master",
+      "oracle",
+      "librarian",
+      "explore",
+      "momus",
+      "metis",
+      "multimodal-looker",
+      "ultrabrain",
+      "deep",
+      "visual-engineering",
+      "artistry",
+      "writing",
+      "quick",
+      "tester",
+      "reviewer",
+      "security",
+      "devops",
+      "product",
+    ].sort();
+
+    expect(Object.keys(OMO_ROLES).sort()).toEqual(expectedRoles);
+
+    for (const [key, def] of Object.entries(OMO_ROLES)) {
+      expect(def.whenToUse).toBeTruthy();
+      expect(def.whenNotToUse).toBeTruthy();
+      expect(typeof def.whenToUse).toBe("string");
+      expect(typeof def.whenNotToUse).toBe("string");
+    }
+  });
+
+  it("canonicalRoleKey trims, lowercases, replaces underscores, and resolves aliases", () => {
+    expect(canonicalRoleKey("qa")).toBe("tester");
+    expect(canonicalRoleKey("git_master")).toBe("git-master");
+    expect(canonicalRoleKey("GIT")).toBe("git-master");
+    expect(canonicalRoleKey("looker")).toBe("multimodal-looker");
+    expect(canonicalRoleKey("code-reviewer")).toBe("reviewer");
+    expect(canonicalRoleKey("security-auditor")).toBe("security");
+    expect(canonicalRoleKey("sisyphus")).toBe("deep");
+    expect(canonicalRoleKey("atlas")).toBe("ultrabrain");
+    expect(canonicalRoleKey("sisyphus-junior")).toBe("quick");
+    expect(canonicalRoleKey("  Deep  ")).toBe("deep");
+    expect(canonicalRoleKey("custom_role")).toBe("custom-role");
+  });
+
+  it("delegate tool role schema describe contains NOT: and distinct whenToUse for oracle, reviewer, momus", () => {
+    const delegateTool = TOOLS.find((t) => t.name === "delegate")!;
+    const roleSchema = delegateTool.schema.role as z.ZodString;
+    const description = roleSchema.description!;
+
+    expect(description).toContain("NOT:");
+    expect(description).toContain("• oracle: Architecture soundness and cross-layer root-cause debugging (read-only). NOT: Line-by-line diff review (use reviewer); plan gate (use momus); edits.");
+    expect(description).toContain("• reviewer: Adversarial line-by-line code/diff review. NOT: Architecture (use oracle); plan feasibility (use momus).");
+    expect(description).toContain("• momus: Plan/diff feasibility gate before work — APPROVE/REJECT. NOT: Hunt all bugs (use reviewer); architecture design (use oracle).");
+  });
+
+  it("delegate tool description lists canonical keys derived from OMO_ROLES", () => {
+    const delegateTool = TOOLS.find((t) => t.name === "delegate")!;
+    for (const key of Object.keys(OMO_ROLES)) {
+      expect(delegateTool.description).toContain(`'${key}'`);
+    }
+  });
+
+  it("delegate buildPrompt resolves alias roles to canonical personas", () => {
+    const delegateTool = TOOLS.find((t) => t.name === "delegate")!;
+    const pQa = delegateTool.buildPrompt({ role: "qa", task: "Run test suite" }, "/repo");
+    expect(pQa).toContain("[DELEGATED AGENT ROLE: QA_TEST_ENGINEER]");
+
+    const pGit = delegateTool.buildPrompt({ role: "git_master", task: "Rebase branch" }, "/repo");
+    expect(pGit).toContain("[DELEGATED AGENT ROLE: OMO_GIT_MASTER]");
+
+    const pSisyphus = delegateTool.buildPrompt({ role: "sisyphus", task: "Implement feature" }, "/repo");
+    expect(pSisyphus).toContain("[DELEGATED AGENT ROLE: OMO_DEEP_ENGINEER]");
   });
 });

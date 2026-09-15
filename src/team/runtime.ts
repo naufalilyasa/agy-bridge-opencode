@@ -6,10 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { QuotaError } from "../quota.js";
+import { canonicalRoleKey } from "../tools.js";
 import {
   validateTeamSpec,
   TeamError,
-  ROLE_ALIASES,
   type TeamSpec,
   type MemberSpec,
 } from "./spec.js";
@@ -618,7 +618,7 @@ export class TeamRuntime {
       const resolvedRole =
         member.kind === "category"
           ? member.category
-          : (ROLE_ALIASES[member.subagent_type] ?? member.subagent_type);
+          : canonicalRoleKey(member.subagent_type);
 
       return {
         name: member.name,

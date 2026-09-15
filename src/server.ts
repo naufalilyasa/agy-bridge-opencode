@@ -13,7 +13,7 @@ import {
   type RunResult,
 } from "./runner.js";
 import { CooldownRegistry, QuotaError } from "./quota.js";
-import { TOOLS, OMO_ROLES, type ToolDef } from "./tools.js";
+import { TOOLS, OMO_ROLES, ROLE_ALIASES, canonicalRoleKey, type ToolDef } from "./tools.js";
 import { TEAM_HANDLERS, type TeamHandlerContext } from "./team/handlers.js";
 import {
   TeamRuntime,
@@ -246,7 +246,7 @@ export function createToolHandler(
         }
       }
 
-      let roleKey = ((args.role as string) || "").toLowerCase().replace(/_/g, "-");
+      let roleKey = canonicalRoleKey((args.role as string) || "");
       if (!roleKey && tool.name === "follow_up") {
         try {
           const roles = JSON.parse((await deps.readRoleFile()) || "{}") as Record<
@@ -254,9 +254,24 @@ export function createToolHandler(
             { role?: string }
           >;
           const entry = roles[path.resolve(cwd)] ?? roles[cwd];
-          if (entry?.role) roleKey = entry.role;
+          if (entry?.role) roleKey = canonicalRoleKey(entry.role);
         } catch {}
       }
+
+      // Reject unknown explicitly-provided roles (cfg.roleModels custom roles still pass)
+      if (
+        roleKey &&
+        (args.role as string) &&
+        !(roleKey in OMO_ROLES) &&
+        !activeCfg.roleModels[roleKey]
+      ) {
+        const canonicalList = Object.keys(OMO_ROLES).sort().join(", ");
+        throw new Error(
+          `Unknown delegate role '${args.role as string}' (resolved: '${roleKey}'). ` +
+            `Valid canonical roles: ${canonicalList}`,
+        );
+      }
+
       const effectiveChain =
         activeCfg.toolModels?.[tool.name] ??
         (roleKey ? activeCfg.roleModels[roleKey] : undefined) ??

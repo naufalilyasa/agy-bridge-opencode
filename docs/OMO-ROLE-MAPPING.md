@@ -2,7 +2,7 @@
 
 > Perbandingan antara **Oh My OpenAgent (OMO)** native agent system dengan **agy-bridge OMO_ROLES**.
 > OMO source: `~/.cache/opencode/packages/oh-my-openagent@4.19.4` (npm package, bukan repo workspace — oh-my-openagent/ di-hapus dari repo agy-bridge karena 1.8GB git.git).
-> agy-bridge source: `src/tools.ts` OMO_ROLES (19 role, 7 alias).
+> agy-bridge source: `src/tools.ts` `OMO_ROLES` — **18 role kanonik** (+ **9 alias** di `ROLE_ALIASES`). Rubrik pemilihan role untuk agen-induk **di-generate otomatis** dari `OMO_ROLES` (sumber tunggal); dokumen ini sengaja tidak menyalin ulang tabelnya untuk mencegah drift.
 
 ---
 
@@ -99,7 +99,7 @@ Mission: ...
 | Aspek                       |                             OMO                             | agy-bridge                                                             |
 | :-------------------------- | :---------------------------------------------------------: | :--------------------------------------------------------------------- |
 | **Model-family adaptation** |  9 prompt variants per model (default/gemini/gpt/kimi/glm)  | 1 prompt untuk semua model (tidak ada adaptasi)                        |
-| **Persona depth**           | Masing-masing agent punya systemPrompt terpisah (di binary) | Semua role pakai mission + focus (1-2 kalimat)                         |
+| **Persona depth**           | Masing-masing agent punya systemPrompt terpisah (di binary) | Semua role pakai mission + focus + `whenToUse`/`whenNotToUse` (rubrik parent auto-generated)                         |
 | **Skill injection**         |      buildSystemContent → gabung dengan prompt_append       | resolveSkillContent() + listAvailableSkills() sebagai section terpisah |
 | **Memory**                  |               Via agentmemory MCP (external)                | Directives di prompt (recall before / save before final)               |
 | **Tool whitelist**          |                   Lewat permission config                   | explicit `required_tools` parameter                                    |
@@ -137,15 +137,16 @@ Mission: ...
 - **Saran**: Ini justru kelebihan agy-bridge — lebih granular. Tapi perlu dipastikan prompt persona-nya cukup dalam.
 - **Keputusan user (poin 3)**: TIDAK dihapus — dipertahankan.
 
-### Gap 5: Prompt persona terlalu pendek
+### Gap 5: Agen-induk salah pilih role — ✅ RESOLVED (routing rubric)
 
-- **Masalah**: Mission agy-bridge cuma 1-2 kalimat. OMO systemPrompt puluhan line.
-- **Saran**: Untuk role penting (oracle, security, tester), perluas mission jadi lebih detail dengan verification criteria spesifik.
-- **Progress**: metis & momus sudah diperdalam ke persona OMO-grade (parity). Oracle/librarian/explore sudah detail dari iterasi sebelumnya. Role lain bisa menyusul.
+- **Masalah lama**: Parent cuma melihat daftar nama role telanjang di schema → `oracle` vs `reviewer` vs `momus`, dan `deep` vs `ultrabrain`, tak terbedakan → sering salah routing. `mission`/`focus` ada tapi hanya di-inject ke prompt sub-agent, tidak pernah dibaca parent.
+- **Solusi**: Tiap `OmoRoleDefinition` kini wajib punya `whenToUse` + `whenNotToUse`. Deskripsi parameter `role` dan description tool `delegate` **dibangun otomatis dari `OMO_ROLES`** saat module load, jadi parent melihat rubrik per-role ("kapan pakai / kapan jangan → pakai X bukan Y") yang tak bisa basi. Sumber tunggal = `src/tools.ts`.
+- **Alias di-hidden**: 6 bentuk (`git`, `git_master`, `looker`, `qa`, `code-reviewer`, `security-auditor`) + 3 nama tim (`sisyphus`→`deep`, `atlas`→`ultrabrain`, `sisyphus-junior`→`quick`) tinggal di `ROLE_ALIASES`, di-resolve lewat `canonicalRoleKey()`, dan **tidak muncul ke parent** (rubrik hanya menampilkan 18 kanonik).
+- **Guard**: `role` eksplisit yang tidak resolve (bukan kanonik/alias/`cfg.roleModels`) kini **melempar error** berisi daftar role valid — tidak lagi diam-diam bikin persona sampah. Role kustom lewat blok `roles` di `agy_bridge.jsonc` tetap lolos (escape hatch).
 
 ### Gap 6: Default role = sisyphus-junior — ✅ DIHAPUS (per instruksi user)
 
-- **Keputusan user**: sisyphus-junior DIHAPUS dari agy-bridge karena agy-bridge difokuskan sebagai sub-agent saja (seperti OMO delegate sub-agent). Role fallback saat `args.role` kosong → inline `OMO_GENERIC_EXECUTOR`. Jumlah role kini **19** (sisyphus-junior & alias junior hilang dari OMO_ROLES, role list, description, schema, omo.jsonc catalog, docs).
+- **Keputusan user**: sisyphus-junior DIHAPUS dari agy-bridge karena agy-bridge difokuskan sebagai sub-agent saja (seperti OMO delegate sub-agent). Role fallback saat `args.role` kosong → inline `OMO_GENERIC_EXECUTOR`. Jumlah role **kanonik** kini **18** (`sisyphus-junior`, `atlas`, `sisyphus` tak lagi jadi role — kini murni alias di `ROLE_ALIASES`; hilang dari OMO_ROLES, role list, description, schema, omo.jsonc catalog, docs).
 
 ---
 
@@ -156,7 +157,7 @@ Mission: ...
 | Jumlah role subagent    | ~8 (oracle, librarian, explore, momus, metis, multimodal-looker, git-master) | 18 (tester, security, devops, writing, product, artistry, reviewer, deep, ultrabrain, visual-engineering, dll) |
 | Jumlah main agent       |                 4 (Sisyphus, Hephaestus, Prometheus, Atlas)                  | 0 (agy-bridge = sub-agent-only; orchestrator di OpenCode/OMO)                                                  |
 | Model-family adaptation |                             9 variants per agent                             | 3 variants (claude/gemini/gpt) via `<Model_Family_Context>` di delegate prompt                                 |
-| Persona depth           |                 Full systemPrompt (puluhan line, di binary)                  | Mission 1-2 kalimat                                                                                            |
+| Persona depth           |                 Full systemPrompt (puluhan line, di binary)                  | Mission + focus + `whenToUse`/`whenNotToUse` (rubrik parent auto-generated)                                                                                            |
 | Category system         |          4 categories (visual-engineering, deep, quick, ultrabrain)          | 6 categories (engineering, architecture, quality, security, research, product)                                 |
 | Prompt construction     |                                   3-layer                                    | 1-layer (semua di buildPrompt)                                                                                 |
 | Skill injection         |                              buildSystemContent                              | resolveSkillContent + listAvailableSkills                                                                      |

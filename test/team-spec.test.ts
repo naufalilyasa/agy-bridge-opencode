@@ -27,13 +27,21 @@ describe("TeamError", () => {
 describe("ROLE_ALIASES", () => {
   it("defines OMO role aliases without mutating OMO_ROLES", () => {
     expect(ROLE_ALIASES).toEqual({
+      git_master: "git-master",
+      git: "git-master",
+      looker: "multimodal-looker",
+      qa: "tester",
+      "code-reviewer": "reviewer",
+      "security-auditor": "security",
       sisyphus: "deep",
-      "sisyphus-junior": "quick",
       atlas: "ultrabrain",
+      "sisyphus-junior": "quick",
     });
     expect("sisyphus" in OMO_ROLES).toBe(false);
     expect("sisyphus-junior" in OMO_ROLES).toBe(false);
     expect("atlas" in OMO_ROLES).toBe(false);
+    expect("git_master" in OMO_ROLES).toBe(false);
+    expect("qa" in OMO_ROLES).toBe(false);
   });
 });
 

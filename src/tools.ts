@@ -92,10 +92,16 @@ export function resolveSkillContent(skillName: string, cwd: string): string | nu
           }
         }
         return raw.trim();
-      } catch {}
+      } catch (err) { if (!isMissingPath(err)) process.stderr.write(`[agy-bridge] warn: failed to read skill '${norm}' from ${p}: ${(err as Error).message}\n`); }
     }
   }
   return null;
+}
+
+// Missing optional skill dirs/files are normal; don't spam stderr — only surface real read errors.
+function isMissingPath(e: unknown): boolean {
+  const c = (e as NodeJS.ErrnoException | undefined)?.code;
+  return c === "ENOENT" || c === "ENOTDIR";
 }
 
 function skillDescription(p: string): string {
@@ -111,7 +117,8 @@ function skillDescription(p: string): string {
           .replace(/^["']|["']$/g, "")
           .slice(0, 120)
       : "";
-  } catch {
+  } catch (err) {
+    if (!isMissingPath(err)) process.stderr.write(`[agy-bridge] warn: failed to read skill description from ${p}: ${(err as Error).message}\n`);
     return "";
   }
 }
@@ -140,7 +147,7 @@ export function listAvailableSkills(
       seen.add("agy-delegation");
       out.push({ name: "agy-delegation", description: skillDescription(agySkillPath) });
     }
-  } catch {}
+  } catch (err) { if (!isMissingPath(err)) process.stderr.write(`[agy-bridge] warn: agy-delegation skill not found at ${agySkillPath}: ${(err as Error).message}\n`); }
 
   const roots = [
     path.join(cwd, ".agents", "skills"),
@@ -155,7 +162,8 @@ export function listAvailableSkills(
     let entries: string[];
     try {
       entries = fs.readdirSync(root);
-    } catch {
+    } catch (err) {
+      if (!isMissingPath(err)) process.stderr.write(`[agy-bridge] warn: cannot list skills in ${root}: ${(err as Error).message}\n`);
       continue;
     }
     for (const entry of entries) {
@@ -208,6 +216,10 @@ export interface OmoRoleDefinition {
   category: "engineering" | "architecture" | "quality" | "security" | "research" | "product";
   mission: string;
   focus: string[];
+  /** When a parent agent should pick this role */
+  whenToUse: string;
+  /** When NOT to pick this role (names the redirect) */
+  whenNotToUse: string;
   /** Default fallback model chain for this role (ordered by preference) */
   chain?: string[];
 }
@@ -225,32 +237,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Clean branch management and conflict resolution",
       "Git history cleanliness and commit integrity",
     ],
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
-  },
-  git_master: {
-    title: "OMO_GIT_MASTER",
-    category: "engineering",
-    mission:
-      "You are the Git Master. You manage git history with surgical precision: atomic commits, conventional commit messages, branch hygiene, merge conflict resolution, and staged diff auditing. You never modify code — only git metadata. Your deliverables are clean commit histories, conflict-free merges, and verified diffs.",
-    focus: [
-      "Conventional commit formatting (feat, fix, refactor, docs, chore, test)",
-      "Atomic commit grouping and staged diff auditing",
-      "Clean branch management and conflict resolution",
-      "Git history cleanliness and commit integrity",
-    ],
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
-  },
-  git: {
-    title: "OMO_GIT_MASTER",
-    category: "engineering",
-    mission:
-      "You are the Git Master. You manage git history with surgical precision: atomic commits, conventional commit messages, branch hygiene, merge conflict resolution, and staged diff auditing. You never modify code — only git metadata. Your deliverables are clean commit histories, conflict-free merges, and verified diffs.",
-    focus: [
-      "Conventional commit formatting (feat, fix, refactor, docs, chore, test)",
-      "Atomic commit grouping and staged diff auditing",
-      "Clean branch management and conflict resolution",
-      "Git history cleanliness and commit integrity",
-    ],
+    whenToUse: "Git commits, branches, rebase, conflicts, history (blame/bisect).",
+    whenNotToUse: "Fixing or refactoring application code.",
     chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   oracle: {
@@ -264,6 +252,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Integration risks and performance characteristics",
       "Ranking findings by severity (Critical / Major / Minor)",
     ],
+    whenToUse: "Architecture soundness and cross-layer root-cause debugging (read-only).",
+    whenNotToUse: "Line-by-line diff review (use reviewer); plan gate (use momus); edits.",
     chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   librarian: {
@@ -277,6 +267,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Version trade-off evaluation (stability, license, maintenance, breaking changes)",
       "Tooling: MCP context7, MCP exa/web search, built-in webfetch",
     ],
+    whenToUse: "Library/version/compatibility trade-off research.",
+    whenNotToUse: "Searching this codebase (use explore).",
     chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   explore: {
@@ -290,6 +282,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "External documentation and API reference lookups",
       "Dependency mapping and caller/callee tracing",
     ],
+    whenToUse: "Locate symbols/files, map directories, git archaeology.",
+    whenNotToUse: "Reading >200-line files (use analyze_files); fixing.",
     chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   momus: {
@@ -302,6 +296,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Internal contradictions and missing QA scenarios",
       "Approval-biased verdict: OKAY or REJECT with ≤3 issues",
     ],
+    whenToUse: "Plan/diff feasibility gate before work — APPROVE/REJECT.",
+    whenNotToUse: "Hunt all bugs (use reviewer); architecture design (use oracle).",
     chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   metis: {
@@ -314,6 +310,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Ambiguity and AI-slop pattern detection",
       "Clarifying questions and planner directives",
     ],
+    whenToUse: "Clarify an ambiguous/underspecified request before planning.",
+    whenNotToUse: "Implementing or reviewing code.",
     chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   "multimodal-looker": {
@@ -326,18 +324,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Visual layout verification and asset descriptor checks",
       "External visual reference lookups",
     ],
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
-  },
-  looker: {
-    title: "OMO_MULTIMODAL_LOOKER",
-    category: "engineering",
-    mission:
-      "You are the Visual and Asset Inspector. You examine screenshots, UI layouts, icon sets, themes, and visual asset logs to validate structure, consistency, and completeness. You compare implementations against visual references and external documentation. You deliver findings with exact asset paths and visual references.",
-    focus: [
-      "UI asset structure and icon/theme validation",
-      "Visual layout verification and asset descriptor checks",
-      "External visual reference lookups",
-    ],
+    whenToUse: "Inspect screenshots/UI assets visually.",
+    whenNotToUse: "Code review; layout implementation.",
     chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   ultrabrain: {
@@ -351,6 +339,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Trade-off evaluation with alternatives considered",
       "Adversarial validation of critical paths",
     ],
+    whenToUse: "Hard logic/architecture ANALYSIS, read-only, clear goal.",
+    whenNotToUse: "Implementation (use deep); visual work.",
     chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   deep: {
@@ -364,6 +354,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Full delivery — no POCs, no simplified versions",
       "Verified changes with file:line citations",
     ],
+    whenToUse: "Research then IMPLEMENT multi-file business/backend logic (3+ files).",
+    whenNotToUse: "Single-file or UI work (visual-engineering); read-only analysis (ultrabrain).",
     chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   "visual-engineering": {
@@ -376,6 +368,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "UI files: .vue/.css/.html/.tsx/Compose components, layout, animation",
       "Zero hardcoded values: colors, spacing, radii all from tokens",
     ],
+    whenToUse: "ANY UI: styling, layout, animation, UX (.tsx/.css/Compose).",
+    whenNotToUse: "Non-visual logic; radical art direction (use artistry).",
     chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   artistry: {
@@ -388,6 +382,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Bold options explored before committing; pattern-breaking with coherence",
       "Distinctive typography, motion, and visual identity",
     ],
+    whenToUse: "Novel/unconventional concepting and art direction.",
+    whenNotToUse: "Routine design-system UI (use visual-engineering).",
     chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   writing: {
@@ -400,6 +396,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Evidence and audit documentation",
       "API documentation with accurate examples",
     ],
+    whenToUse: "Human-facing docs/ADR/PRD prose.",
+    whenNotToUse: "Code or inline code comments.",
     chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   quick: {
@@ -412,6 +410,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Purely mechanical multi-file edits (delete blocks, rename, readonly toggle)",
       "Fast verification: compile/lint/smallest relevant check",
     ],
+    whenToUse: "1-2 file or purely mechanical multi-file edits.",
+    whenNotToUse: "Logic or architecture change (use deep).",
     chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
 
@@ -426,18 +426,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Edge case and negative scenario validation",
       "Mock/fake repository implementations for tests",
     ],
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
-  },
-  qa: {
-    title: "QA_TEST_ENGINEER",
-    category: "quality",
-    mission:
-      "Author comprehensive unit, integration, and UI test suites. Cover happy paths, edge cases, error states, and negative scenarios. Create deterministic test doubles (mocks, fakes, stubs) and ensure test isolation. Deliver complete, runnable tests that validate the system's behavior under all conditions.",
-    focus: [
-      "Unit testing (JUnit, Kotest, Compose UI tests)",
-      "Edge case and negative scenario validation",
-      "Mock/fake repository implementations for tests",
-    ],
+    whenToUse: "Write and run unit/integration tests; QA verification.",
+    whenNotToUse: "Implementing features; architecture.",
     chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   reviewer: {
@@ -450,18 +440,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Clean Architecture and quarantine compliance",
       "Actionable recommendations ranked by severity",
     ],
-    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
-  },
-  "code-reviewer": {
-    title: "SENIOR_CODE_REVIEWER",
-    category: "quality",
-    mission:
-      "Perform thorough adversarial code review on diffs, plans, and proposed changes. Identify subtle bugs, race conditions, memory leaks, performance traps, and architectural violations. Rank every finding by severity with actionable recommendations and exact file:line references. No padding, no praise — only signal.",
-    focus: [
-      "Adversarial critique and defect detection",
-      "Clean Architecture and quarantine compliance",
-      "Actionable recommendations ranked by severity",
-    ],
+    whenToUse: "Adversarial line-by-line code/diff review.",
+    whenNotToUse: "Architecture (use oracle); plan feasibility (use momus).",
     chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   security: {
@@ -474,18 +454,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Injection flaws and input sanitization",
       "SDK permission checks and sandbox boundary validation",
     ],
-    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
-  },
-  "security-auditor": {
-    title: "SECURITY_AUDITOR",
-    category: "security",
-    mission:
-      "Audit codebases and configurations for vulnerabilities: injection vectors, credential leaks, insecure SDK usage, privilege escalation, and sandbox boundary violations. Prove exploitability before reporting a finding. Deliver a ranked risk assessment with specific remediation steps.",
-    focus: [
-      "Secret detection and credential leaks",
-      "Injection flaws and input sanitization",
-      "SDK permission checks and sandbox boundary validation",
-    ],
+    whenToUse: "Vuln/threat/secret audit on trust boundaries.",
+    whenNotToUse: "General code review (use reviewer).",
     chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   devops: {
@@ -498,6 +468,8 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "CI/CD workflows and automated quality checks",
       "Environment isolation and dependency management",
     ],
+    whenToUse: "Build/Gradle/CI-CD/container/deploy pipelines.",
+    whenNotToUse: "Application business logic.",
     chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   product: {
@@ -510,9 +482,35 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
       "Feature decomposition and milestone planning",
       "Clear success metrics and definition of done",
     ],
+    whenToUse: "PRD/user-stories/acceptance criteria (define WHAT).",
+    whenNotToUse: "Building it (use deep); UI implementation.",
     chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
 };
+
+/**
+ * Alias map: maps legacy/shorthand/team-internal names to canonical OMO_ROLES keys.
+ */
+export const ROLE_ALIASES: Readonly<Record<string, string>> = {
+  git_master: "git-master",
+  git: "git-master",
+  looker: "multimodal-looker",
+  qa: "tester",
+  "code-reviewer": "reviewer",
+  "security-auditor": "security",
+  sisyphus: "deep",
+  atlas: "ultrabrain",
+  "sisyphus-junior": "quick",
+};
+
+/**
+ * Normalize a raw role string to its canonical OMO_ROLES key.
+ * Lowercases, trims, replaces underscores with hyphens, then resolves aliases.
+ */
+export function canonicalRoleKey(raw: string): string {
+  const k = (raw || "").toLowerCase().trim().replace(/_/g, "-");
+  return ROLE_ALIASES[k] ?? k;
+}
 
 export const TOOLS: ToolDef[] = [
   {
@@ -729,7 +727,7 @@ export const TOOLS: ToolDef[] = [
     name: "delegate",
     description:
       "Autonomous delegation to the Antigravity CLI with Oh My OpenAgent (OMO) sub-agent role capabilities. " +
-      "Supports specialized subagents: 'git-master', 'oracle', 'librarian', 'explore', 'momus', 'metis', 'multimodal-looker', 'ultrabrain', 'deep', 'visual-engineering', 'artistry', 'writing', 'quick', 'tester', 'reviewer', 'security', 'devops', 'product'. " +
+      `Supports specialized subagents: ${Object.keys(OMO_ROLES).map((k) => `'${k}'`).join(", ")}. ` +
       "agy has full tool access (shell, file edits, web) in the given cwd.",
     schema: {
       prompt: z
@@ -744,7 +742,10 @@ export const TOOLS: ToolDef[] = [
         .string()
         .optional()
         .describe(
-          "OMO subagent role: 'git-master', 'oracle', 'librarian', 'explore', 'momus', 'metis', 'multimodal-looker', 'ultrabrain', 'deep', 'visual-engineering', 'artistry', 'writing', 'quick', 'tester', 'reviewer', 'security', 'devops', 'product'.",
+          "OMO subagent role. Routing rubric:\n" +
+            Object.entries(OMO_ROLES)
+              .map(([k, v]) => `• ${k}: ${v.whenToUse} NOT: ${v.whenNotToUse}`)
+              .join("\n"),
         ),
       expected_outcome: z
         .string()
@@ -827,7 +828,7 @@ export const TOOLS: ToolDef[] = [
         throw new Error("delegate requires either `task` or `prompt`.");
       }
 
-      const roleKey = ((args.role as string) || "").toLowerCase().trim();
+      const roleKey = canonicalRoleKey((args.role as string) || "");
       const roleDef =
         OMO_ROLES[roleKey] ||
         (args.role
@@ -836,6 +837,8 @@ export const TOOLS: ToolDef[] = [
               category: "engineering" as const,
               mission: `Execute specialized tasks as ${args.role}. Deliver complete, verified, and high-quality results.`,
               focus: ["High-quality implementation", "Verification with builds/tests"],
+              whenToUse: "",
+              whenNotToUse: "",
             }
           : {
               title: "OMO_GENERIC_EXECUTOR",
@@ -843,6 +846,8 @@ export const TOOLS: ToolDef[] = [
               mission:
                 "Execute the requested work directly and completely. Deliver verified, high-quality results with exact file:line citations.",
               focus: ["Direct execution", "Verification with builds/tests"],
+              whenToUse: "",
+              whenNotToUse: "",
             });
       const roleCategory = roleDef.category;
 

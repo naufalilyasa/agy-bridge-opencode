@@ -2,7 +2,7 @@ import type { Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { OMO_ROLES } from "../tools.js";
+import { OMO_ROLES, ROLE_ALIASES, canonicalRoleKey } from "../tools.js";
 import { atomicWriteJson, readJson } from "./store.js";
 
 export class TeamError extends Error {
@@ -17,11 +17,7 @@ export class TeamError extends Error {
   }
 }
 
-export const ROLE_ALIASES: Readonly<Record<string, string>> = {
-  sisyphus: "deep",
-  "sisyphus-junior": "quick",
-  atlas: "ultrabrain",
-};
+export { ROLE_ALIASES } from "../tools.js";
 
 export const MEMBER_NAME_REGEX = /^[a-z0-9-]+$/;
 export const TEAM_NAME_REGEX = /^[a-z0-9-]+$/;
@@ -198,7 +194,7 @@ function normalizeMember(raw: unknown): MemberSpec {
       );
     }
 
-    const resolved = ROLE_ALIASES[rawType] ?? rawType;
+    const resolved = canonicalRoleKey(rawType);
     if (!(resolved in OMO_ROLES)) {
       const validRoles = Object.keys(OMO_ROLES).sort().join(", ");
       throw new TeamError(
