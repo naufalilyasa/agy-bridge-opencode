@@ -9,6 +9,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as readline from "node:readline";
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   createCliRenderer,
   BoxRenderable,
@@ -20,11 +21,21 @@ import {
   type Renderable,
 } from "@opentui/core";
 
+const esmRequire = createRequire(import.meta.url);
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BRAIN_DIR = path.join(os.homedir(), ".gemini", "antigravity-cli", "brain");
+const CONVERSATION_DB_PATH = path.join(
+  os.homedir(),
+  ".gemini",
+  "antigravity-cli",
+  "conversation_summaries.db",
+);
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const BOLD_ATTR = createTextAttributes({ bold: true });
+
+export const DEFAULT_STALE_MS = 60_000;
 
 // Perf guards: bound per-tick file reads and per-step rendering so a giant
 // transcript / giant single step can't allocate huge buffers or create tens of
@@ -43,15 +54,372 @@ function capText(s: unknown, max = MAX_STEP_CHARS): string {
   return str.slice(0, max) + `\n… [truncated ${(str.length - max).toLocaleString()} chars]`;
 }
 
+// ─── Session State & Database ─────────────────────────────────────────────────
+
+export type SessionState = "running" | "idle" | "stuck" | "killed" | "unknown";
+
+export interface ConversationSummaryRow {
+  conversation_id: string;
+  title?: string;
+  preview?: string;
+  step_count?: number;
+  last_modified_time?: string | number | Date;
+  last_user_input_time?: string | number | Date;
+  status?: string;
+  not_fully_idle?: number | boolean;
+  killed?: number | boolean;
+  agent_name?: string;
+  parent_conversation_id?: string;
+  nesting_depth?: number;
+}
+
+export function parseSqliteDate(val: unknown): number {
+  if (!val) return 0;
+  if (typeof val === "number") return val;
+  if (val instanceof Date) return val.getTime();
+  if (typeof val === "string") {
+    let s = val.trim();
+    if (!s || s.startsWith("0001-01-01")) return 0;
+    if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(s)) {
+      s = s.replace(" ", "T");
+    }
+    if (!s.endsWith("Z") && !/[+-]\d{2}(?::?\d{2})?$/.test(s)) {
+      s = s + "Z";
+    }
+    const t = Date.parse(s);
+    return isNaN(t) ? 0 : t;
+  }
+  return 0;
+}
+
+export function deriveSessionState(
+  row: ConversationSummaryRow | null | undefined,
+  opts?: { now?: number; staleMs?: number; liveMs?: number },
+): SessionState {
+  if (!row) return "unknown";
+  if (row.killed) return "killed";
+
+  const status = row.status ?? "";
+  const notFullyIdle = Boolean(row.not_fully_idle);
+  const now = opts?.now ?? Date.now();
+  const staleMs = opts?.staleMs ?? DEFAULT_STALE_MS;
+  const liveMs = opts?.liveMs;
+  const isTranscriptFresh = liveMs != null && liveMs < staleMs;
+
+  const isBusy =
+    notFullyIdle ||
+    (status !== "" && status !== "CASCADE_RUN_STATUS_IDLE") ||
+    isTranscriptFresh;
+
+  if (isBusy) {
+    const modTime = parseSqliteDate(row.last_modified_time);
+    const isDbFresh = modTime > 0 && (now - modTime) < staleMs;
+    if (isDbFresh || isTranscriptFresh || modTime <= 0) {
+      return "running";
+    }
+    return "stuck";
+  }
+
+  if (status === "CASCADE_RUN_STATUS_IDLE" && !notFullyIdle) {
+    return "idle";
+  }
+
+  return "unknown";
+}
+
+let dbOpenWarned = false;
+
+export class SummaryDbReader {
+  private db: any = null;
+  private isClosed = false;
+
+  private init() {
+    if (this.db || this.isClosed || !fs.existsSync(CONVERSATION_DB_PATH)) return;
+    try {
+      if (typeof (globalThis as any).Bun !== "undefined") {
+        const { Database } = esmRequire("bun:sqlite");
+        let handle: any;
+        try {
+          handle = new Database(CONVERSATION_DB_PATH, { readonly: true });
+          handle.query("SELECT 1").get();
+        } catch {
+          try {
+            handle?.close();
+          } catch {}
+          handle = new Database(CONVERSATION_DB_PATH);
+        }
+        try {
+          handle.run("PRAGMA busy_timeout = 5000;");
+        } catch {}
+        this.db = { type: "bun", handle };
+      } else {
+        const { DatabaseSync } = esmRequire("node:sqlite");
+        let handle: any;
+        try {
+          handle = new DatabaseSync(CONVERSATION_DB_PATH, { readOnly: true });
+          handle.prepare("SELECT 1").get();
+        } catch {
+          try {
+            handle?.close();
+          } catch {}
+          handle = new DatabaseSync(CONVERSATION_DB_PATH);
+        }
+        try {
+          handle.exec("PRAGMA busy_timeout = 5000;");
+        } catch {}
+        this.db = { type: "node", handle };
+      }
+    } catch (err) {
+      this.db = null;
+      if (!dbOpenWarned) {
+        dbOpenWarned = true;
+        console.error(
+          "[agy-live] Warning: unable to open conversation_summaries.db in readonly mode:",
+          (err as any)?.message || err,
+        );
+      }
+    }
+  }
+
+  getSummary(conversationId: string): ConversationSummaryRow | null {
+    if (!conversationId) return null;
+    this.init();
+    if (!this.db) return null;
+    try {
+      if (this.db.type === "bun") {
+        const query = this.db.handle.query(
+          "SELECT conversation_id, title, preview, step_count, last_modified_time, last_user_input_time, status, not_fully_idle, killed, agent_name, parent_conversation_id, nesting_depth FROM conversation_summaries WHERE conversation_id = ? LIMIT 1",
+        );
+        return (query.get(conversationId) as ConversationSummaryRow) || null;
+      }
+      if (this.db.type === "node") {
+        const stmt = this.db.handle.prepare(
+          "SELECT conversation_id, title, preview, step_count, last_modified_time, last_user_input_time, status, not_fully_idle, killed, agent_name, parent_conversation_id, nesting_depth FROM conversation_summaries WHERE conversation_id = ? LIMIT 1",
+        );
+        return (stmt.get(conversationId) as ConversationSummaryRow) || null;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  getDescendants(parentId: string): ConversationSummaryRow[] {
+    if (!parentId) return [];
+    this.init();
+    if (!this.db) return [];
+    try {
+      const sql = `
+WITH RECURSIVE descendants(conversation_id) AS (
+  SELECT conversation_id FROM conversation_summaries WHERE parent_conversation_id = ?
+  UNION ALL
+  SELECT c.conversation_id FROM conversation_summaries c
+  JOIN descendants d ON c.parent_conversation_id = d.conversation_id
+)
+SELECT c.conversation_id, c.title, c.preview, c.step_count, c.last_modified_time, c.last_user_input_time, c.status, c.not_fully_idle, c.killed, c.agent_name, c.parent_conversation_id, c.nesting_depth
+FROM conversation_summaries c
+JOIN descendants d ON c.conversation_id = d.conversation_id
+WHERE c.conversation_id != ?
+ORDER BY c.last_modified_time DESC
+      `.trim();
+      if (this.db.type === "bun") {
+        const query = this.db.handle.query(sql);
+        return (query.all(parentId, parentId) as ConversationSummaryRow[]) || [];
+      }
+      if (this.db.type === "node") {
+        const stmt = this.db.handle.prepare(sql);
+        return (stmt.all(parentId, parentId) as ConversationSummaryRow[]) || [];
+      }
+    } catch {
+      return [];
+    }
+    return [];
+  }
+
+  getLatest(): ConversationSummaryRow | null {
+    this.init();
+    if (!this.db) return null;
+    try {
+      const sql = `SELECT conversation_id, title, preview, step_count, last_modified_time, last_user_input_time, status, not_fully_idle, killed, agent_name, parent_conversation_id, nesting_depth FROM conversation_summaries ORDER BY last_modified_time DESC LIMIT 1`;
+      if (this.db.type === "bun") {
+        return (this.db.handle.query(sql).get() as ConversationSummaryRow) || null;
+      }
+      if (this.db.type === "node") {
+        return (this.db.handle.prepare(sql).get() as ConversationSummaryRow) || null;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  close() {
+    this.isClosed = true;
+    if (this.db) {
+      try {
+        if (this.db.type === "bun") this.db.handle.close();
+        if (this.db.type === "node") this.db.handle.close();
+      } catch {}
+      this.db = null;
+    }
+  }
+}
+
+export const summaryReader = new SummaryDbReader();
+
+export function runSelfTest(): void {
+  function assertTest(condition: boolean, msg: string) {
+    if (!condition) {
+      console.error(`❌ Assertion failed: ${msg}`);
+      process.exit(1);
+    }
+  }
+
+  const now = 1_700_000_000_000;
+  const staleMs = 60_000;
+
+  // Date parsing assertions
+  assertTest(
+    parseSqliteDate("2026-09-15 16:46:13.060725+00:00") ===
+      Date.parse("2026-09-15T16:46:13.060725+00:00"),
+    "parseSqliteDate with timezone offset",
+  );
+  assertTest(
+    parseSqliteDate("2026-09-15 16:46:13") === Date.parse("2026-09-15T16:46:13Z"),
+    "parseSqliteDate naive string",
+  );
+  assertTest(
+    parseSqliteDate("2026-09-15T16:46:13Z") === Date.parse("2026-09-15T16:46:13Z"),
+    "parseSqliteDate ISO string",
+  );
+  assertTest(parseSqliteDate("0001-01-01 00:00:00+00:00") === 0, "parseSqliteDate zero date");
+  assertTest(parseSqliteDate("") === 0, "parseSqliteDate empty string");
+  assertTest(parseSqliteDate(null) === 0, "parseSqliteDate null");
+
+  // 1. Killed
+  const s1 = deriveSessionState({ conversation_id: "1", killed: 1 }, { now, staleMs });
+  assertTest(s1 === "killed", `Expected killed, got ${s1}`);
+
+  // 2. Running (busy & DB fresh)
+  const s2 = deriveSessionState(
+    {
+      conversation_id: "2",
+      status: "CASCADE_RUN_STATUS_RUNNING",
+      not_fully_idle: 1,
+      last_modified_time: new Date(now - 5000).toISOString(),
+    },
+    { now, staleMs },
+  );
+  assertTest(s2 === "running", `Expected running, got ${s2}`);
+
+  // 3. Running (DB stale, but transcript live stream fresh)
+  const s2b = deriveSessionState(
+    {
+      conversation_id: "2b",
+      status: "CASCADE_RUN_STATUS_RUNNING",
+      not_fully_idle: 1,
+      last_modified_time: new Date(now - 120_000).toISOString(),
+    },
+    { now, staleMs, liveMs: 3000 },
+  );
+  assertTest(s2b === "running", `Expected running on fresh transcript live stream, got ${s2b}`);
+
+  // 4. Idle
+  const s3 = deriveSessionState(
+    {
+      conversation_id: "3",
+      status: "CASCADE_RUN_STATUS_IDLE",
+      not_fully_idle: 0,
+    },
+    { now, staleMs },
+  );
+  assertTest(s3 === "idle", `Expected idle, got ${s3}`);
+
+  // 5. Busy-stale = stuck (DB stale AND transcript live stream stale)
+  const s4 = deriveSessionState(
+    {
+      conversation_id: "4",
+      status: "CASCADE_RUN_STATUS_RUNNING",
+      not_fully_idle: 1,
+      last_modified_time: new Date(now - 120_000).toISOString(),
+    },
+    { now, staleMs, liveMs: 90_000 },
+  );
+  assertTest(s4 === "stuck", `Expected stuck, got ${s4}`);
+
+  // 6. Blank legacy = unknown
+  const s5 = deriveSessionState(
+    {
+      conversation_id: "5",
+      status: "",
+      not_fully_idle: 0,
+      killed: 0,
+    },
+    { now, staleMs },
+  );
+  assertTest(s5 === "unknown", `Expected unknown, got ${s5}`);
+
+  // 7. Fresh busy with blank status = running
+  const s6 = deriveSessionState(
+    {
+      conversation_id: "6",
+      status: "",
+      not_fully_idle: 1,
+      last_modified_time: new Date(now - 10_000).toISOString(),
+    },
+    { now, staleMs },
+  );
+  assertTest(s6 === "running", `Expected running, got ${s6}`);
+
+  // 8. Null row = unknown
+  const s7 = deriveSessionState(null, { now, staleMs });
+  assertTest(s7 === "unknown", `Expected unknown for null, got ${s7}`);
+
+  console.log("✔ deriveSessionState self-tests passed (14 assertions).");
+}
+
+export function runDbTest(): void {
+  if (!fs.existsSync(CONVERSATION_DB_PATH)) {
+    console.error(`❌ DB file not found: ${CONVERSATION_DB_PATH}`);
+    process.exit(1);
+  }
+  const row = summaryReader.getLatest();
+  if (!row) {
+    console.error(`❌ Failed to read most-recent row from: ${CONVERSATION_DB_PATH}`);
+    process.exit(1);
+  }
+  const state = deriveSessionState(row, { now: Date.now() });
+  console.log(`✔ DB read success (readonly):`);
+  console.log(`  conversation_id: ${row.conversation_id}`);
+  console.log(`  title:           ${row.title || "(no title)"}`);
+  console.log(`  status:          ${row.status || "(empty)"}`);
+  console.log(`  not_fully_idle:  ${row.not_fully_idle}`);
+  console.log(`  last_modified:   ${row.last_modified_time}`);
+  console.log(`  derived_state:   ${state}`);
+  const descendants = summaryReader.getDescendants(row.conversation_id);
+  console.log(`  descendants:     ${descendants.length} found`);
+}
+
+if (process.argv.includes("--selftest")) {
+  runSelfTest();
+  process.exit(0);
+}
+
+if (process.argv.includes("--dbtest")) {
+  runDbTest();
+  process.exit(0);
+}
+
 // ─── Session discovery ────────────────────────────────────────────────────────
 
-interface AgySession {
+export interface AgySession {
   id: string;
   path: string;
   projectDir: string;
   model: string;
   size: number;
   mtime: number;
+  title?: string;
 }
 
 function detectSessionModel(logPath: string): string {
@@ -85,7 +453,7 @@ function detectSessionModel(logPath: string): string {
 
 const sessionMetaCache = new Map<
   string,
-  { mtime: number; size: number; projectDir: string; model: string }
+  { mtime: number; size: number; projectDir: string; model: string; title: string }
 >();
 
 function getAllSessions(): AgySession[] {
@@ -97,28 +465,35 @@ function getAllSessions(): AgySession[] {
     try {
       const stat = fs.statSync(logPath);
       const cached = sessionMetaCache.get(logPath);
+      let projectDir: string;
+      let model: string;
+      let title: string;
       if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
-        out.push({
-          id: entry,
-          path: logPath,
-          projectDir: cached.projectDir,
-          model: cached.model,
-          size: stat.size,
-          mtime: stat.mtimeMs,
-        });
+        projectDir = cached.projectDir;
+        model = cached.model;
+        title = cached.title;
       } else {
-        const projectDir = detectProjectDir(logPath);
-        const model = detectSessionModel(logPath);
-        sessionMetaCache.set(logPath, { mtime: stat.mtimeMs, size: stat.size, projectDir, model });
-        out.push({
-          id: entry,
-          path: logPath,
+        projectDir = detectProjectDir(logPath);
+        model = detectSessionModel(logPath);
+        const row = summaryReader.getSummary(entry);
+        title = row?.title?.trim() || "";
+        sessionMetaCache.set(logPath, {
+          mtime: stat.mtimeMs,
+          size: stat.size,
           projectDir,
           model,
-          size: stat.size,
-          mtime: stat.mtimeMs,
+          title,
         });
       }
+      out.push({
+        id: entry,
+        path: logPath,
+        projectDir,
+        model,
+        size: stat.size,
+        mtime: stat.mtimeMs,
+        title,
+      });
     } catch {}
   }
   return out.sort((a, b) => b.mtime - a.mtime);
@@ -321,6 +696,16 @@ async function main() {
   }
 
   addDiv();
+  const vTitleBox = new BoxRenderable(renderer, { width: "100%", flexDirection: "column" });
+  vTitleBox.add(new TextRenderable(renderer, { content: "📌 Title:", fg: "#94a3b8" }));
+  const vTitleVal1 = new TextRenderable(renderer, { content: "  —", fg: "#f472b6" });
+  const vTitleVal2 = new TextRenderable(renderer, { content: "", fg: "#f472b6" });
+  vTitleBox.add(vTitleVal1);
+  vTitleBox.add(vTitleVal2);
+  sidebar.add(vTitleBox);
+
+  const vState = addSbRow("⚡ State:", "#4ade80");
+
   const vProjBox = new BoxRenderable(renderer, { width: "100%", flexDirection: "column" });
   vProjBox.add(new TextRenderable(renderer, { content: "📁 Project:", fg: "#94a3b8" }));
   const vProjVal1 = new TextRenderable(renderer, { content: "  —", fg: "#4ade80" });
@@ -412,6 +797,15 @@ async function main() {
   renderer.root.add(sidebar);
 
   // ── State ─────────────────────────────────────────────────────────────────────
+  let rootWatchedSession = currentSession;
+  let followingChildId: string | null = null;
+  let userPinned = false;
+  let currentSummaryRow: ConversationSummaryRow | null = summaryReader.getSummary(
+    rootWatchedSession.id,
+  );
+  let currentDerivedState: SessionState = deriveSessionState(currentSummaryRow);
+  let lastDbCheckMs = 0;
+
   let currentPos = 0,
     remainder = "",
     stepCount = 0,
@@ -569,18 +963,78 @@ async function main() {
       liveTxt.fg = "#fbbf24" as any;
       return;
     }
-    if (pages.length) {
-      liveTxt.content = `[LIVE] [PAGE ${pages.length}/${pages.length}]`;
-    } else {
-      liveTxt.content = "[LIVE]";
+
+    const pageSuffix = pages.length ? ` [PAGE ${pages.length}/${pages.length}]` : "";
+    const followPrefix = followingChildId ? `[FOLLOWING] ` : "";
+
+    switch (currentDerivedState) {
+      case "running":
+        liveTxt.content = `${followPrefix}[RUNNING]${pageSuffix}`;
+        liveTxt.fg = isLive ? ("#4ade80" as any) : ("#f6ad55" as any);
+        break;
+      case "idle":
+        liveTxt.content = `${followPrefix}[IDLE]${pageSuffix}`;
+        liveTxt.fg = "#94a3b8" as any;
+        break;
+      case "stuck":
+        liveTxt.content = `${followPrefix}[STUCK]${pageSuffix}`;
+        liveTxt.fg = "#fbbf24" as any;
+        break;
+      case "killed":
+        liveTxt.content = `${followPrefix}[KILLED]${pageSuffix}`;
+        liveTxt.fg = "#ef4444" as any;
+        break;
+      case "unknown":
+      default:
+        liveTxt.content = `${followPrefix}[UNKNOWN]${pageSuffix}`;
+        liveTxt.fg = "#6b7280" as any;
+        break;
     }
-    liveTxt.fg = isLive ? "#68d391" : ("#f6ad55" as any);
   }
 
   let isAppDestroyed = false;
 
   function updateSidebar() {
     if (isAppDestroyed) return;
+    const titleStr =
+      currentSummaryRow?.title?.trim() ||
+      currentSession.title?.trim() ||
+      (currentSession.projectDir !== "(Unbound session)"
+        ? path.basename(currentSession.projectDir)
+        : currentModel || "Antigravity Session");
+
+    if (titleStr.length > 28) {
+      vTitleVal1.content = "  " + titleStr.slice(0, 28);
+      vTitleVal2.content = "  " + titleStr.slice(28, 56);
+    } else {
+      vTitleVal1.content = "  " + titleStr;
+      vTitleVal2.content = "";
+    }
+
+    switch (currentDerivedState) {
+      case "running":
+        vState.content = followingChildId ? "● RUN (child)" : "● RUNNING";
+        vState.fg = "#4ade80" as any;
+        break;
+      case "idle":
+        vState.content = "○ IDLE";
+        vState.fg = "#94a3b8" as any;
+        break;
+      case "stuck":
+        vState.content = "▲ STUCK";
+        vState.fg = "#fbbf24" as any;
+        break;
+      case "killed":
+        vState.content = "✕ KILLED";
+        vState.fg = "#ef4444" as any;
+        break;
+      case "unknown":
+      default:
+        vState.content = "? UNKNOWN";
+        vState.fg = "#6b7280" as any;
+        break;
+    }
+
     const folder =
       currentSession.projectDir !== "(Unbound session)"
         ? path.basename(currentSession.projectDir)
@@ -595,7 +1049,10 @@ async function main() {
     }
 
     const sessId = currentSession.id;
-    if (sessId.length > 18) {
+    if (followingChildId) {
+      vSessVal1.content = `  ↳ ${sessId.slice(0, 8)} (sub)`;
+      vSessVal2.content = `  [parent ${rootWatchedSession.id.slice(0, 8)}]`;
+    } else if (sessId.length > 18) {
       vSessVal1.content = "  " + sessId.slice(0, 18);
       vSessVal2.content = "  " + sessId.slice(18);
     } else {
@@ -1362,10 +1819,122 @@ async function main() {
     }
   }
 
+  function getSessionForId(id: string, fallbackSession: AgySession): AgySession {
+    const logPath = path.join(BRAIN_DIR, id, ".system_generated", "logs", "transcript.jsonl");
+    let size = 0;
+    let mtime = Date.now();
+    try {
+      const st = fs.statSync(logPath);
+      size = st.size;
+      mtime = st.mtimeMs;
+    } catch {}
+    const cached = sessionMetaCache.get(logPath);
+    let projectDir = fallbackSession.projectDir;
+    let model = fallbackSession.model;
+    let title = "";
+    if (cached && cached.mtime === mtime && cached.size === size) {
+      projectDir = cached.projectDir;
+      model = cached.model;
+      title = cached.title;
+    } else {
+      if (fs.existsSync(logPath)) {
+        model = detectSessionModel(logPath);
+        projectDir = detectProjectDir(logPath);
+        if (projectDir === "(Unbound session)") projectDir = fallbackSession.projectDir;
+      }
+      const row = summaryReader.getSummary(id);
+      title = row?.title?.trim() || "";
+      sessionMetaCache.set(logPath, { mtime, size, projectDir, model, title });
+    }
+    return {
+      id,
+      path: logPath,
+      projectDir,
+      model,
+      size,
+      mtime,
+      title,
+    };
+  }
+
+  function pollDbState() {
+    const now = Date.now();
+    if (now - lastDbCheckMs < 250) return;
+    lastDbCheckMs = now;
+
+    if (userPinned) {
+      const liveMs = currentSession.id === rootWatchedSession.id ? now - lastActivityMs : undefined;
+      const pinnedRow = summaryReader.getSummary(rootWatchedSession.id);
+      const pinnedState = deriveSessionState(pinnedRow, { now, liveMs });
+      currentSummaryRow = pinnedRow;
+      currentDerivedState = pinnedState;
+      if (pinnedState === "idle") {
+        userPinned = false;
+      }
+      return;
+    }
+
+    const rootLiveMs = currentSession.id === rootWatchedSession.id ? now - lastActivityMs : undefined;
+    const rootRow = summaryReader.getSummary(rootWatchedSession.id);
+    const rootState = deriveSessionState(rootRow, { now, liveMs: rootLiveMs });
+
+    if (followingChildId) {
+      const childLiveMs = currentSession.id === followingChildId ? now - lastActivityMs : undefined;
+      const childRow = summaryReader.getSummary(followingChildId);
+      const childState = deriveSessionState(childRow, { now, liveMs: childLiveMs });
+
+      if (childState === "running") {
+        currentSummaryRow = childRow;
+        currentDerivedState = childState;
+      } else {
+        const descendants = summaryReader.getDescendants(rootWatchedSession.id);
+        const nextRunning = descendants.find(
+          (d) =>
+            d.conversation_id !== followingChildId &&
+            deriveSessionState(d, { now }) === "running",
+        );
+
+        if (nextRunning) {
+          followingChildId = nextRunning.conversation_id;
+          currentSummaryRow = nextRunning;
+          currentDerivedState = "running";
+          const childSess = getSessionForId(nextRunning.conversation_id, rootWatchedSession);
+          switchSession(childSess, true);
+        } else {
+          followingChildId = null;
+          currentSummaryRow = rootRow;
+          currentDerivedState = rootState;
+          switchSession(rootWatchedSession, false);
+        }
+      }
+    } else {
+      const descendants = summaryReader.getDescendants(rootWatchedSession.id);
+      const runningChild = descendants.find(
+        (d) => deriveSessionState(d, { now }) === "running",
+      );
+
+      if (runningChild) {
+        followingChildId = runningChild.conversation_id;
+        currentSummaryRow = runningChild;
+        currentDerivedState = "running";
+        const childSess = getSessionForId(runningChild.conversation_id, rootWatchedSession);
+        switchSession(childSess, true);
+      } else {
+        currentSummaryRow = rootRow;
+        currentDerivedState = rootState;
+      }
+    }
+  }
+
   // ── Poll ───────────────────────────────────────────────────────────────────────
   function poll() {
     try {
-      if (!activeFileFd) activeFileFd = fs.openSync(currentSession.path, "r");
+      pollDbState();
+
+      if (!activeFileFd) {
+        if (!fs.existsSync(currentSession.path)) return;
+        activeFileFd = fs.openSync(currentSession.path, "r");
+      }
       const stat = fs.fstatSync(activeFileFd);
       if (stat.size < currentPos) {
         currentPos = 0;
@@ -1397,6 +1966,7 @@ async function main() {
         }
       }
       if (newCount > 0) {
+        lastActivityMs = Date.now();
         updateSidebar();
         if (pageMode)
           updateLiveLabel(); // pages grew in realtime; refresh x/y
@@ -1406,8 +1976,11 @@ async function main() {
   }
 
   // ── Session switch ─────────────────────────────────────────────────────────────
-  function switchSession(s: AgySession) {
+  function switchSession(s: AgySession, isAutoFollow = false) {
     if (!s) return;
+    if (currentSession && currentSession.id === s.id && activeFileFd != null) {
+      return;
+    }
     if (activeFileFd != null) {
       try {
         fs.closeSync(activeFileFd);
@@ -1428,8 +2001,12 @@ async function main() {
     resetCounters();
     updateSidebar();
     updateLiveLabel();
-    startSpinner("Loading session...");
-    poll();
+    if (isAutoFollow) {
+      const childTitle = currentSummaryRow?.title?.trim() || s.id.slice(0, 8);
+      startSpinner(`following: ${childTitle} (${s.id.slice(0, 8)})`);
+    } else {
+      startSpinner("Loading session...");
+    }
     // Fast-seek loads ~50KB of history in one poll batch; OpenTUI stickyScroll
     // only pins the view if it was already at the bottom BEFORE the children
     // grew, so a switch lands at the top. Jump explicitly after load.
@@ -1502,9 +2079,10 @@ async function main() {
           width: 2,
         }),
       );
+      const titleDisplay = s.title ? `📁 ${folder} — ${s.title}` : `📁 ${folder}`;
       topRow.add(
         new TextRenderable(renderer, {
-          content: `📁 ${folder}`,
+          content: titleDisplay,
           fg: sel ? "#ffffff" : "#38bdf8",
           attributes: sel ? BOLD_ATTR : 0,
           flexGrow: 1,
@@ -1755,6 +2333,7 @@ async function main() {
   function exitApp(code = 0) {
     if (isAppDestroyed) return;
     isAppDestroyed = true;
+    summaryReader.close();
     clearInterval(pollInterval);
     clearInterval(sidebarInterval);
     clearInterval(quotaInterval);
@@ -1849,7 +2428,12 @@ async function main() {
         const chosen = cachedSessions[selectorCursor];
         if (chosen) {
           closeSelector();
-          switchSession(chosen);
+          userPinned = true;
+          rootWatchedSession = chosen;
+          followingChildId = null;
+          currentSummaryRow = summaryReader.getSummary(chosen.id);
+          currentDerivedState = deriveSessionState(currentSummaryRow, { now: Date.now() });
+          switchSession(chosen, false);
         }
         return;
       }
@@ -1860,7 +2444,15 @@ async function main() {
       );
       if (!isNaN(num) && num >= 1 && num <= maxItems) {
         closeSelector();
-        switchSession(cachedSessions[num - 1]);
+        const chosen = cachedSessions[num - 1];
+        if (chosen) {
+          userPinned = true;
+          rootWatchedSession = chosen;
+          followingChildId = null;
+          currentSummaryRow = summaryReader.getSummary(chosen.id);
+          currentDerivedState = deriveSessionState(currentSummaryRow, { now: Date.now() });
+          switchSession(chosen, false);
+        }
         return;
       }
       return;
@@ -1975,11 +2567,22 @@ async function main() {
   // ── Idle + sidebar refresh ──────────────────────────────────────────────────────
   const sidebarInterval = setInterval(() => {
     if (isAppDestroyed) return;
-    if (Date.now() - lastActivityMs > 25000 && spinnerTimer) {
+    pollDbState();
+    if (currentDerivedState === "running" && !spinnerTimer) {
+      startSpinner("Agent processing...");
+    } else if (currentDerivedState === "idle" && spinnerTimer) {
+      stopSpinner("💤 Idle — session idle");
+    } else if (currentDerivedState === "stuck" && spinnerTimer) {
+      stopSpinner("⚠️ Stuck / Waiting (no activity for >60s)");
+    } else if (
+      Date.now() - lastActivityMs > 25000 &&
+      spinnerTimer &&
+      currentDerivedState !== "running"
+    ) {
       stopSpinner("💤 Idle — waiting for next agy command...");
     }
     updateSidebar();
-  }, 2000);
+  }, 1000);
 
   const quotaInterval = setInterval(fetchLiveQuotaAsync, 120_000);
 
@@ -1989,6 +2592,7 @@ async function main() {
   const pollInterval = setInterval(poll, 100);
   renderer.once("destroy", () => {
     isAppDestroyed = true;
+    summaryReader.close();
     clearInterval(pollInterval);
     clearInterval(sidebarInterval);
     clearInterval(quotaInterval);
