@@ -5,7 +5,7 @@ import path from "node:path";
 import { loadConfig, loadConfigCached, _resetConfigCache, type Config } from "../src/config.js";
 import { createToolHandler, createServer, makeDefaultRunWake } from "../src/server.js";
 import { ModelRegistry } from "../src/models.js";
-import { TOOLS, OMO_ROLES } from "../src/tools.js";
+import { TOOLS, DEFAULT_MODEL_CHAIN } from "../src/tools.js";
 import { CooldownRegistry } from "../src/quota.js";
 import { TeamRuntime, type TeamRuntimeConfig, type TeamRunMember } from "../src/team/runtime.js";
 import { TEAM_HANDLERS } from "../src/team/handlers.js";
@@ -247,7 +247,7 @@ describe("Graceful shutdown drain", () => {
 });
 
 describe("Production resolveModelChain wiring", () => {
-  it("wires resolveModelChain on createServer default TeamRuntime with config override and OMO_ROLES fallback", async () => {
+  it("wires resolveModelChain on createServer default TeamRuntime with config override and DEFAULT_MODEL_CHAIN fallback", async () => {
     let capturedRuntime: TeamRuntime | undefined;
     const origHandler = TEAM_HANDLERS.team_list;
     TEAM_HANDLERS.team_list = async (args, ctx) => {
@@ -281,7 +281,7 @@ describe("Production resolveModelChain wiring", () => {
       expect(capturedRuntime?.deps.resolveModelChain).toBeDefined();
       const resolver = capturedRuntime!.deps.resolveModelChain!;
 
-      // 1. cfg.roleModels override wins over OMO_ROLES
+      // 1. cfg.roleModels override wins
       expect(resolver({ resolvedRole: "quick" } as TeamRunMember)).toEqual(["gemini-override"]);
 
       // 2. cfg.roleModels for custom role
@@ -290,13 +290,15 @@ describe("Production resolveModelChain wiring", () => {
         "model-custom-2",
       ]);
 
-      // 3. Fallback to OMO_ROLES.chain when not in cfg.roleModels
+      // 3. Fallback to DEFAULT_MODEL_CHAIN when not in cfg.roleModels
       expect(resolver({ resolvedRole: "git-master" } as TeamRunMember)).toEqual(
-        OMO_ROLES["git-master"].chain,
+        DEFAULT_MODEL_CHAIN,
       );
 
-      // 4. Fallback to [member.resolvedRole] when unknown role
-      expect(resolver({ resolvedRole: "unknown-role" } as TeamRunMember)).toEqual(["unknown-role"]);
+      // 4. Fallback to DEFAULT_MODEL_CHAIN when unknown role
+      expect(resolver({ resolvedRole: "unknown-role" } as TeamRunMember)).toEqual(
+        DEFAULT_MODEL_CHAIN,
+      );
     } finally {
       TEAM_HANDLERS.team_list = origHandler;
     }
@@ -337,11 +339,11 @@ describe("Production resolveModelChain wiring", () => {
 
       expect(resolver({ resolvedRole: "executor" } as TeamRunMember)).toEqual(["model-exec-1"]);
       expect(resolver({ resolvedRole: "tester" } as TeamRunMember)).toEqual(
-        OMO_ROLES["tester"].chain,
+        DEFAULT_MODEL_CHAIN,
       );
-      expect(resolver({ resolvedRole: "mystery-agent" } as TeamRunMember)).toEqual([
-        "mystery-agent",
-      ]);
+      expect(resolver({ resolvedRole: "mystery-agent" } as TeamRunMember)).toEqual(
+        DEFAULT_MODEL_CHAIN,
+      );
     } finally {
       TEAM_HANDLERS.team_list = origHandler;
     }
@@ -355,9 +357,11 @@ describe("Production resolveModelChain wiring", () => {
       | Record<string, string[]>
       | undefined;
     expect(resolver({ resolvedRole: "quick" } as TeamRunMember)).toEqual(
-      cfgRoleModels?.["quick"] ?? OMO_ROLES["quick"].chain,
+      cfgRoleModels?.["quick"] ?? DEFAULT_MODEL_CHAIN,
     );
-    expect(resolver({ resolvedRole: "unknown-slug" } as TeamRunMember)).toEqual(["unknown-slug"]);
+    expect(resolver({ resolvedRole: "unknown-slug" } as TeamRunMember)).toEqual(
+      DEFAULT_MODEL_CHAIN,
+    );
   });
 });
 
@@ -540,8 +544,10 @@ describe("createServer fallback resolver hot-reload via cfgProvider", () => {
       // After change — resolver reads v2 via cfgProvider
       expect(resolver({ resolvedRole: "quick" } as TeamRunMember)).toEqual(["v2-model-hot"]);
 
-      // OMO_ROLES fallback still works for unknown roles
-      expect(resolver({ resolvedRole: "unknown-hot" } as TeamRunMember)).toEqual(["unknown-hot"]);
+      // DEFAULT_MODEL_CHAIN fallback works for unknown roles
+      expect(resolver({ resolvedRole: "unknown-hot" } as TeamRunMember)).toEqual(
+        DEFAULT_MODEL_CHAIN,
+      );
     } finally {
       TEAM_HANDLERS.team_list = origHandler;
     }

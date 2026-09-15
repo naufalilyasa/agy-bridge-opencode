@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { TOOLS, OMO_ROLES, ROLE_ALIASES, canonicalRoleKey, resolveFiles } from "../src/tools.js";
+import {
+  TOOLS,
+  OMO_ROLES,
+  ROLE_ALIASES,
+  canonicalRoleKey,
+  DEFAULT_MODEL_CHAIN,
+  resolveFiles,
+} from "../src/tools.js";
 
 describe("TOOLS", () => {
   it("defines the eight standard tools", () => {
@@ -534,6 +541,13 @@ describe("OMO_ROLES and role routing rubric", () => {
       expect(typeof def.whenToUse).toBe("string");
       expect(typeof def.whenNotToUse).toBe("string");
     }
+  });
+
+  it("OMO_ROLES entries do not carry dead shadow chain and DEFAULT_MODEL_CHAIN is exported", () => {
+    for (const def of Object.values(OMO_ROLES)) {
+      expect("chain" in def).toBe(false);
+    }
+    expect(DEFAULT_MODEL_CHAIN).toEqual(["gemini-3.8-flash-high", "claude-sonnet-4-6"]);
   });
 
   it("canonicalRoleKey trims, lowercases, replaces underscores, and resolves aliases", () => {

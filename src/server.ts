@@ -13,7 +13,14 @@ import {
   type RunResult,
 } from "./runner.js";
 import { CooldownRegistry, QuotaError } from "./quota.js";
-import { TOOLS, OMO_ROLES, ROLE_ALIASES, canonicalRoleKey, type ToolDef } from "./tools.js";
+import {
+  TOOLS,
+  OMO_ROLES,
+  ROLE_ALIASES,
+  canonicalRoleKey,
+  DEFAULT_MODEL_CHAIN,
+  type ToolDef,
+} from "./tools.js";
 import { TEAM_HANDLERS, type TeamHandlerContext } from "./team/handlers.js";
 import {
   TeamRuntime,
@@ -110,8 +117,7 @@ export function createToolHandler(
           cooldowns: adaptCooldowns(cooldowns),
           runWake: makeDefaultRunWake(cfg, deps),
           resolveModelChain: (member: TeamRunMember) =>
-            cfg.roleModels[member.resolvedRole] ??
-            OMO_ROLES[member.resolvedRole]?.chain ?? [member.resolvedRole],
+            cfg.roleModels[member.resolvedRole] ?? DEFAULT_MODEL_CHAIN,
         }));
 
   return async (args, extra) => {
@@ -274,9 +280,7 @@ export function createToolHandler(
 
       const effectiveChain =
         activeCfg.toolModels?.[tool.name] ??
-        (roleKey ? activeCfg.roleModels[roleKey] : undefined) ??
-        (roleKey ? OMO_ROLES[roleKey]?.chain : undefined) ??
-        tool.chain;
+        (roleKey ? (activeCfg.roleModels[roleKey] ?? DEFAULT_MODEL_CHAIN) : tool.chain);
 
       const explicitModel = args.model as string | undefined;
       const resolution = await registry.resolveChain({
@@ -482,8 +486,7 @@ export function createServer(
       cooldowns: adaptCooldowns(cooldowns),
       runWake: makeDefaultRunWake(cfg, deps),
       resolveModelChain: (member: TeamRunMember) =>
-        getCfg().roleModels[member.resolvedRole] ??
-        OMO_ROLES[member.resolvedRole]?.chain ?? [member.resolvedRole],
+        getCfg().roleModels[member.resolvedRole] ?? DEFAULT_MODEL_CHAIN,
     });
 
   const server = new McpServer({ name: "agy-bridge", version: "0.4.1" });

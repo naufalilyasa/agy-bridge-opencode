@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createToolHandler } from "../src/server.js";
 import { ModelRegistry } from "../src/models.js";
-import { OMO_ROLES, TOOLS } from "../src/tools.js";
+import { OMO_ROLES, TOOLS, DEFAULT_MODEL_CHAIN } from "../src/tools.js";
 import { CooldownRegistry } from "../src/quota.js";
 import type { Config } from "../src/config.js";
 import { IdleStallError, type ChildHandle, type RunnerDeps } from "../src/runner.js";
@@ -129,7 +129,7 @@ describe("createToolHandler", () => {
     expect(savedRole).toBe("tester");
 
     await handlerFor("follow_up", f)({ session_id: "sess-1", question: "continue" });
-    const chain = cfg.roleModels["tester"] ?? OMO_ROLES["tester"].chain;
+    const chain = cfg.roleModels["tester"] ?? DEFAULT_MODEL_CHAIN;
     expect(chain[0]).toBeDefined();
     expect(f.modelOf(f.runs[1])).toBe(chain[0]);
   });
@@ -138,7 +138,7 @@ describe("createToolHandler", () => {
     const f = fakeDeps();
     f.clearRoles?.();
     await handlerFor("follow_up", f)({ session_id: "abc", question: "go", role: "tester" });
-    const chain = cfg.roleModels["tester"] ?? OMO_ROLES["tester"].chain;
+    const chain = cfg.roleModels["tester"] ?? DEFAULT_MODEL_CHAIN;
     expect(f.modelOf(f.runs[0])).toBe(chain[0]);
   });
 
@@ -254,7 +254,9 @@ describe("createToolHandler", () => {
 
   it("selects Claude Sonnet first for deep reasoning role (oracle)", async () => {
     const f = fakeDeps();
-    const handler = handlerFor("delegate", f);
+    const handler = handlerFor("delegate", f, {
+      roleModels: { oracle: ["claude-sonnet-4-6", "gemini-3.7-flash-high"] },
+    });
     await handler({ role: "oracle", task: "Adversarial plan review" });
     expect(f.runs).toHaveLength(1);
     expect(f.modelOf(f.runs[0])).toBe("claude-sonnet-4-6");
@@ -262,7 +264,9 @@ describe("createToolHandler", () => {
 
   it("selects Gemini Flash first for fast execution role (git-master)", async () => {
     const f = fakeDeps();
-    const handler = handlerFor("delegate", f);
+    const handler = handlerFor("delegate", f, {
+      roleModels: { "git-master": ["gemini-3.7-flash-high", "claude-sonnet-4-6"] },
+    });
     await handler({ role: "git-master", task: "Create atomic commit" });
     expect(f.runs).toHaveLength(1);
     expect(f.modelOf(f.runs[0])).toBe("gemini-3.7-flash-high");
@@ -617,17 +621,20 @@ describe("createToolHandler", () => {
 
     it("resolves alias roles 'qa' and 'git_master' to canonical tester and git-master model chains", async () => {
       const f = fakeDeps();
-      const handler = handlerFor("delegate", f);
+      const handler = handlerFor("delegate", f, {
+        roleModels: {
+          tester: ["gemini-3.7-flash-high"],
+          "git-master": ["claude-sonnet-4-6"],
+        },
+      });
 
       await handler({ task: "run tests", role: "qa" });
       expect(f.runs).toHaveLength(1);
-      const testerChain = OMO_ROLES["tester"].chain!;
-      expect(f.modelOf(f.runs[0])).toBe(testerChain[0]);
+      expect(f.modelOf(f.runs[0])).toBe("gemini-3.7-flash-high");
 
       await handler({ task: "manage git", role: "git_master" });
       expect(f.runs).toHaveLength(2);
-      const gitMasterChain = OMO_ROLES["git-master"].chain!;
-      expect(f.modelOf(f.runs[1])).toBe(gitMasterChain[0]);
+      expect(f.modelOf(f.runs[1])).toBe("claude-sonnet-4-6");
     });
 
     it("allows custom role present only in cfg.roleModels without throwing", async () => {
@@ -641,6 +648,14 @@ describe("createToolHandler", () => {
       expect(res.isError).toBeUndefined();
       expect(f.runs).toHaveLength(1);
       expect(f.modelOf(f.runs[0])).toBe("gemini-3.7-flash-high");
+    });
+
+    it("resolves to DEFAULT_MODEL_CHAIN when role is defined in OMO_ROLES but not in cfg.roleModels", async () => {
+      const f = fakeDeps();
+      const handler = handlerFor("delegate", f);
+      await handler({ task: "deep work", role: "deep" });
+      expect(f.runs).toHaveLength(1);
+      expect(f.modelOf(f.runs[0])).toBe(DEFAULT_MODEL_CHAIN[0]);
     });
   });
 });

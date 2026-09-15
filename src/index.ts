@@ -2,7 +2,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig, loadConfigCached } from "./config.js";
 import { TeamRuntime, type TeamRuntimeConfig, type TeamRunMember } from "./team/runtime.js";
-import { OMO_ROLES } from "./tools.js";
+import { DEFAULT_MODEL_CHAIN } from "./tools.js";
 import { createServer, makeDefaultRunWake, adaptCooldowns } from "./server.js";
 import { CooldownRegistry } from "./quota.js";
 import { killAllActiveRuns } from "./runner.js";
@@ -17,8 +17,7 @@ export const runtime = new TeamRuntime({
   // is ceiling — add live cfg knob to runtime if runtime-level live config needed later.
   resolveModelChain: (member: TeamRunMember) => {
     const c = loadConfigCached();
-    return c.roleModels[member.resolvedRole] ??
-      OMO_ROLES[member.resolvedRole]?.chain ?? [member.resolvedRole];
+    return c.roleModels[member.resolvedRole] ?? DEFAULT_MODEL_CHAIN;
   },
 });
 export const server = createServer(runtime, cfg, undefined, undefined, cooldowns);

@@ -27,8 +27,10 @@ Outcome mindset: focus on user value and acceptance criteria, ground decisions i
  * Model-family adaptation, mirroring OMO's per-family sisyphus-junior variants:
  * Claude models get extended-reasoning discipline (default.d.ts), Gemini models
  * get aggressive tool-call enforcement + anti-optimism checkpoints
- * (gemini.d.ts). Selected from the first available model in the resolved
- * chain so the persona matches the model that will actually run.
+ * (gemini.d.ts). Model selection is owned by agy_bridge.jsonc `roles` (SSOT),
+ * while OMO_ROLES owns persona/routing only. Selected from the first available
+ * model in the resolved runtime chain so the persona matches the model that will
+ * actually run.
  */
 const MODEL_FAMILY_CONTEXT: Record<string, string> = {
   claude: `You are executing on a Claude model optimized for extended reasoning.
@@ -220,9 +222,12 @@ export interface OmoRoleDefinition {
   whenToUse: string;
   /** When NOT to pick this role (names the redirect) */
   whenNotToUse: string;
-  /** Default fallback model chain for this role (ordered by preference) */
-  chain?: string[];
 }
+
+// agy_bridge.jsonc `roles` is the per-role SSOT. This is the cross-family
+// last-resort (gemini → claude), used only when a role has no jsonc entry, so a
+// missing/partial config still fails over instead of hard-failing on quota.
+export const DEFAULT_MODEL_CHAIN: string[] = ["gemini-3.8-flash-high", "claude-sonnet-4-6"];
 
 export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
   // --- OMO GIT MASTER SUBAGENT ---
@@ -239,7 +244,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Git commits, branches, rebase, conflicts, history (blame/bisect).",
     whenNotToUse: "Fixing or refactoring application code.",
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   oracle: {
     title: "OMO_ORACLE_ARCHITECT",
@@ -254,7 +258,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Architecture soundness and cross-layer root-cause debugging (read-only).",
     whenNotToUse: "Line-by-line diff review (use reviewer); plan gate (use momus); edits.",
-    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   librarian: {
     title: "OMO_LIBRARIAN",
@@ -269,7 +272,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Library/version/compatibility trade-off research.",
     whenNotToUse: "Searching this codebase (use explore).",
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   explore: {
     title: "OMO_EXPLORER_RESEARCHER",
@@ -284,7 +286,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Locate symbols/files, map directories, git archaeology.",
     whenNotToUse: "Reading >200-line files (use analyze_files); fixing.",
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   momus: {
     title: "OMO_MOMUS_VERIFIER",
@@ -298,7 +299,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Plan/diff feasibility gate before work — APPROVE/REJECT.",
     whenNotToUse: "Hunt all bugs (use reviewer); architecture design (use oracle).",
-    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   metis: {
     title: "OMO_METIS_PLAN_CONSULTANT",
@@ -312,7 +312,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Clarify an ambiguous/underspecified request before planning.",
     whenNotToUse: "Implementing or reviewing code.",
-    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   "multimodal-looker": {
     title: "OMO_MULTIMODAL_LOOKER",
@@ -326,7 +325,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Inspect screenshots/UI assets visually.",
     whenNotToUse: "Code review; layout implementation.",
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   ultrabrain: {
     title: "OMO_ULTRABRAIN_ARCHITECT",
@@ -341,7 +339,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Hard logic/architecture ANALYSIS, read-only, clear goal.",
     whenNotToUse: "Implementation (use deep); visual work.",
-    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   deep: {
     title: "OMO_DEEP_ENGINEER",
@@ -356,7 +353,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Research then IMPLEMENT multi-file business/backend logic (3+ files).",
     whenNotToUse: "Single-file or UI work (visual-engineering); read-only analysis (ultrabrain).",
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   "visual-engineering": {
     title: "OMO_VISUAL_ENGINEER",
@@ -370,7 +366,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "ANY UI: styling, layout, animation, UX (.tsx/.css/Compose).",
     whenNotToUse: "Non-visual logic; radical art direction (use artistry).",
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   artistry: {
     title: "OMO_ARTISTRY_ENGINEER",
@@ -384,7 +379,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Novel/unconventional concepting and art direction.",
     whenNotToUse: "Routine design-system UI (use visual-engineering).",
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   writing: {
     title: "OMO_TECHNICAL_WRITER",
@@ -398,7 +392,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Human-facing docs/ADR/PRD prose.",
     whenNotToUse: "Code or inline code comments.",
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   quick: {
     title: "OMO_QUICK_EXECUTOR",
@@ -412,7 +405,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "1-2 file or purely mechanical multi-file edits.",
     whenNotToUse: "Logic or architecture change (use deep).",
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
 
   // --- CANONICAL SUBAGENT ROLES ---
@@ -428,7 +420,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Write and run unit/integration tests; QA verification.",
     whenNotToUse: "Implementing features; architecture.",
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   reviewer: {
     title: "SENIOR_CODE_REVIEWER",
@@ -442,7 +433,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Adversarial line-by-line code/diff review.",
     whenNotToUse: "Architecture (use oracle); plan feasibility (use momus).",
-    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   security: {
     title: "SECURITY_AUDITOR",
@@ -456,7 +446,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Vuln/threat/secret audit on trust boundaries.",
     whenNotToUse: "General code review (use reviewer).",
-    chain: ["claude-sonnet-4-6", "gemini-3.7-flash-high"],
   },
   devops: {
     title: "DEVOPS_ENGINEER",
@@ -470,7 +459,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "Build/Gradle/CI-CD/container/deploy pipelines.",
     whenNotToUse: "Application business logic.",
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
   product: {
     title: "PRODUCT_MANAGER",
@@ -484,7 +472,6 @@ export const OMO_ROLES: Record<string, OmoRoleDefinition> = {
     ],
     whenToUse: "PRD/user-stories/acceptance criteria (define WHAT).",
     whenNotToUse: "Building it (use deep); UI implementation.",
-    chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
   },
 };
 

@@ -107,7 +107,7 @@ Model selection follows a strict precedence ladder:
 2. **Per-Tool Overrides (`toolModels[tool.name]`)**: Overrides configured per tool name (e.g. `web_lookup`, `delegate`, `follow_up`). Normalizes string or string array.
 3. **Per-Role Overrides (`roleModels[roleKey]`)**: Overrides configured per agent role (e.g. `oracle`, `git-master`).
 4. **Default Model (`defaultModel`)**: Global fallback model when configured.
-5. **Builtin Chain (`OMO_ROLES[roleKey]?.chain` / `tool.chain`)**: Hardcoded defaults per role or tool.
+5. **Default Chain (`DEFAULT_MODEL_CHAIN` / `tool.chain`)**: Cross-family last-resort `["gemini-3.8-flash-high", "claude-sonnet-4-6"]` when a role has no jsonc `roles` entry, or the tool's own built-in `tool.chain`. (`OMO_ROLES[].chain` was removed — the jsonc `roles` block is the SSOT.)
 
 If all candidate models in the resolved chain are exhausted by quota or server errors, `agy-bridge` raises `ALL_MODELS_EXHAUSTED` with a dynamic candidate list and quota reset wait instructions. Follow-up calls (`follow_up`) without an explicit model restart resolution from the primary model of the chain rather than locking onto the previous turn's failover model.
 

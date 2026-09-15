@@ -122,7 +122,7 @@ All tools accept optional `cwd` (project root). `delegate`/`follow_up` also acce
 
 ### Model routing (single source of truth)
 
-Resolution order: explicit `model` arg → `roles[roleKey]` in `~/.gemini/config/agy_bridge.jsonc` → builtin `OMO_ROLES[role].chain` in `src/tools.ts` → tool chain → `AGY_DEFAULT_MODEL` → agy's own default. Override per role with `AGY_ROLE_MODEL_<ROLE>` env or the `roles` block in the config file. Models are validated against `agy models` output up front (agy silently ignores unknown `--model` values).
+Resolution order: explicit `model` arg → `toolModels[tool]` → `roles[roleKey]` in `~/.gemini/config/agy_bridge.jsonc` → `DEFAULT_MODEL_CHAIN` (cross-family last-resort in `src/tools.ts`) / `tool.chain` for role-less tools → `AGY_DEFAULT_MODEL` → agy's own default. The per-role `chain` field was removed from `OMO_ROLES`; the jsonc `roles` block is the single source of truth for models. Override per role with `AGY_ROLE_MODEL_<ROLE>` env or the `roles` block in the config file. Models are validated against `agy models` output up front (agy silently ignores unknown `--model` values).
 
 Every response ends with a footer:
 
