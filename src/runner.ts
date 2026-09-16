@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Config } from "./config.js";
-import { detectQuota, QuotaError } from "./quota.js";
+import { detectQuota, detectQuotaEcho, QuotaError } from "./quota.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -303,6 +303,7 @@ export async function runAgy(
     const startTime = Date.now();
     let lastActivityTime = Date.now();
     let lastLogLength = 0;
+    let sawFreshQuota = false;
     const idleTimeoutMs = cfg.idleTimeoutSec * 1000;
 
     const poller = setInterval(async () => {
@@ -313,21 +314,28 @@ export async function runAgy(
         const log = await deps.readLog(logPath);
         if (settled) return; // settled during the async read — don't kill a finished run
 
-        if (log.length > lastLogLength) {
+        const prevLen = lastLogLength;
+        const grew = log.length > prevLen;
+        if (grew) {
           lastLogLength = log.length;
           lastActivityTime = Date.now();
         }
 
         req.onProgress?.(elapsed);
 
-        const quota = detectQuota(log);
-        if (quota && Date.now() - lastActivityTime > quotaConfirmMs) {
-          // Capacity line present AND the log has been quiet: agy is stuck
-          // retrying a real 429. Kill and fail over. A quota line in a still-
-          // growing log is transient/benign — let agy's own retry run.
+        // Only a capacity line in the *newly written* bytes means agy is currently
+        // blocked on quota. Once the log grows past an earlier 429 (agy recovered),
+        // that stale line must not kill a healthy run that is simply quiet because it
+        // is generating/thinking — which would cool a good model off for ~15m.
+        if (detectQuota(log.slice(prevLen))) sawFreshQuota = true;
+        else if (grew) sawFreshQuota = false;
+
+        if (sawFreshQuota && Date.now() - lastActivityTime > quotaConfirmMs) {
+          // Fresh capacity line AND the log has stayed quiet: agy is stuck retrying a
+          // real 429. Kill and fail over.
           killChild();
           keepLog = true;
-          finish(() => reject(new QuotaError(req.model, quota)));
+          finish(() => reject(new QuotaError(req.model, detectQuota(log)!)));
           return;
         }
 
@@ -397,33 +405,45 @@ export async function runAgy(
       }
       const out = child.stdout().trim();
       const stderr = child.stderr().trim();
-      const combined = (out + "\n" + stderr).trim();
-      const logContent = await deps.readLog(logPath);
-      const quota = detectQuota(combined) || detectQuota(logContent);
 
-      if (quota) {
+      // The model echoed a capacity error as its ENTIRE output: fail over,
+      // regardless of exit code. detectQuotaEcho only matches error-anchored
+      // strings, so a real answer quoting "429" in prose is not mistaken for it.
+      const quotaEcho = detectQuotaEcho(out) || detectQuotaEcho(stderr);
+      if (quotaEcho) {
         keepLog = true;
-        finish(() => reject(new QuotaError(req.model, quota)));
+        finish(() => reject(new QuotaError(req.model, quotaEcho)));
         return;
       }
 
-      if (code !== 0) {
-        keepLog = true;
-        finish(() =>
-          reject(new Error(stderr ? `agy failed: ${stderr}` : `agy exited with code ${code}.`)),
-        );
-        return;
-      }
-      if (!out) {
-        finish(() =>
-          reject(
-            new Error(
-              "agy returned empty output (likely hit its print-timeout without a response).",
+      // No valid answer on this exit path (a crash, or a silent print-timeout with
+      // empty stdout) — consult the log for a capacity error so a genuine crash on
+      // quota still fails over. A successful non-empty run never reaches here, so a
+      // transient capacity line already recovered from can't discard its answer and
+      // cool a healthy model (e.g. gemini-3.8-flash-high) off as "quota exhausted".
+      if (code !== 0 || !out) {
+        const logContent = await deps.readLog(logPath);
+        const quota = detectQuota(logContent);
+        if (quota) {
+          keepLog = true;
+          finish(() => reject(new QuotaError(req.model, quota)));
+        } else if (code !== 0) {
+          keepLog = true;
+          finish(() =>
+            reject(new Error(stderr ? `agy failed: ${stderr}` : `agy exited with code ${code}.`)),
+          );
+        } else {
+          finish(() =>
+            reject(
+              new Error(
+                "agy returned empty output (likely hit its print-timeout without a response).",
+              ),
             ),
-          ),
-        );
+          );
+        }
         return;
       }
+
       finish(() => resolve(out));
     });
   }).finally(() => {

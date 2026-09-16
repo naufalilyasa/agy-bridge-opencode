@@ -12,7 +12,7 @@ import {
   type RunnerDeps,
   type RunResult,
 } from "./runner.js";
-import { CooldownRegistry, QuotaError } from "./quota.js";
+import { CooldownRegistry, detectExecutionEcho, QuotaError } from "./quota.js";
 import {
   TOOLS,
   OMO_ROLES,
@@ -362,10 +362,7 @@ export function createToolHandler(
         );
       }
 
-      const isTerminatedOrError =
-        /(?:Agent execution terminated due to error|Error ID:|experiencing high traffic|RESOURCE_EXHAUSTED|UNAVAILABLE \(code 503\)|model is overloaded)/i.test(
-          result.output,
-        );
+      const isTerminatedOrError = detectExecutionEcho(result.output);
 
       if (isTerminatedOrError) {
         const errorText =

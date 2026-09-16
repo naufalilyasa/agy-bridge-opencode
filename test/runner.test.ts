@@ -241,6 +241,25 @@ describe("runAgy", () => {
     );
   });
 
+  it("returns a successful answer even when the run log holds a transient 429 line", async () => {
+    // agy recovered from a momentary capacity blip and produced a real answer:
+    // must NOT be discarded as quota or the healthy model gets cooled off.
+    const f = fakeDeps({ stdout: "real answer", exitCode: 0, log: LOG_429 });
+    const r = await runAgy(
+      { prompt: "q", cwd: "/repo", model: "gemini-3.8-flash-high" },
+      cfg,
+      f.deps,
+    );
+    expect(r.output).toBe("real answer");
+    expect(f.kills).toHaveLength(0);
+  });
+
+  it("does not treat quota text inside the answer itself as exhaustion", async () => {
+    const f = fakeDeps({ stdout: "The error was RESOURCE_EXHAUSTED (code 429).", exitCode: 0 });
+    const r = await runAgy({ prompt: "q", cwd: "/repo" }, cfg, f.deps);
+    expect(r.output).toContain("RESOURCE_EXHAUSTED");
+  });
+
   it("throws install guidance on ENOENT", async () => {
     const e = new Error("spawn agy ENOENT") as NodeJS.ErrnoException;
     e.code = "ENOENT";

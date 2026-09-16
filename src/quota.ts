@@ -50,12 +50,44 @@ export function detectQuota(log: string): QuotaInfo | null {
     ? parseResetDuration(reset)
     : log.toLowerCase().includes("high traffic") ||
         log.toLowerCase().includes("overloaded") ||
+        log.toLowerCase().includes("unavailable") ||
         log.toLowerCase().includes("terminated due to error") ||
         log.toLowerCase().includes("error id:")
       ? 60
       : undefined;
   const resetText = resetSeconds !== undefined ? reset || formatDuration(resetSeconds) : undefined;
   return { resetText, resetSeconds };
+}
+
+// A capacity error agy echoes as its ENTIRE output starts with the glog severity
+// stamp ("E0613 ...") or the error token itself ("RESOURCE_EXHAUSTED ...",
+// "UNAVAILABLE (code 503) ..."). A real answer that merely quotes one of those
+// tokens in prose does NOT. Anchoring + a terse/single-line shape guard keep a
+// legitimate (often quota-debugging) answer from being mistaken for exhaustion.
+const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
+const CAPACITY_ECHO_RE =
+  /^(?:[EWIF]\d{4}\s|RESOURCE_EXHAUSTED\b|UNAVAILABLE\b|model is overloaded|experiencing high traffic|rate limit exceeded)/i;
+
+export function detectQuotaEcho(text: string): QuotaInfo | null {
+  const t = (text ?? "").replace(ANSI_RE, "").trim();
+  if (!t || !CAPACITY_ECHO_RE.test(t)) return null;
+  // Only a glog-stamped line or a short single-paragraph error is an echo; a
+  // multi-paragraph answer that merely opens with one of these tokens is not.
+  if (!/^([EWIF]\d{4}\s|Error ID:)/.test(t) && (t.includes("\n\n") || t.length > 240)) return null;
+  return detectQuota(t);
+}
+
+// agy surfaces a genuine execution error ("Error ID:", "Agent execution
+// terminated due to error") as its whole stdout. Anchored so a real answer that
+// quotes one of these mid-prose is not flipped into a failure.
+export function detectExecutionEcho(text: string): boolean {
+  const t = (text ?? "").replace(ANSI_RE, "").trim();
+  if (!/^(?:[EWIF]\d{4}\s)?(?:Error ID:|Agent execution terminated due to error)/i.test(t))
+    return false;
+  // Same terse guard as the capacity echo: a real answer that merely starts by
+  // quoting "Error ID:" and then explains it in paragraphs is not a failure.
+  if (!/^[EWIF]\d{4}\s/.test(t) && (t.includes("\n\n") || t.length > 240)) return false;
+  return true;
 }
 
 export class QuotaError extends Error {

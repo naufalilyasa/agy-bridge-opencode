@@ -3,6 +3,8 @@ import {
   parseResetDuration,
   formatDuration,
   detectQuota,
+  detectQuotaEcho,
+  detectExecutionEcho,
   QuotaError,
   CooldownRegistry,
   DEFAULT_COOLDOWN_SEC,
@@ -100,5 +102,40 @@ describe("CooldownRegistry", () => {
     const reg = new CooldownRegistry(() => 0);
     reg.set("ModelA", 3661);
     expect(reg.describe("ModelA")).toBe("1h1m1s");
+  });
+});
+
+describe("detectQuotaEcho", () => {
+  it("flags a bare capacity error echoed as the whole output", () => {
+    expect(detectQuotaEcho("UNAVAILABLE (code 503): model is overloaded, experiencing high traffic")).not.toBeNull();
+    expect(detectQuotaEcho(LOG_429)).not.toBeNull();
+  });
+  it("strips ANSI color before anchoring", () => {
+    expect(detectQuotaEcho("\x1b[31mRESOURCE_EXHAUSTED (code 429): quota reached\x1b[0m")).not.toBeNull();
+  });
+  it("ignores a real answer that only quotes the token in prose", () => {
+    expect(detectQuotaEcho("The error was RESOURCE_EXHAUSTED (code 429) in the docs.")).toBeNull();
+    expect(detectQuotaEcho("Use UNAVAILABLE here to signal retries.")).toBeNull();
+  });
+  it("ignores a multi-paragraph answer that merely opens with a quota token", () => {
+    expect(
+      detectQuotaEcho("Rate limit exceeded is common.\n\nHandle it with backoff and jitter."),
+    ).toBeNull();
+    expect(detectQuotaEcho("model is overloaded\n\nsecond paragraph of real content here")).toBeNull();
+  });
+  it("returns null on empty", () => {
+    expect(detectQuotaEcho("   ")).toBeNull();
+  });
+  it("still flags a capacity error wrapped across two lines", () => {
+    expect(detectQuotaEcho("RESOURCE_EXHAUSTED (code 429)\nDetails: quota reached")).not.toBeNull();
+  });
+});
+
+describe("detectExecutionEcho", () => {
+  it("flags agy's whole-output execution error", () => {
+    expect(detectExecutionEcho("Error ID: 12345\nAgent execution terminated due to error")).toBe(true);
+  });
+  it("ignores a real answer that opens by quoting an error then explains it", () => {
+    expect(detectExecutionEcho("Error ID: X indicates a fault.\n\nUsually it means retry.")).toBe(false);
   });
 });
