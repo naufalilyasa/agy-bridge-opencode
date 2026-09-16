@@ -461,6 +461,140 @@ export function replayPageInto(
   }
 }
 
+// ─── Left-Pane Header (C4) ───────────────────────────────────────────────────
+
+export interface LeftPaneHeaderOpts {
+  sessionId: string;
+  projectDir?: string;
+  model?: string;
+  state?: SessionState | string;
+  followingChildId?: string | null;
+}
+
+export function formatLeftPaneHeader(opts: LeftPaneHeaderOpts): {
+  info: string;
+  pill: string;
+  pillFg: string;
+  fullText: string;
+} {
+  const sid8 = (opts.sessionId || "").slice(0, 8);
+  const proj =
+    opts.projectDir && opts.projectDir !== "(Unbound session)"
+      ? path.basename(opts.projectDir)
+      : "Unbound";
+  const model = opts.model || "Gemini 3.7 Flash";
+  const state = (opts.state || "unknown").toLowerCase();
+
+  let pill = "? UNKNOWN";
+  let pillFg = "#6b7280";
+
+  switch (state) {
+    case "running":
+      pill = opts.followingChildId ? "● RUN (child)" : "● RUNNING";
+      pillFg = "#4ade80";
+      break;
+    case "idle":
+      pill = "○ IDLE";
+      pillFg = "#94a3b8";
+      break;
+    case "stuck":
+      pill = "▲ STUCK";
+      pillFg = "#fbbf24";
+      break;
+    case "killed":
+      pill = "✕ KILLED";
+      pillFg = "#ef4444";
+      break;
+    case "unknown":
+    default:
+      pill = "? UNKNOWN";
+      pillFg = "#6b7280";
+      break;
+  }
+
+  const info = `${sid8} · ${proj} · ${model}`;
+  const fullText = ` ${info} ${pill} `;
+  return { info, pill, pillFg, fullText };
+}
+
+function getRenderableText(node: any): string {
+  if (!node) return "";
+  if (Array.isArray(node.chunks)) {
+    return node.chunks.map((c: any) => c.text ?? "").join("");
+  }
+  if (Array.isArray(node.content?.chunks)) {
+    return node.content.chunks.map((c: any) => c.text ?? "").join("");
+  }
+  return String(node.content ?? "");
+}
+
+export function buildLeftPaneHeader(
+  renderer: any,
+  opts: LeftPaneHeaderOpts,
+): BoxRenderable {
+  const formatted = formatLeftPaneHeader(opts);
+  const hdr = new BoxRenderable(renderer, {
+    width: "100%",
+    height: 1,
+    backgroundColor: "#1a1a2e",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingX: 1,
+    gap: 1,
+    overflow: "hidden",
+  });
+
+  const infoTxt = new TextRenderable(renderer, {
+    content: formatted.info,
+    fg: "#94a3b8",
+  });
+
+  const pillTxt = new TextRenderable(renderer, {
+    content: formatted.pill,
+    fg: formatted.pillFg as any,
+    attributes: BOLD_ATTR,
+  });
+
+  hdr.add(infoTxt);
+  hdr.add(pillTxt);
+
+  Object.defineProperty(hdr, "text", {
+    get() {
+      const iText = getRenderableText(infoTxt);
+      const pText = getRenderableText(pillTxt);
+      return ` ${iText} ${pText} `;
+    },
+    configurable: true,
+  });
+  Object.defineProperty(hdr, "content", {
+    get() {
+      return (hdr as any).text;
+    },
+    configurable: true,
+  });
+
+  return hdr;
+}
+
+export function updateLeftPaneHeader(
+  hdr: BoxRenderable,
+  opts: LeftPaneHeaderOpts,
+): void {
+  if (!hdr || (hdr as any).isDestroyed) return;
+  const formatted = formatLeftPaneHeader(opts);
+  const children = (hdr as any).getChildren?.() || [];
+  const infoTxt = children[0] as TextRenderable | undefined;
+  const pillTxt = children[1] as TextRenderable | undefined;
+
+  if (infoTxt && !(infoTxt as any).isDestroyed) {
+    infoTxt.content = formatted.info;
+  }
+  if (pillTxt && !(pillTxt as any).isDestroyed) {
+    pillTxt.content = formatted.pill;
+    pillTxt.fg = formatted.pillFg as any;
+  }
+}
+
 export function unescapeCodeString(str: any): string {
   if (!str || typeof str !== "string") return "";
   let clean = str;
@@ -1490,10 +1624,105 @@ export function runSelfTest(): void {
     "T4 flood QA: 500-line output appends to card item lines while transcript root child-count delta < 5",
   );
 
+  // 38. T5 Left-pane header line (C4) assertions
+  const testRenderer5: any = {
+    requestRender: () => {},
+    registerLifecyclePass: () => {},
+    unregisterLifecyclePass: () => {},
+  };
+  const testLeftPane = new BoxRenderable(testRenderer5, {
+    flexDirection: "column",
+    flexGrow: 1,
+    height: "100%",
+    overflow: "hidden",
+  });
+  const testScrollBox = new BoxRenderable(testRenderer5, { flexGrow: 1 });
+  const testFooterBar = new BoxRenderable(testRenderer5, { height: 1 });
+
+  const fixtureSession5 = {
+    id: "f83a1b2c-9012-3456-789a-bcdef0123456",
+    projectDir: "/Users/dev/workspace/my-project",
+    model: "gemini-3.7-flash",
+  };
+
+  const headerBox5 = buildLeftPaneHeader(testRenderer5, {
+    sessionId: fixtureSession5.id,
+    projectDir: fixtureSession5.projectDir,
+    model: fixtureSession5.model,
+    state: "running",
+  });
+
+  testLeftPane.add(headerBox5);
+  testLeftPane.add(testScrollBox);
+  testLeftPane.add(testFooterBar);
+
+  const headerNode5 = (testLeftPane.getChildren() as any[])[0];
+  assertTest(
+    headerNode5 === headerBox5,
+    "T5: header node exists as first child of leftPane",
+  );
+  assertTest(
+    headerNode5.text.includes("f83a1b2c"),
+    "T5: header text contains session id (first 8 chars) after fixture session start",
+  );
+  assertTest(
+    headerNode5.text.includes("my-project"),
+    "T5: header text contains project basename",
+  );
+  assertTest(
+    headerNode5.text.includes("gemini-3.7-flash"),
+    "T5: header text contains model",
+  );
+  assertTest(
+    headerNode5.text.includes("RUNNING"),
+    "T5: header text contains running state pill",
+  );
+
+  // Adversarial check: state change updates header (anti-stale-state)
+  updateLeftPaneHeader(headerBox5, {
+    sessionId: fixtureSession5.id,
+    projectDir: fixtureSession5.projectDir,
+    model: fixtureSession5.model,
+    state: "killed",
+  });
+
+  assertTest(
+    headerNode5.text.includes("KILLED") && !headerNode5.text.includes("RUNNING"),
+    "T5 (stale_state): header text reflects new state (KILLED) after fixture state change, not stale state",
+  );
+
+  // Failure scenario: teardown / destruction does not throw
+  let teardownException5 = false;
+  try {
+    destroyRenderable(testLeftPane);
+    updateLeftPaneHeader(headerBox5, {
+      sessionId: fixtureSession5.id,
+      projectDir: fixtureSession5.projectDir,
+      model: fixtureSession5.model,
+      state: "unknown",
+    });
+  } catch {
+    teardownException5 = true;
+  }
+  assertTest(!teardownException5, "T5: header pill text updates/teardown executes without throwing");
+
+  // Production wiring assertions
+  const paneHdrAddIdx = selfSource.indexOf("leftPane.add(leftPaneHdr)");
+  const scrollBoxAddIdx = selfSource.indexOf("leftPane.add(scrollBox)");
+  assertTest(
+    paneHdrAddIdx !== -1 && scrollBoxAddIdx !== -1 && paneHdrAddIdx < scrollBoxAddIdx,
+    "T5 (wiring): leftPaneHdr is added to leftPane before scrollBox",
+  );
+  assertTest(
+    selfSource.includes("updateLeftPaneHeader(leftPaneHdr,"),
+    "T5 (wiring): updateLeftPaneHeader is wired into updateLiveLabel",
+  );
+
   console.log("✔ deriveSessionState self-tests passed (25 assertions).");
   console.log("✔ pushCard Box self-test passed (1 assertion).");
   console.log("✔ PageItem card replay & domBoxes self-tests passed (5 assertions).");
   console.log("✔ routeStep & applyRouteAction FIFO cards self-tests passed (9 assertions).");
+  console.log("✔ left-pane header line self-tests passed (9 assertions).");
 }
 
 export function runDbTest(): void {
@@ -1770,6 +1999,20 @@ async function main() {
     overflow: "hidden",
   });
 
+  const initialSummary = summaryReader.getSummary(currentSession.id);
+  const initialLiveMs = getTranscriptLiveMs(currentSession.id);
+  const initialState = deriveSessionState(initialSummary, {
+    now: Date.now(),
+    liveMs: initialLiveMs,
+  });
+
+  const leftPaneHdr = buildLeftPaneHeader(renderer, {
+    sessionId: currentSession.id,
+    projectDir: currentSession.projectDir,
+    model: currentSession.model,
+    state: initialState,
+  });
+
   const scrollBox = new ScrollBoxRenderable(renderer, {
     flexGrow: 1,
     width: "100%",
@@ -1811,6 +2054,7 @@ async function main() {
   footerBar.add(statusTxt);
   footerBar.add(liveTxt);
 
+  leftPane.add(leftPaneHdr);
   leftPane.add(scrollBox);
   leftPane.add(footerBar);
 
@@ -2127,6 +2371,13 @@ async function main() {
     if (pageMode) {
       liveTxt.content = `[PAGE ${pageIndex + 1}/${pages.length}]`;
       liveTxt.fg = "#fbbf24" as any;
+      updateLeftPaneHeader(leftPaneHdr, {
+        sessionId: currentSession.id,
+        projectDir: currentSession.projectDir,
+        model: currentModel || currentSession.model,
+        state: currentDerivedState,
+        followingChildId,
+      });
       return;
     }
 
@@ -2156,6 +2407,14 @@ async function main() {
         liveTxt.fg = "#6b7280" as any;
         break;
     }
+
+    updateLeftPaneHeader(leftPaneHdr, {
+      sessionId: currentSession.id,
+      projectDir: currentSession.projectDir,
+      model: currentModel || currentSession.model,
+      state: currentDerivedState,
+      followingChildId,
+    });
   }
 
   let isAppDestroyed = false;
@@ -3689,6 +3948,7 @@ async function main() {
   // ── Start ───────────────────────────────────────────────────────────────────────
   startSpinner("Loading session history...");
   fetchLiveQuotaAsync();
+  updateSidebar();
   const pollInterval = setInterval(poll, 100);
   renderer.once("destroy", () => {
     isAppDestroyed = true;
