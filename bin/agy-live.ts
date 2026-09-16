@@ -343,7 +343,7 @@ export function destroyRenderable(r: Renderable) {
 }
 
 export type PageItem =
-  | { kind: "line"; text: string; fg?: string }
+  | { kind: "line"; text: string; fg?: string; bg?: string }
   | { kind: "card"; accent: string; lines: { text: string; fg?: string; isTitle?: boolean }[] };
 
 export const domBoxes = new WeakMap<PageItem, BoxRenderable>();
@@ -448,6 +448,7 @@ export function replayPageInto(
   for (const item of items) {
     if (item.kind === "line") {
       const opts: any = { content: item.text, fg: item.fg, wrapMode: "none", width: "100%" };
+      if (item.bg) opts.bg = item.bg;
       parent.add(new TextRenderable(renderer, opts));
     } else if (item.kind === "card") {
       buildCardBox(renderer, parent, {
@@ -737,7 +738,15 @@ export function runSelfTest(): void {
   };
   const replayedLine1: PageItem = { kind: "line", text: "Line 1", fg: "#d1d5db" };
   const replayedLine2: PageItem = { kind: "line", text: "Line 2", fg: "#d1d5db" };
-  const testPages: PageItem[][] = [[replayedCardItem, replayedLine1, replayedLine2]];
+  const replayedLineWithBg: PageItem = {
+    kind: "line",
+    text: "Line with bg",
+    fg: "#ffffff",
+    bg: STYLE.CARD_BG,
+  };
+  const testPages: PageItem[][] = [
+    [replayedCardItem, replayedLine1, replayedLine2, replayedLineWithBg],
+  ];
 
   const replayRoot: any = {
     width: 80,
@@ -780,6 +789,25 @@ export function runSelfTest(): void {
     "PageItem preserves per-line fg values intact across replay",
   );
 
+  const replayedBgTr = replayRoot.children[3];
+  const replayedNoBgTr = replayRoot.children[1];
+  const isTextCardBg =
+    replayedBgTr &&
+    ((replayedBgTr as any).bg === STYLE.CARD_BG ||
+      (replayedBgTr as any).backgroundColor === STYLE.CARD_BG ||
+      (typeof (replayedBgTr as any).bg?.equals === "function" &&
+        (replayedBgTr as any).bg.equals(parseColor(STYLE.CARD_BG))));
+  const hasNoBg =
+    replayedNoBgTr &&
+    (!(replayedNoBgTr as any).bg ||
+      (replayedNoBgTr as any).bg.a === 0 ||
+      !(replayedNoBgTr as any).bg.equals?.(parseColor(STYLE.CARD_BG)));
+
+  assertTest(
+    Boolean(isTextCardBg && hasNoBg),
+    "PageItem line background survives replay with STYLE.CARD_BG while unstyled lines have no bg set",
+  );
+
   // 28. T3 prune-safety: cardAppend with destroyed box
   const liveCardItem: PageItem = {
     kind: "card",
@@ -818,7 +846,7 @@ export function runSelfTest(): void {
 
   console.log("✔ deriveSessionState self-tests passed (25 assertions).");
   console.log("✔ pushCard Box self-test passed (1 assertion).");
-  console.log("✔ PageItem card replay & domBoxes self-tests passed (4 assertions).");
+  console.log("✔ PageItem card replay & domBoxes self-tests passed (5 assertions).");
 }
 
 export function runDbTest(): void {
@@ -1697,7 +1725,7 @@ async function main() {
 
   // ── Log push ──────────────────────────────────────────────────────────────────
   function pushLine(txt: string, fg = "#d1d5db", bg?: string) {
-    recordPageItem({ kind: "line", text: txt, fg });
+    recordPageItem({ kind: "line", text: txt, fg, bg });
     if (pageMode) return; // viewing an old page — record only, DOM untouched
     const formatted = formatMarkdownLinks(txt);
     const clean = stripAnsi(formatted) || " ";
