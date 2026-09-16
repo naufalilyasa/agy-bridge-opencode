@@ -35,7 +35,7 @@ const CONVERSATION_DB_PATH = path.join(
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const BOLD_ATTR = createTextAttributes({ bold: true });
 
-export const DEFAULT_STALE_MS = 60_000;
+export const DEFAULT_STALE_MS = 90_000;
 
 // Perf guards: bound per-tick file reads and per-step rendering so a giant
 // transcript / giant single step can't allocate huge buffers or create tens of
@@ -92,9 +92,42 @@ export function parseSqliteDate(val: unknown): number {
   return 0;
 }
 
+const transcriptLiveCache = new Map<string, { mtimeMs: number | undefined; at: number }>();
+const TRANSCRIPT_LIVE_TTL_MS = 1000;
+
+export function getTranscriptLiveMs(
+  conversationId: string,
+  now = Date.now(),
+): number | undefined {
+  if (!conversationId) return undefined;
+  // #4 perf: memoize per conversation so per-descendant liveness checks don't fire
+  // a fresh statSync for every session on every 250ms UI tick. Cache the ABSOLUTE
+  // mtime (not the relative age) so the returned age stays correct as `now` advances;
+  // the `now >= hit.at` guard rejects clock-skew-backwards cache hits.
+  const hit = transcriptLiveCache.get(conversationId);
+  if (hit && now >= hit.at && now - hit.at < TRANSCRIPT_LIVE_TTL_MS) {
+    return hit.mtimeMs === undefined ? undefined : Math.max(0, now - hit.mtimeMs);
+  }
+  const logPath = path.join(
+    BRAIN_DIR,
+    conversationId,
+    ".system_generated",
+    "logs",
+    "transcript.jsonl",
+  );
+  let mtimeMs: number | undefined;
+  try {
+    mtimeMs = fs.statSync(logPath).mtimeMs;
+  } catch {
+    mtimeMs = undefined;
+  }
+  transcriptLiveCache.set(conversationId, { mtimeMs, at: now });
+  return mtimeMs === undefined ? undefined : Math.max(0, now - mtimeMs);
+}
+
 export function deriveSessionState(
   row: ConversationSummaryRow | null | undefined,
-  opts?: { now?: number; staleMs?: number; liveMs?: number },
+  opts?: { now?: number; staleMs?: number; liveMs?: number; inFlight?: boolean },
 ): SessionState {
   if (!row) return "unknown";
   if (row.killed) return "killed";
@@ -104,17 +137,25 @@ export function deriveSessionState(
   const now = opts?.now ?? Date.now();
   const staleMs = opts?.staleMs ?? DEFAULT_STALE_MS;
   const liveMs = opts?.liveMs;
+  const inFlight = Boolean(opts?.inFlight);
   const isTranscriptFresh = liveMs != null && liveMs < staleMs;
 
   const isBusy =
     notFullyIdle ||
     (status !== "" && status !== "CASCADE_RUN_STATUS_IDLE") ||
-    isTranscriptFresh;
+    isTranscriptFresh ||
+    inFlight;
 
   if (isBusy) {
     const modTime = parseSqliteDate(row.last_modified_time);
-    const isDbFresh = modTime > 0 && (now - modTime) < staleMs;
-    if (isDbFresh || isTranscriptFresh || modTime <= 0) {
+    const dbAge = now - modTime;
+    // #8: a future DB timestamp (clock skew) must not look "fresh".
+    const isDbFresh = modTime > 0 && dbAge >= 0 && dbAge < staleMs;
+    // #2: an unset/zero last_modified_time only implies "running" when we have NO
+    // transcript signal. With a known transcript age, staleness wins — otherwise a
+    // dead child row stays "running" forever and the auto-follow locks onto it.
+    const unknownDbOnly = liveMs === undefined && modTime <= 0;
+    if (isDbFresh || isTranscriptFresh || inFlight || unknownDbOnly) {
       return "running";
     }
     return "stuck";
@@ -289,7 +330,7 @@ export function runSelfTest(): void {
     "parseSqliteDate naive string",
   );
   assertTest(
-    parseSqliteDate("2026-09-15T16:46:13Z") === Date.parse("2026-09-15T16:46:13Z"),
+    parseSqliteDate("2026-09-15 16:46:13Z") === Date.parse("2026-09-15T16:46:13Z"),
     "parseSqliteDate ISO string",
   );
   assertTest(parseSqliteDate("0001-01-01 00:00:00+00:00") === 0, "parseSqliteDate zero date");
@@ -324,7 +365,7 @@ export function runSelfTest(): void {
   );
   assertTest(s2b === "running", `Expected running on fresh transcript live stream, got ${s2b}`);
 
-  // 4. Idle
+  // 4a. Idle
   const s3 = deriveSessionState(
     {
       conversation_id: "3",
@@ -334,6 +375,30 @@ export function runSelfTest(): void {
     { now, staleMs },
   );
   assertTest(s3 === "idle", `Expected idle, got ${s3}`);
+
+  // 4b. Idle with stale transcript (real mtime > staleMs) -> remains idle
+  const s3b = deriveSessionState(
+    {
+      conversation_id: "3b",
+      status: "CASCADE_RUN_STATUS_IDLE",
+      not_fully_idle: 0,
+      last_modified_time: new Date(now - 120_000).toISOString(),
+    },
+    { now, staleMs, liveMs: 120_000 },
+  );
+  assertTest(s3b === "idle", `Expected idle for idle status with stale transcript, got ${s3b}`);
+
+  // 4c. Idle status with fresh transcript (turn streaming before DB commit) -> running
+  const s3c = deriveSessionState(
+    {
+      conversation_id: "3c",
+      status: "CASCADE_RUN_STATUS_IDLE",
+      not_fully_idle: 0,
+      last_modified_time: new Date(now - 120_000).toISOString(),
+    },
+    { now, staleMs, liveMs: 2000 },
+  );
+  assertTest(s3c === "running", `Expected running for fresh transcript write, got ${s3c}`);
 
   // 5. Busy-stale = stuck (DB stale AND transcript live stream stale)
   const s4 = deriveSessionState(
@@ -359,7 +424,7 @@ export function runSelfTest(): void {
   );
   assertTest(s5 === "unknown", `Expected unknown, got ${s5}`);
 
-  // 7. Fresh busy with blank status = running
+  // 7a. Fresh busy with blank status = running
   const s6 = deriveSessionState(
     {
       conversation_id: "6",
@@ -371,11 +436,104 @@ export function runSelfTest(): void {
   );
   assertTest(s6 === "running", `Expected running, got ${s6}`);
 
+  // 7b. Descendant child with blank status & fresh transcript -> running (auto-follow trigger)
+  const s6b = deriveSessionState(
+    {
+      conversation_id: "6b",
+      status: "",
+      not_fully_idle: 0,
+      last_modified_time: new Date(now - 300_000).toISOString(),
+    },
+    { now, staleMs, liveMs: 4000 },
+  );
+  assertTest(s6b === "running", `Expected running for active child with fresh transcript, got ${s6b}`);
+
+  // 7c. Descendant child with blank status & stale transcript -> unknown (not running)
+  const s6c = deriveSessionState(
+    {
+      conversation_id: "6c",
+      status: "",
+      not_fully_idle: 0,
+      last_modified_time: new Date(now - 300_000).toISOString(),
+    },
+    { now, staleMs, liveMs: 300_000 },
+  );
+  assertTest(s6c === "unknown", `Expected unknown for idle child with stale transcript, got ${s6c}`);
+
   // 8. Null row = unknown
   const s7 = deriveSessionState(null, { now, staleMs });
   assertTest(s7 === "unknown", `Expected unknown for null, got ${s7}`);
 
-  console.log("✔ deriveSessionState self-tests passed (14 assertions).");
+  // 9. getTranscriptLiveMs helper checks
+  assertTest(getTranscriptLiveMs("") === undefined, "getTranscriptLiveMs empty id returns undefined");
+  assertTest(
+    getTranscriptLiveMs("non-existent-uuid-test") === undefined,
+    "getTranscriptLiveMs missing file returns undefined",
+  );
+
+  // 10. inFlight overrides stale transcript mtime to running
+  const s8 = deriveSessionState(
+    {
+      conversation_id: "8",
+      status: "CASCADE_RUN_STATUS_IDLE",
+      not_fully_idle: 0,
+      last_modified_time: new Date(now - 120_000).toISOString(),
+    },
+    { now, staleMs, liveMs: 120_000, inFlight: true },
+  );
+  assertTest(
+    s8 === "running",
+    `Expected running for inFlight session with stale transcript, got ${s8}`,
+  );
+
+  const s8b = deriveSessionState(
+    {
+      conversation_id: "8b",
+      status: "",
+      not_fully_idle: 0,
+      last_modified_time: new Date(now - 300_000).toISOString(),
+    },
+    { now, staleMs, liveMs: 300_000, inFlight: true },
+  );
+  assertTest(
+    s8b === "running",
+    `Expected running for inFlight session with blank status, got ${s8b}`,
+  );
+
+  const s8c = deriveSessionState(
+    {
+      conversation_id: "8c",
+      killed: 1,
+    },
+    { now, staleMs, inFlight: true },
+  );
+  assertTest(s8c === "killed", `Expected killed taking precedence over inFlight, got ${s8c}`);
+
+  const sZero = deriveSessionState(
+    {
+      conversation_id: "zero",
+      status: "CASCADE_RUN_STATUS_RUNNING",
+      last_modified_time: "0001-01-01 00:00:00",
+      killed: 0,
+      not_fully_idle: 0,
+    },
+    { now, staleMs, liveMs: staleMs * 5 },
+  );
+  assertTest(sZero === "stuck", `Expected stuck for zero-date + stale transcript, got ${sZero}`);
+
+  const sFuture = deriveSessionState(
+    {
+      conversation_id: "skew",
+      status: "CASCADE_RUN_STATUS_RUNNING",
+      last_modified_time: new Date(now + staleMs * 4).toISOString(),
+      killed: 0,
+      not_fully_idle: 0,
+    },
+    { now, staleMs, liveMs: staleMs * 5 },
+  );
+  assertTest(sFuture === "stuck", `Expected stuck for future DB timestamp, got ${sFuture}`);
+
+  console.log("✔ deriveSessionState self-tests passed (25 assertions).");
 }
 
 export function runDbTest(): void {
@@ -388,7 +546,9 @@ export function runDbTest(): void {
     console.error(`❌ Failed to read most-recent row from: ${CONVERSATION_DB_PATH}`);
     process.exit(1);
   }
-  const state = deriveSessionState(row, { now: Date.now() });
+  const now = Date.now();
+  const liveMs = getTranscriptLiveMs(row.conversation_id, now);
+  const state = deriveSessionState(row, { now, liveMs });
   console.log(`✔ DB read success (readonly):`);
   console.log(`  conversation_id: ${row.conversation_id}`);
   console.log(`  title:           ${row.title || "(no title)"}`);
@@ -400,6 +560,51 @@ export function runDbTest(): void {
   console.log(`  descendants:     ${descendants.length} found`);
 }
 
+export function runStateQuery(targetId: string): void {
+  if (!targetId) {
+    console.error("❌ Missing session ID");
+    process.exit(1);
+  }
+  let resolvedId = targetId;
+  let row = summaryReader.getSummary(resolvedId);
+  if (!row) {
+    if (fs.existsSync(BRAIN_DIR)) {
+      const dirs = fs.readdirSync(BRAIN_DIR);
+      // #5: exact hit wins; otherwise collect every prefix match and refuse to guess
+      // when a short prefix is ambiguous (two sessions can share an 8-char prefix).
+      const matches = dirs.filter((d) => d === targetId || d.startsWith(targetId));
+      const exact = matches.find((d) => d === targetId);
+      const candidates = exact ? [exact] : matches;
+      if (candidates.length > 1) {
+        console.error(`❌ Ambiguous prefix '${targetId}' matches ${candidates.length} sessions:`);
+        for (const c of candidates.slice(0, 10)) console.error(`   ${c}`);
+        process.exit(1);
+      }
+      if (candidates.length === 1) {
+        resolvedId = candidates[0];
+        row = summaryReader.getSummary(resolvedId);
+      }
+    }
+  }
+  if (!row) {
+    console.error(`❌ Session not found in DB or brain: ${targetId}`);
+    process.exit(1);
+  }
+
+  const now = Date.now();
+  const liveMs = getTranscriptLiveMs(resolvedId, now);
+  const state = deriveSessionState(row, { now, liveMs });
+  const ageSec = liveMs != null ? `${(liveMs / 1000).toFixed(1)}s` : "missing";
+
+  console.log(`conversation_id: ${resolvedId}`);
+  console.log(`title:           ${row.title || "(no title)"}`);
+  console.log(`status:          ${row.status || "(empty)"}`);
+  console.log(`not_fully_idle:  ${row.not_fully_idle ?? 0}`);
+  console.log(`last_modified:   ${row.last_modified_time || "(none)"}`);
+  console.log(`transcript_age:  ${ageSec}`);
+  console.log(`derived_state:   ${state}`);
+}
+
 if (process.argv.includes("--selftest")) {
   runSelfTest();
   process.exit(0);
@@ -407,6 +612,17 @@ if (process.argv.includes("--selftest")) {
 
 if (process.argv.includes("--dbtest")) {
   runDbTest();
+  process.exit(0);
+}
+
+const stateIdx = process.argv.indexOf("--state");
+if (stateIdx !== -1) {
+  const argId = process.argv[stateIdx + 1];
+  if (!argId || argId.startsWith("-")) {
+    console.error("❌ Usage: agy-live --state <conversation_id>");
+    process.exit(1);
+  }
+  runStateQuery(argId);
   process.exit(0);
 }
 
@@ -699,37 +915,13 @@ async function main() {
   const vTitleBox = new BoxRenderable(renderer, { width: "100%", flexDirection: "column" });
   vTitleBox.add(new TextRenderable(renderer, { content: "📌 Title:", fg: "#94a3b8" }));
   const vTitleVal1 = new TextRenderable(renderer, { content: "  —", fg: "#f472b6" });
-  const vTitleVal2 = new TextRenderable(renderer, { content: "", fg: "#f472b6" });
   vTitleBox.add(vTitleVal1);
-  vTitleBox.add(vTitleVal2);
   sidebar.add(vTitleBox);
 
   const vState = addSbRow("⚡ State:", "#4ade80");
-
-  const vProjBox = new BoxRenderable(renderer, { width: "100%", flexDirection: "column" });
-  vProjBox.add(new TextRenderable(renderer, { content: "📁 Project:", fg: "#94a3b8" }));
-  const vProjVal1 = new TextRenderable(renderer, { content: "  —", fg: "#4ade80" });
-  const vProjVal2 = new TextRenderable(renderer, { content: "", fg: "#4ade80" });
-  vProjBox.add(vProjVal1);
-  vProjBox.add(vProjVal2);
-  sidebar.add(vProjBox);
-
-  const vSessBox = new BoxRenderable(renderer, { width: "100%", flexDirection: "column" });
-  vSessBox.add(new TextRenderable(renderer, { content: "🆔 Session:", fg: "#94a3b8" }));
-  const vSessVal1 = new TextRenderable(renderer, { content: "  —", fg: "#67e8f9" });
-  const vSessVal2 = new TextRenderable(renderer, { content: "", fg: "#67e8f9" });
-  vSessBox.add(vSessVal1);
-  vSessBox.add(vSessVal2);
-  sidebar.add(vSessBox);
-
-  const vModelBox = new BoxRenderable(renderer, { width: "100%", flexDirection: "column" });
-  vModelBox.add(new TextRenderable(renderer, { content: "🤖 Model:", fg: "#94a3b8" }));
-  const vModelVal1 = new TextRenderable(renderer, { content: "  —", fg: "#fbbf24" });
-  const vModelVal2 = new TextRenderable(renderer, { content: "", fg: "#fbbf24" });
-  vModelBox.add(vModelVal1);
-  vModelBox.add(vModelVal2);
-  sidebar.add(vModelBox);
-
+  const vProj = addSbRow("📁 Project:", "#4ade80");
+  const vSess = addSbRow("🆔 Session:", "#67e8f9");
+  const vModel = addSbRow("🤖 Model:", "#fbbf24");
   const vSteps = addSbRow("🔢 Steps:", "#e2e8f0");
   const vSize = addSbRow("📄 Size:", "#e2e8f0");
   const vAge = addSbRow("🕒 Updated:", "#e2e8f0");
@@ -800,10 +992,16 @@ async function main() {
   let rootWatchedSession = currentSession;
   let followingChildId: string | null = null;
   let userPinned = false;
+  let pinnedSawActive = false; // #3: only auto-unpin a pinned session that actually ran
+  let lastDescendantScanMs = 0; // #4: throttle the descendant CTE scan
+  let cachedDescendants: ConversationSummaryRow[] = [];
   let currentSummaryRow: ConversationSummaryRow | null = summaryReader.getSummary(
     rootWatchedSession.id,
   );
-  let currentDerivedState: SessionState = deriveSessionState(currentSummaryRow);
+  let currentDerivedState: SessionState = deriveSessionState(currentSummaryRow, {
+    now: Date.now(),
+    liveMs: getTranscriptLiveMs(rootWatchedSession.id),
+  });
   let lastDbCheckMs = 0;
 
   let currentPos = 0,
@@ -1003,13 +1201,7 @@ async function main() {
         ? path.basename(currentSession.projectDir)
         : currentModel || "Antigravity Session");
 
-    if (titleStr.length > 28) {
-      vTitleVal1.content = "  " + titleStr.slice(0, 28);
-      vTitleVal2.content = "  " + titleStr.slice(28, 56);
-    } else {
-      vTitleVal1.content = "  " + titleStr;
-      vTitleVal2.content = "";
-    }
+    vTitleVal1.content = "  " + (titleStr.length > 28 ? titleStr.slice(0, 27) + "…" : titleStr);
 
     switch (currentDerivedState) {
       case "running":
@@ -1039,39 +1231,22 @@ async function main() {
       currentSession.projectDir !== "(Unbound session)"
         ? path.basename(currentSession.projectDir)
         : "Unbound";
-
-    if (folder.length > 28) {
-      vProjVal1.content = "  " + folder.slice(0, 28);
-      vProjVal2.content = "  " + folder.slice(28);
-    } else {
-      vProjVal1.content = "  " + folder;
-      vProjVal2.content = "";
-    }
+    vProj.content = folder.length > 18 ? folder.slice(0, 17) + "…" : folder;
 
     const sessId = currentSession.id;
     if (followingChildId) {
-      vSessVal1.content = `  ↳ ${sessId.slice(0, 8)} (sub)`;
-      vSessVal2.content = `  [parent ${rootWatchedSession.id.slice(0, 8)}]`;
-    } else if (sessId.length > 18) {
-      vSessVal1.content = "  " + sessId.slice(0, 18);
-      vSessVal2.content = "  " + sessId.slice(18);
+      vSess.content = `↳ ${sessId.slice(0, 8)} (sub)`;
     } else {
-      vSessVal1.content = "  " + sessId;
-      vSessVal2.content = "";
+      vSess.content = sessId.slice(0, 12) + "…";
     }
 
     const model = currentModel || currentSession.model || "Gemini 3.7 Flash";
-    if (model.length > 28) {
-      vModelVal1.content = "  " + model.slice(0, 28);
-      vModelVal2.content = "  " + model.slice(28);
-    } else {
-      vModelVal1.content = "  " + model;
-      vModelVal2.content = "";
-    }
+    vModel.content = model.length > 18 ? model.slice(0, 17) + "…" : model;
 
     vSteps.content = String(stepCount);
     vSize.content = fmtSize(currentSession.size);
-    vAge.content = timeAgo(currentSession.mtime);
+    const liveAge = getTranscriptLiveMs(currentSession.id);
+    vAge.content = liveAge != null ? timeAgo(Date.now() - liveAge) : timeAgo(currentSession.mtime);
 
     const limit = getModelContextLimit(model);
     const estimatedActiveTokens = Math.round((activeContextChars + 32000) / 4);
@@ -1598,6 +1773,8 @@ async function main() {
 
     // 1. USER_INPUT
     if (step.type === "USER_INPUT" && step.content) {
+      scheduledUntilMs = 0;
+      activeBackgroundTask = null;
       const clean = unescapeCodeString(capText(step.content)).trim();
       const lines = clean.split("\n");
       const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
@@ -1822,7 +1999,8 @@ async function main() {
   function getSessionForId(id: string, fallbackSession: AgySession): AgySession {
     const logPath = path.join(BRAIN_DIR, id, ".system_generated", "logs", "transcript.jsonl");
     let size = 0;
-    let mtime = Date.now();
+    // A missing/unreadable transcript must NOT read as freshly active -> 0 (stale).
+    let mtime = 0;
     try {
       const st = fs.statSync(logPath);
       size = st.size;
@@ -1857,42 +2035,88 @@ async function main() {
     };
   }
 
+  function descendantsThrottled(now: number): ConversationSummaryRow[] {
+    // #4: the recursive-CTE descendant scan (and its per-descendant stat) is too
+    // costly for the 250ms UI tick, so refresh the candidate set at most every 1.5s.
+    if (now - lastDescendantScanMs >= 1500) {
+      cachedDescendants = summaryReader.getDescendants(rootWatchedSession.id);
+      lastDescendantScanMs = now;
+    }
+    return cachedDescendants;
+  }
+
   function pollDbState() {
     const now = Date.now();
     if (now - lastDbCheckMs < 250) return;
     lastDbCheckMs = now;
 
+    const isCurrentActive =
+      Boolean(activeBackgroundTask) || scheduledUntilMs > now;
+    // #1: deliberately EXCLUDE spinnerTimer. The sidebar starts the spinner when
+    // state==running; feeding spinnerTimer back in as an activity signal would latch
+    // the state to running forever (the idle/stuck stop-branches never fire) and
+    // resurrect the exact false-running bug. Transcript freshness + the two bounded
+    // wait signals cover genuine in-flight turns.
+
     if (userPinned) {
-      const liveMs = currentSession.id === rootWatchedSession.id ? now - lastActivityMs : undefined;
+      const liveMs = getTranscriptLiveMs(rootWatchedSession.id, now);
+      const inFlight =
+        currentSession?.id === rootWatchedSession.id && isCurrentActive;
       const pinnedRow = summaryReader.getSummary(rootWatchedSession.id);
-      const pinnedState = deriveSessionState(pinnedRow, { now, liveMs });
+      const pinnedState = deriveSessionState(pinnedRow, {
+        now,
+        liveMs,
+        inFlight,
+      });
       currentSummaryRow = pinnedRow;
       currentDerivedState = pinnedState;
-      if (pinnedState === "idle") {
+      // #3: honor the user's manual selection. Only resume auto-follow after a
+      // pinned session that actually RAN has settled to idle — never unpin one the
+      // user picked that is simply already idle (else the viewport is hijacked ~250ms
+      // after selection, which is how an idle session got shown as a live child again).
+      if (pinnedState === "running") {
+        pinnedSawActive = true;
+      } else if (pinnedSawActive) {
+        // Reached only on a non-running state. Release the pin on ANY settled state,
+        // not just "idle": most legacy rows are blank-status and derive as "unknown",
+        // so gating on "idle" would strand the pin forever and never resume auto-follow.
         userPinned = false;
+        pinnedSawActive = false;
       }
       return;
     }
 
-    const rootLiveMs = currentSession.id === rootWatchedSession.id ? now - lastActivityMs : undefined;
+    const rootInFlight =
+      currentSession?.id === rootWatchedSession.id && isCurrentActive;
+    const rootLiveMs = getTranscriptLiveMs(rootWatchedSession.id, now);
     const rootRow = summaryReader.getSummary(rootWatchedSession.id);
-    const rootState = deriveSessionState(rootRow, { now, liveMs: rootLiveMs });
+    const rootState = deriveSessionState(rootRow, {
+      now,
+      liveMs: rootLiveMs,
+      inFlight: rootInFlight,
+    });
 
     if (followingChildId) {
-      const childLiveMs = currentSession.id === followingChildId ? now - lastActivityMs : undefined;
+      const childInFlight =
+        currentSession?.id === followingChildId && isCurrentActive;
+      const childLiveMs = getTranscriptLiveMs(followingChildId, now);
       const childRow = summaryReader.getSummary(followingChildId);
-      const childState = deriveSessionState(childRow, { now, liveMs: childLiveMs });
+      const childState = deriveSessionState(childRow, {
+        now,
+        liveMs: childLiveMs,
+        inFlight: childInFlight,
+      });
 
       if (childState === "running") {
         currentSummaryRow = childRow;
         currentDerivedState = childState;
       } else {
-        const descendants = summaryReader.getDescendants(rootWatchedSession.id);
-        const nextRunning = descendants.find(
-          (d) =>
-            d.conversation_id !== followingChildId &&
-            deriveSessionState(d, { now }) === "running",
-        );
+        const descendants = descendantsThrottled(now);
+        const nextRunning = descendants.find((d) => {
+          if (d.conversation_id === followingChildId) return false;
+          const dLiveMs = getTranscriptLiveMs(d.conversation_id, now);
+          return deriveSessionState(d, { now, liveMs: dLiveMs }) === "running";
+        });
 
         if (nextRunning) {
           followingChildId = nextRunning.conversation_id;
@@ -1908,10 +2132,11 @@ async function main() {
         }
       }
     } else {
-      const descendants = summaryReader.getDescendants(rootWatchedSession.id);
-      const runningChild = descendants.find(
-        (d) => deriveSessionState(d, { now }) === "running",
-      );
+      const descendants = descendantsThrottled(now);
+      const runningChild = descendants.find((d) => {
+        const dLiveMs = getTranscriptLiveMs(d.conversation_id, now);
+        return deriveSessionState(d, { now, liveMs: dLiveMs }) === "running";
+      });
 
       if (runningChild) {
         followingChildId = runningChild.conversation_id;
@@ -1996,6 +2221,12 @@ async function main() {
     pages = [];
     historyScanned = false;
     recording = false;
+    scheduledUntilMs = 0;
+    activeBackgroundTask = null;
+    // Drop the descendant cache on switch so auto-follow can't act on the PREVIOUS
+    // root session's children inside the 1.5s throttle window.
+    lastDescendantScanMs = 0;
+    cachedDescendants = [];
     currentModel = s.model || "Detecting...";
     clearScrollBox();
     resetCounters();
@@ -2429,10 +2660,14 @@ async function main() {
         if (chosen) {
           closeSelector();
           userPinned = true;
+          pinnedSawActive = false; // #3: freshly pinned — don't auto-unpin until it runs then settles
           rootWatchedSession = chosen;
           followingChildId = null;
           currentSummaryRow = summaryReader.getSummary(chosen.id);
-          currentDerivedState = deriveSessionState(currentSummaryRow, { now: Date.now() });
+          currentDerivedState = deriveSessionState(currentSummaryRow, {
+            now: Date.now(),
+            liveMs: getTranscriptLiveMs(chosen.id),
+          });
           switchSession(chosen, false);
         }
         return;
@@ -2447,10 +2682,14 @@ async function main() {
         const chosen = cachedSessions[num - 1];
         if (chosen) {
           userPinned = true;
+          pinnedSawActive = false; // #3: freshly pinned — don't auto-unpin until it runs then settles
           rootWatchedSession = chosen;
           followingChildId = null;
           currentSummaryRow = summaryReader.getSummary(chosen.id);
-          currentDerivedState = deriveSessionState(currentSummaryRow, { now: Date.now() });
+          currentDerivedState = deriveSessionState(currentSummaryRow, {
+            now: Date.now(),
+            liveMs: getTranscriptLiveMs(chosen.id),
+          });
           switchSession(chosen, false);
         }
         return;
@@ -2568,16 +2807,19 @@ async function main() {
   const sidebarInterval = setInterval(() => {
     if (isAppDestroyed) return;
     pollDbState();
+    const hasActiveWait =
+      scheduledUntilMs > Date.now() || Boolean(activeBackgroundTask);
     if (currentDerivedState === "running" && !spinnerTimer) {
       startSpinner("Agent processing...");
-    } else if (currentDerivedState === "idle" && spinnerTimer) {
+    } else if (currentDerivedState === "idle" && spinnerTimer && !hasActiveWait) {
       stopSpinner("💤 Idle — session idle");
-    } else if (currentDerivedState === "stuck" && spinnerTimer) {
+    } else if (currentDerivedState === "stuck" && spinnerTimer && !hasActiveWait) {
       stopSpinner("⚠️ Stuck / Waiting (no activity for >60s)");
     } else if (
       Date.now() - lastActivityMs > 25000 &&
       spinnerTimer &&
-      currentDerivedState !== "running"
+      currentDerivedState !== "running" &&
+      !hasActiveWait
     ) {
       stopSpinner("💤 Idle — waiting for next agy command...");
     }
