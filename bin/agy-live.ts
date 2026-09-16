@@ -1663,9 +1663,32 @@ async function main() {
     return Math.max(30, termW - 37);
   }
 
+  const STYLE = {
+    CARD_BG: "#1e293b",
+    ACCENT: {
+      user: "#60a5fa",
+      tool: "#38bdf8",
+      thinking: "#c084fc",
+      error: "#f87171",
+    },
+    BORDER_CHARS: {
+      topLeft: " ",
+      topRight: " ",
+      bottomLeft: " ",
+      bottomRight: " ",
+      horizontal: " ",
+      vertical: "┃",
+      topT: " ",
+      bottomT: " ",
+      leftT: " ",
+      rightT: " ",
+      cross: " ",
+    },
+    GUTTER: "  ",
+  } as const;
+
   function pushCard(lines: { text: string; fg?: string; isTitle?: boolean }[]) {
     const cardW = getCardWidth();
-    const CARD_BG = "#1e293b";
     pushLine("");
     for (const item of lines) {
       const raw = item.text || "";
@@ -1674,7 +1697,7 @@ async function main() {
         const content = "▎ " + w;
         const visibleLen = stripAnsi(content).length;
         const padding = " ".repeat(Math.max(0, cardW - visibleLen));
-        pushLine(content + padding, item.fg || "#e2e8f0", CARD_BG);
+        pushLine(content + padding, item.fg || "#e2e8f0", STYLE.CARD_BG);
       }
     }
     pushLine("");
@@ -1707,7 +1730,7 @@ async function main() {
           const content = "▎ " + w;
           const visibleLen = stripAnsi(content).length;
           const padding = " ".repeat(Math.max(0, cardW - visibleLen));
-          pushLine(content + padding, "#ffffff", "#1e293b");
+          pushLine(content + padding, "#ffffff", STYLE.CARD_BG);
         }
         continue;
       }
@@ -2430,7 +2453,7 @@ async function main() {
       const card = new BoxRenderable(renderer, {
         width: "100%",
         flexDirection: "column",
-        backgroundColor: "#1e293b",
+        backgroundColor: STYLE.CARD_BG,
         paddingX: 1,
         marginY: 1,
       });
