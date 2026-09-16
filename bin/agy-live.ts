@@ -342,6 +342,12 @@ export function destroyRenderable(r: Renderable) {
   }
 }
 
+export type PageItem =
+  | { kind: "line"; text: string; fg?: string }
+  | { kind: "card"; accent: string; lines: { text: string; fg?: string; isTitle?: boolean }[] };
+
+export const domBoxes = new WeakMap<PageItem, BoxRenderable>();
+
 let pushCount = 0;
 
 export function notePushes(n: number, scrollBox: any) {
@@ -415,6 +421,41 @@ export function buildCardBox(
   }
 
   return box;
+}
+
+export function cardAppend(
+  item: PageItem,
+  line: { text: string; fg?: string },
+): void {
+  if (item.kind !== "card") return;
+  item.lines.push(line);
+  const box = domBoxes.get(item);
+  if (box && (box as any).isDestroyed) {
+    domBoxes.delete(item);
+    return;
+  }
+  if (box) {
+    const ctx = (box as any).ctx ?? (box as any).renderer;
+    box.add(createCardLineText(ctx, line));
+  }
+}
+
+export function replayPageInto(
+  renderer: any,
+  parent: any,
+  items: PageItem[],
+): void {
+  for (const item of items) {
+    if (item.kind === "line") {
+      const opts: any = { content: item.text, fg: item.fg, wrapMode: "none", width: "100%" };
+      parent.add(new TextRenderable(renderer, opts));
+    } else if (item.kind === "card") {
+      buildCardBox(renderer, parent, {
+        lines: item.lines,
+        accent: item.accent,
+      });
+    }
+  }
 }
 
 export function runSelfTest(): void {
@@ -685,8 +726,99 @@ export function runSelfTest(): void {
     "pushCard into stubbed root constructs a Box with border containing 'left' and backgroundColor === STYLE.CARD_BG",
   );
 
+  // 27. T3 PageItem card replay & domBoxes assertions
+  const replayedCardItem: PageItem = {
+    kind: "card",
+    accent: STYLE.ACCENT.tool,
+    lines: [
+      { text: "-removed", fg: "#f87171" },
+      { text: "+added", fg: "#4ade80" },
+    ],
+  };
+  const replayedLine1: PageItem = { kind: "line", text: "Line 1", fg: "#d1d5db" };
+  const replayedLine2: PageItem = { kind: "line", text: "Line 2", fg: "#d1d5db" };
+  const testPages: PageItem[][] = [[replayedCardItem, replayedLine1, replayedLine2]];
+
+  const replayRoot: any = {
+    width: 80,
+    children: [] as any[],
+    add(child: any) {
+      this.children.push(child);
+    },
+  };
+
+  replayPageInto(stubRenderer, replayRoot, testPages[0]);
+
+  const replayedCardBox = replayRoot.children.find(
+    (c: any) => c instanceof BoxRenderable,
+  );
+  const isReplayedCardBg =
+    replayedCardBox &&
+    ((replayedCardBox.backgroundColor as any) === STYLE.CARD_BG ||
+      (typeof replayedCardBox.backgroundColor?.equals === "function" &&
+        replayedCardBox.backgroundColor.equals(parseColor(STYLE.CARD_BG))));
+
+  assertTest(
+    Boolean(
+      replayedCardBox &&
+        Array.isArray(replayedCardBox.border) &&
+        replayedCardBox.border.includes("left") &&
+        isReplayedCardBg,
+    ),
+    "replayPageInto constructs a Box child with border including 'left' and backgroundColor === STYLE.CARD_BG",
+  );
+
+  assertTest(
+    !domBoxes.has(replayedCardItem),
+    "replayed box is NOT present in domBoxes (live-only WeakMap registry)",
+  );
+
+  assertTest(
+    replayedCardItem.kind === "card" &&
+      replayedCardItem.lines[0]?.fg === "#f87171" &&
+      replayedCardItem.lines[1]?.fg === "#4ade80",
+    "PageItem preserves per-line fg values intact across replay",
+  );
+
+  // 28. T3 prune-safety: cardAppend with destroyed box
+  const liveCardItem: PageItem = {
+    kind: "card",
+    accent: STYLE.ACCENT.tool,
+    lines: [{ text: "initial live line" }],
+  };
+  const liveRoot: any = {
+    children: [] as any[],
+    add(child: any) {
+      this.children.push(child);
+    },
+  };
+  const liveBox = buildCardBox(stubRenderer, liveRoot, {
+    lines: liveCardItem.lines,
+    accent: liveCardItem.accent,
+  });
+  domBoxes.set(liveCardItem, liveBox);
+  assertTest(domBoxes.has(liveCardItem), "live card box registered in domBoxes");
+
+  liveBox.destroy();
+
+  let appendThrew = false;
+  try {
+    cardAppend(liveCardItem, { text: "appended after prune", fg: "#4ade80" });
+  } catch {
+    appendThrew = true;
+  }
+
+  assertTest(
+    !appendThrew &&
+      liveCardItem.lines.length === 2 &&
+      liveCardItem.lines[1]?.text === "appended after prune" &&
+      !domBoxes.has(liveCardItem),
+    "prune-safety: cardAppend appends model line, does not throw, and cleans up destroyed domBoxes entry",
+  );
+
   console.log("✔ deriveSessionState self-tests passed (25 assertions).");
   console.log("✔ pushCard Box self-test passed (1 assertion).");
+  console.log("✔ PageItem card replay & domBoxes self-tests passed (4 assertions).");
 }
 
 export function runDbTest(): void {
@@ -1172,9 +1304,18 @@ async function main() {
   // page 1 = start of session. Full history is parsed once (strings only, no
   // DOM) on first page-mode entry; pages then grow in realtime as poll parses
   // new steps. DOM renders only the viewed page on switch.
-  type PageLine = { text: string; fg: string; bg?: string };
   const PAGE_SIZE = 200; // ponytail: fixed chunk size; raise for denser pages
-  let pages: PageLine[][] = [];
+  let pages: PageItem[][] = [];
+
+  function recordPageItem(item: PageItem) {
+    if (!recording) return;
+    let page = pages[pages.length - 1];
+    if (!page || page.length >= PAGE_SIZE) {
+      page = [];
+      pages.push(page);
+    }
+    page.push(item);
+  }
   let pageIndex = 0;
   let pageMode = false;
   let historyScanned = false;
@@ -1556,14 +1697,7 @@ async function main() {
 
   // ── Log push ──────────────────────────────────────────────────────────────────
   function pushLine(txt: string, fg = "#d1d5db", bg?: string) {
-    if (recording) {
-      let page = pages[pages.length - 1];
-      if (!page || page.length >= PAGE_SIZE) {
-        page = [];
-        pages.push(page);
-      }
-      page.push({ text: txt, fg, bg });
-    }
+    recordPageItem({ kind: "line", text: txt, fg });
     if (pageMode) return; // viewing an old page — record only, DOM untouched
     const formatted = formatMarkdownLinks(txt);
     const clean = stripAnsi(formatted) || " ";
@@ -1671,11 +1805,7 @@ async function main() {
     if (!pg) return;
     clearScrollBox();
     scrollBox.stickyScroll = false;
-    for (const l of pg) {
-      const opts: any = { content: l.text, fg: l.fg, wrapMode: "none", width: "100%" };
-      if (l.bg) opts.bg = l.bg;
-      scrollBox.add(new TextRenderable(renderer, opts));
-    }
+    replayPageInto(renderer, scrollBox, pg);
     renderer.requestRender();
   }
 
@@ -1691,6 +1821,7 @@ async function main() {
   }
 
   function exitPageMode() {
+    // Exiting page mode does not rebuild the DOM; a card open in replayed history receives model-only appends until next page switch.
     pageMode = false;
     updateLiveLabel();
     renderer.requestRender();
@@ -1803,10 +1934,17 @@ async function main() {
     lines: { text: string; fg?: string; isTitle?: boolean }[],
     kind?: "user" | "tool" | "thinking" | "error",
   ) {
-    if (pageMode) return;
     const accent =
       kind ? STYLE.ACCENT[kind] : (lines.find((l) => l.isTitle)?.fg ?? STYLE.ACCENT.tool);
+    const item: PageItem = {
+      kind: "card",
+      accent,
+      lines: lines.map((l) => ({ ...l })),
+    };
+    recordPageItem(item);
+    if (pageMode) return;
     const box = buildCardBox(renderer, scrollBox, { lines, accent });
+    domBoxes.set(item, box);
     notePushes(lines.length, scrollBox);
     return box;
   }
