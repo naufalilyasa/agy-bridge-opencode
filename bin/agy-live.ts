@@ -1973,6 +1973,10 @@ async function main() {
 
     // 5. Tool Output Steps (VIEW_FILE, RUN_COMMAND, LIST_DIRECTORY, GENERIC, etc.)
     if (step.content && typeof step.content === "string") {
+      // The agent stays in-flight only until a command's output step lands. A
+      // status!=="RUNNING" output is a completed command; status==="RUNNING" output is
+      // an async background task still executing and must leave the marker intact.
+      if (step.status !== "RUNNING") activeBackgroundTask = null;
       const raw = unescapeCodeString(capText(step.content)).trim();
       if (raw) {
         const lines = raw.split("\n");
@@ -2050,8 +2054,18 @@ async function main() {
     if (now - lastDbCheckMs < 250) return;
     lastDbCheckMs = now;
 
-    const isCurrentActive =
-      Boolean(activeBackgroundTask) || scheduledUntilMs > now;
+    // A silent long-running command never touches the transcript, so the in-flight claim
+    // is bounded by how long the watched transcript has been frozen: no write for over 30
+    // minutes means the agent process died mid-command (killed/crashed), so we stop
+    // claiming running and let the session settle. This bounds the bash-latch zombie
+    // without falsely idling a real build that streams output under that window.
+    const activeTaskLiveMs = currentSession
+      ? getTranscriptLiveMs(currentSession.id, now)
+      : undefined;
+    const isCommandInFlight =
+      Boolean(activeBackgroundTask) &&
+      (activeTaskLiveMs === undefined || activeTaskLiveMs < 30 * 60_000);
+    const isCurrentActive = isCommandInFlight || scheduledUntilMs > now;
     // #1: deliberately EXCLUDE spinnerTimer. The sidebar starts the spinner when
     // state==running; feeding spinnerTimer back in as an activity signal would latch
     // the state to running forever (the idle/stuck stop-branches never fire) and
