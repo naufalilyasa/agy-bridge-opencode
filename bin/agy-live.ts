@@ -37,6 +37,30 @@ const BOLD_ATTR = createTextAttributes({ bold: true });
 
 export const DEFAULT_STALE_MS = 90_000;
 
+export const STYLE = {
+  CARD_BG: "#1e293b",
+  ACCENT: {
+    user: "#60a5fa",
+    tool: "#38bdf8",
+    thinking: "#c084fc",
+    error: "#f87171",
+  },
+  BORDER_CHARS: {
+    topLeft: " ",
+    topRight: " ",
+    bottomLeft: " ",
+    bottomRight: " ",
+    horizontal: " ",
+    vertical: "┃",
+    topT: " ",
+    bottomT: " ",
+    leftT: " ",
+    rightT: " ",
+    cross: " ",
+  },
+  GUTTER: "  ",
+} as const;
+
 // Perf guards: bound per-tick file reads and per-step rendering so a giant
 // transcript / giant single step can't allocate huge buffers or create tens of
 // thousands of renderables in one synchronous pass (the "crash after long run").
@@ -308,6 +332,91 @@ ORDER BY c.last_modified_time DESC
 
 export const summaryReader = new SummaryDbReader();
 
+// ─── Card & DOM Render Helpers ────────────────────────────────────────────────
+
+export function destroyRenderable(r: Renderable) {
+  if (typeof (r as any).destroyRecursively === "function") {
+    (r as any).destroyRecursively();
+  } else if (typeof (r as any).destroy === "function") {
+    (r as any).destroy();
+  }
+}
+
+let pushCount = 0;
+
+export function notePushes(n: number, scrollBox: any) {
+  pushCount += n;
+  if (
+    Math.floor(pushCount / 20) > Math.floor((pushCount - n) / 20) &&
+    scrollBox &&
+    typeof scrollBox.getChildrenCount === "function" &&
+    scrollBox.getChildrenCount() > 300
+  ) {
+    const children = [...scrollBox.getChildren()] as Renderable[];
+    const toRemove = children.slice(0, children.length - 200);
+    for (let i = toRemove.length - 1; i >= 0; i--) {
+      destroyRenderable(toRemove[i]);
+    }
+  }
+}
+
+export function createCardLineText(
+  renderer: any,
+  line: { text: string; fg?: string },
+): TextRenderable {
+  return new TextRenderable(renderer, {
+    content: line.text,
+    fg: line.fg,
+    wrapMode: "word",
+    selectable: true,
+    selectionBg: "#2563eb",
+    selectionFg: "#ffffff",
+  } as any);
+}
+
+export function buildCardBox(
+  renderer: any,
+  parent: any,
+  opts: {
+    title?: string;
+    lines: { text: string; fg?: string; isTitle?: boolean }[];
+    accent?: string;
+  },
+): BoxRenderable {
+  const titleLine = opts.lines.find((l) => l.isTitle);
+  const accent =
+    opts.accent ||
+    titleLine?.fg ||
+    STYLE.ACCENT.tool;
+  const box = new BoxRenderable(renderer, {
+    border: ["left"],
+    borderColor: accent,
+    customBorderChars: STYLE.BORDER_CHARS,
+    backgroundColor: STYLE.CARD_BG,
+    paddingTop: 1,
+    paddingBottom: 1,
+    paddingLeft: 2,
+    width: "100%",
+    flexShrink: 0,
+  });
+
+  const allLines = [...opts.lines];
+  if (opts.title && !titleLine) {
+    allLines.unshift({ text: opts.title, fg: accent, isTitle: true });
+  }
+
+  for (const line of allLines) {
+    const lineWithFg = line.isTitle && !line.fg ? { ...line, fg: accent } : line;
+    box.add(createCardLineText(renderer, lineWithFg));
+  }
+
+  if (parent && typeof parent.add === "function") {
+    parent.add(box);
+  }
+
+  return box;
+}
+
 export function runSelfTest(): void {
   function assertTest(condition: boolean, msg: string) {
     if (!condition) {
@@ -533,7 +642,51 @@ export function runSelfTest(): void {
   );
   assertTest(sFuture === "stuck", `Expected stuck for future DB timestamp, got ${sFuture}`);
 
+  // 26. pushCard Box assertion: left-accent border and STYLE.CARD_BG background
+  const stubRenderer: any = {
+    requestRender: () => {},
+    registerLifecyclePass: () => {},
+    unregisterLifecyclePass: () => {},
+  };
+  const stubRoot: any = {
+    width: 80,
+    children: [] as any[],
+    add(child: any) {
+      this.children.push(child);
+    },
+  };
+  function selfTestPushCard(
+    lines: { text: string; fg?: string; isTitle?: boolean }[],
+    kind?: "user" | "tool" | "thinking" | "error",
+  ) {
+    const accent =
+      kind ? STYLE.ACCENT[kind] : (lines.find((l) => l.isTitle)?.fg ?? STYLE.ACCENT.tool);
+    return buildCardBox(stubRenderer, stubRoot, { lines, accent });
+  }
+
+  const cardBox = selfTestPushCard(
+    [
+      { text: "Test Card Title", fg: STYLE.ACCENT.tool, isTitle: true },
+      { text: "Test line 1" },
+    ],
+    "tool",
+  );
+
+  const isCardBg =
+    (cardBox.backgroundColor as any) === STYLE.CARD_BG ||
+    (typeof cardBox.backgroundColor?.equals === "function" &&
+      cardBox.backgroundColor.equals(parseColor(STYLE.CARD_BG)));
+
+  assertTest(
+    Array.isArray(cardBox.border) &&
+      cardBox.border.includes("left") &&
+      Boolean(isCardBg) &&
+      stubRoot.children.includes(cardBox),
+    "pushCard into stubbed root constructs a Box with border containing 'left' and backgroundColor === STYLE.CARD_BG",
+  );
+
   console.log("✔ deriveSessionState self-tests passed (25 assertions).");
+  console.log("✔ pushCard Box self-test passed (1 assertion).");
 }
 
 export function runDbTest(): void {
@@ -1006,8 +1159,7 @@ async function main() {
 
   let currentPos = 0,
     remainder = "",
-    stepCount = 0,
-    pushCount = 0;
+    stepCount = 0;
   let lastActivityMs = Date.now();
   let activeFileFd: number | null = null;
   let spinnerIdx = 0,
@@ -1456,23 +1608,7 @@ async function main() {
     }
 
     // Rolling window: keep scrollBox nodes tight to prevent Yoga layout lag.
-    // Check every 20 pushes and drop back to 200 in one batch — avoids O(n²)
-    // array-copy + per-node remove() churn when a big step arrives.
-    if (++pushCount % 20 === 0 && scrollBox.getChildrenCount() > 300) {
-      const children = [...scrollBox.getChildren()] as Renderable[];
-      const toRemove = children.slice(0, children.length - 200);
-      for (let i = toRemove.length - 1; i >= 0; i--) {
-        destroyRenderable(toRemove[i]);
-      }
-    }
-  }
-
-  function destroyRenderable(r: Renderable) {
-    if (typeof (r as any).destroyRecursively === "function") {
-      (r as any).destroyRecursively();
-    } else if (typeof (r as any).destroy === "function") {
-      (r as any).destroy();
-    }
+    notePushes(1, scrollBox);
   }
 
   // ── Clear scrollbox ────────────────────────────────────────────────────────────
@@ -1663,44 +1799,16 @@ async function main() {
     return Math.max(30, termW - 37);
   }
 
-  const STYLE = {
-    CARD_BG: "#1e293b",
-    ACCENT: {
-      user: "#60a5fa",
-      tool: "#38bdf8",
-      thinking: "#c084fc",
-      error: "#f87171",
-    },
-    BORDER_CHARS: {
-      topLeft: " ",
-      topRight: " ",
-      bottomLeft: " ",
-      bottomRight: " ",
-      horizontal: " ",
-      vertical: "┃",
-      topT: " ",
-      bottomT: " ",
-      leftT: " ",
-      rightT: " ",
-      cross: " ",
-    },
-    GUTTER: "  ",
-  } as const;
-
-  function pushCard(lines: { text: string; fg?: string; isTitle?: boolean }[]) {
-    const cardW = getCardWidth();
-    pushLine("");
-    for (const item of lines) {
-      const raw = item.text || "";
-      const wrapped = wrapLine(raw, cardW - 4);
-      for (const w of wrapped) {
-        const content = "▎ " + w;
-        const visibleLen = stripAnsi(content).length;
-        const padding = " ".repeat(Math.max(0, cardW - visibleLen));
-        pushLine(content + padding, item.fg || "#e2e8f0", STYLE.CARD_BG);
-      }
-    }
-    pushLine("");
+  function pushCard(
+    lines: { text: string; fg?: string; isTitle?: boolean }[],
+    kind?: "user" | "tool" | "thinking" | "error",
+  ) {
+    if (pageMode) return;
+    const accent =
+      kind ? STYLE.ACCENT[kind] : (lines.find((l) => l.isTitle)?.fg ?? STYLE.ACCENT.tool);
+    const box = buildCardBox(renderer, scrollBox, { lines, accent });
+    notePushes(lines.length, scrollBox);
+    return box;
   }
 
   function renderMarkdown(mdText: string) {
@@ -1804,7 +1912,7 @@ async function main() {
         { text: "👤 [USER TASK]", fg: "#60a5fa", isTitle: true },
         ...lines.map((l) => ({ text: "  " + l, fg: "#ffffff" })),
       ];
-      pushCard(cardLines);
+      pushCard(cardLines, "user");
       stopSpinner("✓ Task received");
       startSpinner("Agent thinking...");
       return;
@@ -1909,7 +2017,7 @@ async function main() {
                   });
                 }
               }
-              pushCard(cardLines);
+              pushCard(cardLines, "tool");
               break;
             }
             case "replace_file_content": {
@@ -1953,7 +2061,7 @@ async function main() {
                   });
                 }
               }
-              pushCard(cardLines);
+              pushCard(cardLines, "tool");
               break;
             }
             case "run_command": {
@@ -1962,7 +2070,7 @@ async function main() {
               pushCard([
                 { text: "💻 [BASH EXECUTION]", fg: "#38bdf8", isTitle: true },
                 { text: `  $ ${cmd}`, fg: "#fde047" },
-              ]);
+              ], "tool");
               break;
             }
             case "grep_search":
