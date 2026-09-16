@@ -426,18 +426,20 @@ export function buildCardBox(
 export function cardAppend(
   item: PageItem,
   line: { text: string; fg?: string },
-): void {
-  if (item.kind !== "card") return;
+): boolean {
+  if (item.kind !== "card") return false;
   item.lines.push(line);
   const box = domBoxes.get(item);
   if (box && (box as any).isDestroyed) {
     domBoxes.delete(item);
-    return;
+    return false;
   }
   if (box) {
     const ctx = (box as any).ctx ?? (box as any).renderer;
     box.add(createCardLineText(ctx, line));
+    return true;
   }
+  return false;
 }
 
 export function replayPageInto(
@@ -455,6 +457,269 @@ export function replayPageInto(
         lines: item.lines,
         accent: item.accent,
       });
+    }
+  }
+}
+
+export function unescapeCodeString(str: any): string {
+  if (!str || typeof str !== "string") return "";
+  let clean = str;
+  if (
+    clean.includes("\\n") ||
+    clean.includes('\\"') ||
+    clean.includes("\\t") ||
+    clean.includes("\\r")
+  ) {
+    clean = clean
+      .replace(/\\r\\n/g, "\n")
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "  ")
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, "\\");
+  }
+  if (clean.startsWith('"') && clean.endsWith('"') && clean.length >= 2) {
+    clean = clean.slice(1, -1);
+  }
+  return clean;
+}
+
+export type RouteAction =
+  | { type: "open_card"; item: PageItem; accent: string }
+  | { type: "append"; item: PageItem; line: { text: string; fg?: string } }
+  | { type: "bare"; text: string; fg?: string };
+
+export interface RouteContext {
+  renderer: any;
+  parent: any;
+  pages: PageItem[][];
+  pageMode: boolean;
+  pushLine: (txt: string, fg?: string, bg?: string) => void;
+  notePushes: (n: number, scrollBox?: any) => void;
+}
+
+export function routeStep(
+  step: any,
+  q: { pending: (PageItem | null)[] },
+  emit: (a: RouteAction) => void,
+): void {
+  if (!step) return;
+
+  // 1. Hard resets: USER_INPUT, CHECKPOINT, SYSTEM_MESSAGE
+  if (
+    step.type === "USER_INPUT" ||
+    step.type === "CHECKPOINT" ||
+    step.type === "SYSTEM_MESSAGE"
+  ) {
+    q.pending.length = 0;
+    return;
+  }
+
+  // 2. ERROR_MESSAGE: clears q.pending, renders bare, never consumes a slot
+  if (step.type === "ERROR_MESSAGE") {
+    q.pending.length = 0;
+    const raw = String(step.error || step.content || "Error");
+    emit({ type: "bare", text: `⚠️  [ERROR] ${raw}`, fg: STYLE.ACCENT.error });
+    return;
+  }
+
+  // 3. PLANNER_RESPONSE: tool calls or turn-final assistant text
+  if (step.type === "PLANNER_RESPONSE") {
+    const hasTools = Array.isArray(step.tool_calls) && step.tool_calls.length > 0;
+    if (hasTools) {
+      for (const tc of step.tool_calls) {
+        const name = tc.name || "tool";
+        const args = tc.args || {};
+        switch (name) {
+          case "write_to_file": {
+            const file = args.TargetFile || args.target_file || "";
+            const rel = file ? path.relative(process.cwd(), file) || file : "";
+            const raw = unescapeCodeString(capText(args.CodeContent || ""));
+            const lines = raw ? raw.split("\n") : [];
+            const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
+              { text: `📝 [WRITE FILE] ${rel}`, fg: "#4ade80", isTitle: true },
+            ];
+            if (raw) {
+              for (let k = 0; k < lines.length; k++) {
+                cardLines.push({
+                  text: `  + ${String(1 + k).padStart(4)}: ${lines[k]}`,
+                  fg: "#4ade80",
+                });
+              }
+            }
+            const item: PageItem = {
+              kind: "card",
+              accent: STYLE.ACCENT.tool,
+              lines: cardLines,
+            };
+            q.pending.push(item);
+            emit({ type: "open_card", item, accent: STYLE.ACCENT.tool });
+            break;
+          }
+          case "replace_file_content": {
+            const file = args.TargetFile || args.target_file || "";
+            const rel = file ? path.relative(process.cwd(), file) || file : "";
+            const sLine = args.StartLine ? Number(args.StartLine) : 1;
+            const rawT = unescapeCodeString(capText(args.TargetContent || ""));
+            const rawR = unescapeCodeString(capText(args.ReplacementContent || ""));
+            const tLines = rawT ? rawT.split("\n") : [];
+            const rLines = rawR ? rawR.split("\n") : [];
+            const total = Math.max(tLines.length, rLines.length);
+
+            const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
+              { text: `✏️  [DIFF EDIT] ${rel} (Line ${sLine})`, fg: "#fbbf24", isTitle: true },
+            ];
+
+            for (let k = 0; k < total; k++) {
+              if (k < tLines.length && k < rLines.length && tLines[k] !== rLines[k]) {
+                cardLines.push({
+                  text: `  - ${String(sLine + k).padStart(4)}: ${tLines[k]}`,
+                  fg: "#f87171",
+                });
+                cardLines.push({
+                  text: `  + ${String(sLine + k).padStart(4)}: ${rLines[k]}`,
+                  fg: "#4ade80",
+                });
+              } else if (k < tLines.length && k >= rLines.length) {
+                cardLines.push({
+                  text: `  - ${String(sLine + k).padStart(4)}: ${tLines[k]}`,
+                  fg: "#f87171",
+                });
+              } else if (k < rLines.length && k >= tLines.length) {
+                cardLines.push({
+                  text: `  + ${String(sLine + k).padStart(4)}: ${rLines[k]}`,
+                  fg: "#4ade80",
+                });
+              } else if (k < rLines.length) {
+                cardLines.push({
+                  text: `    ${String(sLine + k).padStart(4)}: ${rLines[k]}`,
+                  fg: "#94a3b8",
+                });
+              }
+            }
+            const item: PageItem = {
+              kind: "card",
+              accent: STYLE.ACCENT.tool,
+              lines: cardLines,
+            };
+            q.pending.push(item);
+            emit({ type: "open_card", item, accent: STYLE.ACCENT.tool });
+            break;
+          }
+          case "run_command": {
+            const cmd = unescapeCodeString(args.CommandLine || args.command || "").trim();
+            const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
+              { text: "💻 [BASH EXECUTION]", fg: "#38bdf8", isTitle: true },
+              { text: `  $ ${cmd}`, fg: "#fde047" },
+            ];
+            const item: PageItem = {
+              kind: "card",
+              accent: STYLE.ACCENT.tool,
+              lines: cardLines,
+            };
+            q.pending.push(item);
+            emit({ type: "open_card", item, accent: STYLE.ACCENT.tool });
+            break;
+          }
+          case "view_file": {
+            const file = args.AbsolutePath || args.file || "";
+            const rel = file ? path.relative(process.cwd(), file) || file : "";
+            const sLine = args.StartLine ? ` (L${args.StartLine}-${args.EndLine || ""})` : "";
+            q.pending.push(null);
+            emit({ type: "bare", text: `🔍 [VIEW FILE] ${rel}${sLine}`, fg: "#38bdf8" });
+            break;
+          }
+          case "grep_search":
+          case "find_by_name": {
+            const query = args.Query || args.Pattern || "";
+            q.pending.push(null);
+            emit({ type: "bare", text: `🔎 [SEARCH] ${name} -> "${query}"`, fg: "#818cf8" });
+            break;
+          }
+          case "schedule": {
+            const sec = parseInt(args.DurationSeconds || args.duration_seconds || "60", 10);
+            const p = String(args.Prompt || args.prompt || "Waiting for task");
+            q.pending.push(null);
+            emit({ type: "bare", text: `⏳ [SCHEDULE] "${p}" (${sec}s)`, fg: "#f59e0b" });
+            break;
+          }
+          default: {
+            const summary = capText(args.toolSummary || tc.name || "tool", 200);
+            q.pending.push(null);
+            emit({ type: "bare", text: `🔧 [TOOL: ${name}] ${summary}`, fg: "#93c5fd" });
+            break;
+          }
+        }
+      }
+      return;
+    } else if (step.content) {
+      // Turn-final assistant text (assistant text with NO tool_calls)
+      q.pending.length = 0;
+      return;
+    }
+    return;
+  }
+
+  // 4. Tool Output Steps (GENERIC, etc. with step.content)
+  if (step.content && typeof step.content === "string") {
+    const target =
+      step.status === "RUNNING" && q.pending.length > 0
+        ? q.pending[0]
+        : q.pending.shift();
+    const raw = unescapeCodeString(capText(step.content)).trim();
+    if (raw) {
+      const lines = raw.split("\n");
+      if (target) {
+        for (const l of lines) {
+          emit({
+            type: "append",
+            item: target,
+            line: { text: l.trimEnd(), fg: "#94a3b8" },
+          });
+        }
+      } else {
+        for (let i = 0; i < lines.length; i++) {
+          const l = lines[i];
+          if (!l.trim()) {
+            emit({ type: "bare", text: "", fg: "#94a3b8" });
+            continue;
+          }
+          const text = i === 0 ? `↳ [Output] ${l.trimEnd()}` : l.trimEnd();
+          emit({ type: "bare", text, fg: "#94a3b8" });
+        }
+      }
+    }
+  }
+}
+
+export function applyRouteAction(action: RouteAction, ctx: RouteContext): void {
+  switch (action.type) {
+    case "open_card": {
+      let page = ctx.pages[ctx.pages.length - 1];
+      if (!page || page.length >= 200) {
+        page = [];
+        ctx.pages.push(page);
+      }
+      page.push(action.item);
+      if (!ctx.pageMode) {
+        const box = buildCardBox(ctx.renderer, ctx.parent, {
+          lines: action.item.lines,
+          accent: action.accent,
+        });
+        domBoxes.set(action.item, box);
+        ctx.notePushes(action.item.lines.length, ctx.parent);
+      }
+      break;
+    }
+    case "append": {
+      const added = cardAppend(action.item, action.line);
+      if (added) {
+        ctx.notePushes(1, ctx.parent);
+      }
+      break;
+    }
+    case "bare": {
+      ctx.pushLine(STYLE.GUTTER + action.text, action.fg);
+      break;
     }
   }
 }
@@ -844,9 +1109,391 @@ export function runSelfTest(): void {
     "prune-safety: cardAppend appends model line, does not throw, and cleans up destroyed domBoxes entry",
   );
 
+  // 29. T4 routeStep selftest (a): bash-call step then two output entries
+  const qA: { pending: (PageItem | null)[] } = { pending: [] };
+  const actionsA: RouteAction[] = [];
+  const emitA = (a: RouteAction) => actionsA.push(a);
+
+  routeStep(
+    {
+      type: "PLANNER_RESPONSE",
+      tool_calls: [
+        {
+          name: "run_command",
+          args: { CommandLine: "echo hello" },
+        },
+      ],
+    },
+    qA,
+    emitA,
+  );
+
+  routeStep(
+    {
+      type: "GENERIC",
+      status: "RUNNING",
+      content: "running output chunk",
+    },
+    qA,
+    emitA,
+  );
+
+  routeStep(
+    {
+      type: "GENERIC",
+      status: "DONE",
+      content: "final output chunk",
+    },
+    qA,
+    emitA,
+  );
+
+  const openedCardA = actionsA[0]?.type === "open_card" ? actionsA[0].item : null;
+  assertTest(
+    actionsA.length > 0 &&
+      actionsA[0].type === "open_card" &&
+      actionsA.slice(1).every((a) => a.type === "append" && a.item === openedCardA) &&
+      actionsA.filter((a) => a.type === "bare").length === 0,
+    "T4 (a): bash-call step then two output entries emits one open_card, appends to the same item, and zero bare",
+  );
+
+  // 30. T4 routeStep selftest (b): view_file step + output -> pending [null], output -> bare actions, no card item
+  const qB: { pending: (PageItem | null)[] } = { pending: [] };
+  const actionsB: RouteAction[] = [];
+  const emitB = (a: RouteAction) => actionsB.push(a);
+
+  routeStep(
+    {
+      type: "PLANNER_RESPONSE",
+      tool_calls: [
+        {
+          name: "view_file",
+          args: { AbsolutePath: "/tmp/foo.ts", StartLine: 1, EndLine: 10 },
+        },
+      ],
+    },
+    qB,
+    emitB,
+  );
+
+  assertTest(
+    qB.pending.length === 1 && qB.pending[0] === null,
+    "T4 (b): view_file step pushes [null] to q.pending",
+  );
+
+  routeStep(
+    {
+      type: "GENERIC",
+      content: "file line 1\nfile line 2",
+    },
+    qB,
+    emitB,
+  );
+
+  assertTest(
+    actionsB.every((a) => a.type === "bare") &&
+      actionsB.length === 3 &&
+      actionsB.every((a) => (a as any).item === undefined),
+    "T4 (b): view_file and output emit bare actions only with no card item created",
+  );
+
+  // 31. T4 routeStep selftest (c): MULTI-TOOL step [write, run_command] then two output steps -> FIFO
+  const qC: { pending: (PageItem | null)[] } = { pending: [] };
+  const actionsC: RouteAction[] = [];
+  const emitC = (a: RouteAction) => actionsC.push(a);
+
+  routeStep(
+    {
+      type: "PLANNER_RESPONSE",
+      tool_calls: [
+        {
+          name: "write_to_file",
+          args: { TargetFile: "/tmp/test.ts", CodeContent: "test" },
+        },
+        {
+          name: "run_command",
+          args: { CommandLine: "bun test" },
+        },
+      ],
+    },
+    qC,
+    emitC,
+  );
+
+  const openCardsC = actionsC.filter((a) => a.type === "open_card");
+  assertTest(
+    openCardsC.length === 2 &&
+      openCardsC[0].type === "open_card" &&
+      openCardsC[1].type === "open_card" &&
+      openCardsC[0].item !== openCardsC[1].item,
+    "T4 (c): multi-tool step opened 2 distinct card items",
+  );
+
+  const writeCardC = (openCardsC[0] as any).item;
+  const bashCardC = (openCardsC[1] as any).item;
+
+  const outActionsC1: RouteAction[] = [];
+  routeStep(
+    { type: "GENERIC", status: "DONE", content: "written ok" },
+    qC,
+    (a) => outActionsC1.push(a),
+  );
+
+  const outActionsC2: RouteAction[] = [];
+  routeStep(
+    { type: "GENERIC", status: "DONE", content: "test passed" },
+    qC,
+    (a) => outActionsC2.push(a),
+  );
+
+  assertTest(
+    outActionsC1.length > 0 &&
+      outActionsC1.every((a) => a.type === "append" && a.item === writeCardC) &&
+      outActionsC2.length > 0 &&
+      outActionsC2.every((a) => a.type === "append" && a.item === bashCardC),
+    "T4 (c): FIFO output routing lands first on write card and second on bash card",
+  );
+
+  // 32. T4 routeStep selftest (d): card opened, then assistant text step -> q.pending cleared; straggler output -> bare
+  const qD: { pending: (PageItem | null)[] } = { pending: [] };
+  const actionsD: RouteAction[] = [];
+  const emitD = (a: RouteAction) => actionsD.push(a);
+
+  routeStep(
+    {
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "ls" } }],
+    },
+    qD,
+    emitD,
+  );
+  assertTest(qD.pending.length === 1, "T4 (d): card opened into q.pending");
+
+  routeStep(
+    {
+      type: "PLANNER_RESPONSE",
+      content: "All tasks completed.",
+    },
+    qD,
+    emitD,
+  );
+  assertTest(qD.pending.length === 0, "T4 (d): turn-final assistant text clears q.pending");
+
+  const stragglerActions: RouteAction[] = [];
+  routeStep(
+    { type: "GENERIC", content: "delayed straggler output" },
+    qD,
+    (a) => stragglerActions.push(a),
+  );
+  assertTest(
+    stragglerActions.length > 0 && stragglerActions.every((a) => a.type === "bare"),
+    "T4 (d): straggler output with empty q.pending renders bare",
+  );
+
+  // 33. T4 routeStep selftest (e): ERROR_MESSAGE step -> q.pending cleared and bare action emitted — never consumes a pending slot
+  const qE: { pending: (PageItem | null)[] } = { pending: [] };
+  const dummyCard: PageItem = { kind: "card", accent: STYLE.ACCENT.tool, lines: [] };
+  qE.pending.push(dummyCard);
+
+  const actionsE: RouteAction[] = [];
+  routeStep(
+    {
+      type: "ERROR_MESSAGE",
+      error: "Connection timeout",
+    },
+    qE,
+    (a) => actionsE.push(a),
+  );
+
+  assertTest(
+    qE.pending.length === 0 &&
+      actionsE.length === 1 &&
+      actionsE[0].type === "bare" &&
+      actionsE[0].text.includes("Connection timeout") &&
+      actionsE[0].fg === STYLE.ACCENT.error,
+    "T4 (e): ERROR_MESSAGE step clears q.pending, emits bare action, and never consumes a slot",
+  );
+
+  // 34. T4 routeStep selftest (f): scan-mode: routeStep+applyRouteAction with ctx.pageMode=true -> items recorded in pages, ZERO DOM inserts
+  const pagesF: PageItem[][] = [];
+  let domInsertsF = 0;
+  const mockParentF: any = {
+    add: () => {
+      domInsertsF++;
+    },
+  };
+  const ctxF: RouteContext = {
+    renderer: stubRenderer,
+    parent: mockParentF,
+    pages: pagesF,
+    pageMode: true,
+    pushLine: (txt, fg, bg) => {
+      let page = pagesF[pagesF.length - 1];
+      if (!page || page.length >= 200) {
+        page = [];
+        pagesF.push(page);
+      }
+      page.push({ kind: "line", text: txt, fg, bg });
+    },
+    notePushes: () => {},
+  };
+  const qF: { pending: (PageItem | null)[] } = { pending: [] };
+
+  routeStep(
+    {
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "echo test" } }],
+    },
+    qF,
+    (a) => applyRouteAction(a, ctxF),
+  );
+  routeStep(
+    {
+      type: "GENERIC",
+      content: "test output line 1\ntest output line 2",
+    },
+    qF,
+    (a) => applyRouteAction(a, ctxF),
+  );
+
+  assertTest(
+    pagesF.length > 0 &&
+      pagesF[0].length === 1 &&
+      pagesF[0][0].kind === "card" &&
+      pagesF[0][0].lines.length === 4 &&
+      domInsertsF === 0,
+    "T4 (f): scan-mode with ctx.pageMode=true records items into pages with ZERO DOM inserts",
+  );
+
+  // 35. T4 WIRING case (g): fresh pages + stub/test root, run FULL chain routeStep -> applyRouteAction
+  const pagesG: PageItem[][] = [];
+  const rootG: any = {
+    children: [] as any[],
+    add(child: any) {
+      this.children.push(child);
+    },
+  };
+  const ctxG: RouteContext = {
+    renderer: stubRenderer,
+    parent: rootG,
+    pages: pagesG,
+    pageMode: false,
+    pushLine: (txt, fg, bg) => {
+      let page = pagesG[pagesG.length - 1];
+      if (!page || page.length >= 200) {
+        page = [];
+        pagesG.push(page);
+      }
+      page.push({ kind: "line", text: txt, fg, bg });
+    },
+    notePushes: () => {},
+  };
+  const qG: { pending: (PageItem | null)[] } = { pending: [] };
+
+  routeStep(
+    {
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "whoami" } }],
+    },
+    qG,
+    (a) => applyRouteAction(a, ctxG),
+  );
+
+  const openedCardItem = pagesG[0]?.[0];
+  assertTest(
+    openedCardItem !== undefined && openedCardItem.kind === "card",
+    "T4 (g): opened card item exists in pages",
+  );
+  const registeredBox = domBoxes.get(openedCardItem);
+  assertTest(
+    registeredBox !== undefined && registeredBox instanceof BoxRenderable,
+    "T4 (g): domBoxes.get(openedItem) returns a real BoxRenderable",
+  );
+
+  const initialModelLinesG = openedCardItem.kind === "card" ? openedCardItem.lines.length : 0;
+  const initialDomChildrenG = (registeredBox as any).getChildren().length;
+
+  routeStep(
+    {
+      type: "GENERIC",
+      content: "user_ubuntu\nline2",
+    },
+    qG,
+    (a) => applyRouteAction(a, ctxG),
+  );
+
+  const finalModelLinesG = openedCardItem.kind === "card" ? openedCardItem.lines.length : 0;
+  const finalDomChildrenG = (registeredBox as any).getChildren().length;
+
+  assertTest(
+    finalModelLinesG > initialModelLinesG && finalDomChildrenG > initialDomChildrenG,
+    "T4 (g): after append actions BOTH item.lines.length grew AND box child count grew (single identity)",
+  );
+
+  // 36. T4 WIRING case (h): static assertions on routeStep call sites, 13-space removal, and card width check
+  const selfSource = fs.readFileSync(__filename, "utf8");
+  const routeStepMatches = selfSource.match(/routeStep\s*\(\s*step\s*,/g) || [];
+  assertTest(
+    routeStepMatches.length >= 2,
+    `T4 (h): routeStep(step is called at >= 2 production call sites (found ${routeStepMatches.length})`,
+  );
+  const thirteenSpacesLiteral = '"' + " ".repeat(13) + '"';
+  assertTest(
+    !selfSource.includes(thirteenSpacesLiteral),
+    "T4 (h): 13-space literal dump has zero hits in the file",
+  );
+  const targetWidthFn = ["getCard", "Width"].join("");
+  const cardWidthMatches = selfSource.match(new RegExp(targetWidthFn, "g")) || [];
+  assertTest(
+    cardWidthMatches.length === 3,
+    `T4 (h): ${targetWidthFn} matches ONLY definition + pushLine + renderMarkdown (found ${cardWidthMatches.length})`,
+  );
+
+  // 37. T4 QA flood test: 500-line output action-set into one card item
+  const floodPages: PageItem[][] = [];
+  const floodRoot: any = {
+    children: [] as any[],
+    add(child: any) {
+      this.children.push(child);
+    },
+  };
+  const floodCtx: RouteContext = {
+    renderer: stubRenderer,
+    parent: floodRoot,
+    pages: floodPages,
+    pageMode: false,
+    pushLine: () => {},
+    notePushes: () => {},
+  };
+  const floodQ = { pending: [] as (PageItem | null)[] };
+  routeStep(
+    {
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "yes" } }],
+    },
+    floodQ,
+    (a) => applyRouteAction(a, floodCtx),
+  );
+  const rootCountBefore = floodRoot.children.length;
+  const floodLines = Array.from({ length: 500 }, (_, i) => `flood line ${i}`).join("\n");
+  routeStep(
+    { type: "GENERIC", content: floodLines },
+    floodQ,
+    (a) => applyRouteAction(a, floodCtx),
+  );
+  const rootCountAfter = floodRoot.children.length;
+  const floodCardItem = floodPages[0][0];
+  assertTest(
+    floodCardItem.kind === "card" &&
+      floodCardItem.lines.length >= 501 &&
+      rootCountAfter - rootCountBefore < 5,
+    "T4 flood QA: 500-line output appends to card item lines while transcript root child-count delta < 5",
+  );
+
   console.log("✔ deriveSessionState self-tests passed (25 assertions).");
   console.log("✔ pushCard Box self-test passed (1 assertion).");
   console.log("✔ PageItem card replay & domBoxes self-tests passed (5 assertions).");
+  console.log("✔ routeStep & applyRouteAction FIFO cards self-tests passed (9 assertions).");
 }
 
 export function runDbTest(): void {
@@ -1773,6 +2420,20 @@ async function main() {
     notePushes(1, scrollBox);
   }
 
+  const q: { pending: (PageItem | null)[] } = { pending: [] };
+  const ctx: RouteContext = {
+    renderer,
+    parent: scrollBox,
+    get pages() {
+      return pages;
+    },
+    get pageMode() {
+      return pageMode;
+    },
+    pushLine,
+    notePushes,
+  };
+
   // ── Clear scrollbox ────────────────────────────────────────────────────────────
   function clearScrollBox() {
     const children = [...scrollBox.getChildren()] as Renderable[];
@@ -1794,6 +2455,7 @@ async function main() {
       pageMode = true; // suppress DOM adds while scanning; DOM rendered after
       recording = true;
       resetCounters(); // scan re-counts from the true session start
+      q.pending.length = 0;
       let pos = 0;
       let rem = "";
       while (pos < size) {
@@ -1887,28 +2549,6 @@ async function main() {
     activeContextChars = 0;
   }
 
-  function unescapeCodeString(str: any): string {
-    if (!str || typeof str !== "string") return "";
-    let clean = str;
-    if (
-      clean.includes("\\n") ||
-      clean.includes('\\"') ||
-      clean.includes("\\t") ||
-      clean.includes("\\r")
-    ) {
-      clean = clean
-        .replace(/\\r\\n/g, "\n")
-        .replace(/\\n/g, "\n")
-        .replace(/\\t/g, "  ")
-        .replace(/\\"/g, '"')
-        .replace(/\\\\/g, "\\");
-    }
-    if (clean.startsWith('"') && clean.endsWith('"') && clean.length >= 2) {
-      clean = clean.slice(1, -1);
-    }
-    return clean;
-  }
-
   function wrapLine(text: string, maxWidth: number): string[] {
     if (!text && text !== "") return [""];
     const clean = String(text).replace(/\t/g, "  ").replace(/\r/g, "");
@@ -1990,7 +2630,7 @@ async function main() {
         if (inCodeBlock) {
           const lang = trimmed.slice(3).trim();
           pushLine("");
-          pushLine(`  💻 Code ${lang ? `(${lang})` : ""}`, "#22c55e");
+          pushLine(STYLE.GUTTER + `💻 Code ${lang ? `(${lang})` : ""}`, "#22c55e");
         } else {
           pushLine("");
         }
@@ -2010,23 +2650,23 @@ async function main() {
       }
 
       if (trimmed.startsWith("# ")) {
-        pushLine(`  🔷 ${trimmed.slice(2)}`, "#c084fc");
+        pushLine(STYLE.GUTTER + `🔷 ${trimmed.slice(2)}`, "#c084fc");
       } else if (trimmed.startsWith("## ")) {
-        pushLine(`  🔹 ${trimmed.slice(3)}`, "#38bdf8");
+        pushLine(STYLE.GUTTER + `🔹 ${trimmed.slice(3)}`, "#38bdf8");
       } else if (trimmed.startsWith("### ")) {
-        pushLine(`  ▸ ${trimmed.slice(4)}`, "#fbbf24");
+        pushLine(STYLE.GUTTER + `▸ ${trimmed.slice(4)}`, "#fbbf24");
       } else if (/^[-*]\s+/.test(trimmed)) {
-        pushLine(`    • ${trimmed.replace(/^[-*]\s+/, "")}`, "#ffffff");
+        pushLine(STYLE.GUTTER + `  • ${trimmed.replace(/^[-*]\s+/, "")}`, "#ffffff");
       } else if (/^\d+\.\s+/.test(trimmed)) {
-        pushLine(`    ${trimmed}`, "#fde047");
+        pushLine(STYLE.GUTTER + `  ${trimmed}`, "#fde047");
       } else if (trimmed.startsWith("> ")) {
-        pushLine(`    ▎ ${trimmed.slice(2)}`, "#cbd5e1");
+        pushLine(STYLE.GUTTER + `  ▎ ${trimmed.slice(2)}`, "#cbd5e1");
       } else if (trimmed === "---" || trimmed === "___" || trimmed === "***") {
-        pushLine("  ────────────────────────────────────────────────────────────", "#374151");
+        pushLine(STYLE.GUTTER + "────────────────────────────────────────────────────────────", "#374151");
       } else if (!trimmed) {
         pushLine("");
       } else {
-        pushLine(`  ${raw}`, "#ffffff");
+        pushLine(STYLE.GUTTER + raw, "#ffffff");
       }
     }
   }
@@ -2072,6 +2712,7 @@ async function main() {
     if (step.type === "USER_INPUT" && step.content) {
       scheduledUntilMs = 0;
       activeBackgroundTask = null;
+      q.pending.length = 0;
       const clean = unescapeCodeString(capText(step.content)).trim();
       const lines = clean.split("\n");
       const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
@@ -2086,7 +2727,8 @@ async function main() {
 
     // 2. CHECKPOINT
     if (step.type === "CHECKPOINT") {
-      pushLine("  📌 [CHECKPOINT / SUMMARY CONTEXT]", "#ca8a04");
+      q.pending.length = 0;
+      pushLine(STYLE.GUTTER + "📌 [CHECKPOINT / SUMMARY CONTEXT]", "#ca8a04");
       return;
     }
 
@@ -2095,17 +2737,27 @@ async function main() {
       const raw = String(step.content).trim();
       scheduledUntilMs = 0;
       activeBackgroundTask = null;
+      q.pending.length = 0;
       if (raw.includes("exited with code 0")) {
-        pushLine("  ⚡ [TASK SUCCESS] Background task exited with code 0", "#4ade80");
+        pushLine(STYLE.GUTTER + "⚡ [TASK SUCCESS] Background task exited with code 0", "#4ade80");
       } else if (
         raw.includes("exited with code") ||
         raw.includes("error") ||
         raw.includes("Error")
       ) {
-        pushLine("  ⚠️  [TASK ERROR] " + raw.slice(0, 150), "#f87171");
+        pushLine(STYLE.GUTTER + "⚠️  [TASK ERROR] " + raw.slice(0, 150), "#f87171");
       } else {
-        pushLine("  ⚡ [SYSTEM] " + raw.slice(0, 150), "#94a3b8");
+        pushLine(STYLE.GUTTER + "⚡ [SYSTEM] " + raw.slice(0, 150), "#94a3b8");
       }
+      return;
+    }
+
+    // 3b. ERROR_MESSAGE
+    if (step.type === "ERROR_MESSAGE") {
+      scheduledUntilMs = 0;
+      activeBackgroundTask = null;
+      routeStep(step, q, (a) => applyRouteAction(a, ctx));
+      stopSpinner("✕ Error");
       return;
     }
 
@@ -2114,10 +2766,11 @@ async function main() {
       // Model Thinking
       if (step.thinking && typeof step.thinking === "string") {
         const lines = capText(step.thinking).trim().split("\n");
-        pushLine("  🧠 [Thinking]", "#c084fc");
-        for (const l of lines) {
-          if (l.trim()) pushLine("    " + l, "#a855f7");
-        }
+        const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
+          { text: "🧠 [Thinking]", fg: "#c084fc", isTitle: true },
+          ...lines.map((l) => ({ text: l, fg: "#a855f7" })),
+        ];
+        pushCard(cardLines, "thinking");
       }
 
       // Assistant Commentary / Content
@@ -2127,11 +2780,12 @@ async function main() {
         if (clean) {
           pushLine("");
           pushLine(
-            hasTools ? "  💬 [Assistant]" : "  💬 [Assistant Response]",
+            STYLE.GUTTER + (hasTools ? "💬 [Assistant]" : "💬 [Assistant Response]"),
             hasTools ? "#38bdf8" : "#4ade80",
           );
           renderMarkdown(clean);
           if (!hasTools) {
+            routeStep(step, q, (a) => applyRouteAction(a, ctx));
             const hasActiveWait = scheduledUntilMs > Date.now() || Boolean(activeBackgroundTask);
             if (hasActiveWait) {
               const isTimer = scheduledUntilMs > Date.now();
@@ -2139,14 +2793,14 @@ async function main() {
               const waitMsg = isTimer
                 ? `⏳ Menunggu timer "${scheduledPrompt}" (${sec}s)...`
                 : "⚙️ Menunggu background task selesai...";
-              pushLine(`  ${waitMsg}`, "#f59e0b");
+              pushLine(STYLE.GUTTER + waitMsg, "#f59e0b");
               startSpinner(waitMsg);
               return;
             }
 
             pushLine("");
-            pushLine("  ────────────────────────────────────────────────────────────", "#374151");
-            pushLine("  ✨ [COMPLETED] Tugas agy telah selesai dengan sukses!", "#4ade80");
+            pushLine(STYLE.GUTTER + "────────────────────────────────────────────────────────────", "#374151");
+            pushLine(STYLE.GUTTER + "✨ [COMPLETED] Tugas agy telah selesai dengan sukses!", "#4ade80");
             pushLine("");
             stopSpinner("✓ Finished");
             return;
@@ -2157,113 +2811,22 @@ async function main() {
       // Tool Calls
       if (hasTools) {
         for (const tc of step.tool_calls) {
-          const name = tc.name || "tool";
-          const args = tc.args || {};
-          switch (name) {
-            case "view_file": {
-              const file = args.AbsolutePath || args.file || "";
-              const rel = path.relative(process.cwd(), file) || file;
-              const sLine = args.StartLine ? ` (L${args.StartLine}-${args.EndLine || ""})` : "";
-              pushLine(`  🔍 [VIEW FILE] ${rel}${sLine}`, "#38bdf8");
-              break;
-            }
-            case "write_to_file": {
-              const file = args.TargetFile || args.target_file || "";
-              const rel = path.relative(process.cwd(), file) || file;
-              const raw = unescapeCodeString(capText(args.CodeContent || ""));
-              const lines = raw.split("\n");
-              const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
-                { text: `📝 [WRITE FILE] ${rel}`, fg: "#4ade80", isTitle: true },
-              ];
-              if (raw) {
-                for (let k = 0; k < lines.length; k++) {
-                  cardLines.push({
-                    text: `  + ${String(1 + k).padStart(4)}: ${lines[k]}`,
-                    fg: "#4ade80",
-                  });
-                }
-              }
-              pushCard(cardLines, "tool");
-              break;
-            }
-            case "replace_file_content": {
-              const file = args.TargetFile || args.target_file || "";
-              const rel = path.relative(process.cwd(), file) || file;
-              const sLine = args.StartLine ? Number(args.StartLine) : 1;
-              const rawT = unescapeCodeString(capText(args.TargetContent || ""));
-              const rawR = unescapeCodeString(capText(args.ReplacementContent || ""));
-              const tLines = rawT.split("\n");
-              const rLines = rawR.split("\n");
-              const total = Math.max(tLines.length, rLines.length);
-
-              const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
-                { text: `✏️  [DIFF EDIT] ${rel} (Line ${sLine})`, fg: "#fbbf24", isTitle: true },
-              ];
-
-              for (let k = 0; k < total; k++) {
-                if (k < tLines.length && k < rLines.length && tLines[k] !== rLines[k]) {
-                  cardLines.push({
-                    text: `  - ${String(sLine + k).padStart(4)}: ${tLines[k]}`,
-                    fg: "#f87171",
-                  });
-                  cardLines.push({
-                    text: `  + ${String(sLine + k).padStart(4)}: ${rLines[k]}`,
-                    fg: "#4ade80",
-                  });
-                } else if (k < tLines.length && k >= rLines.length) {
-                  cardLines.push({
-                    text: `  - ${String(sLine + k).padStart(4)}: ${tLines[k]}`,
-                    fg: "#f87171",
-                  });
-                } else if (k < rLines.length && k >= tLines.length) {
-                  cardLines.push({
-                    text: `  + ${String(sLine + k).padStart(4)}: ${rLines[k]}`,
-                    fg: "#4ade80",
-                  });
-                } else if (k < rLines.length) {
-                  cardLines.push({
-                    text: `    ${String(sLine + k).padStart(4)}: ${rLines[k]}`,
-                    fg: "#94a3b8",
-                  });
-                }
-              }
-              pushCard(cardLines, "tool");
-              break;
-            }
-            case "run_command": {
-              const cmd = unescapeCodeString(args.CommandLine || args.command || "").trim();
-              activeBackgroundTask = cmd;
-              pushCard([
-                { text: "💻 [BASH EXECUTION]", fg: "#38bdf8", isTitle: true },
-                { text: `  $ ${cmd}`, fg: "#fde047" },
-              ], "tool");
-              break;
-            }
-            case "grep_search":
-            case "find_by_name": {
-              const query = args.Query || args.Pattern || "";
-              pushLine(`  🔎 [SEARCH] ${name} -> "${query}"`, "#818cf8");
-              break;
-            }
-            case "schedule": {
-              const sec = parseInt(args.DurationSeconds || args.duration_seconds || "60", 10);
-              const p = String(args.Prompt || args.prompt || "Waiting for task");
-              scheduledUntilMs = Date.now() + sec * 1000;
-              scheduledPrompt = p;
-              pushLine(`  ⏳ [SCHEDULE] "${p}" (${sec}s)`, "#f59e0b");
-              break;
-            }
-            default: {
-              const summary = capText(args.toolSummary || tc.name || "tool", 200);
-              pushLine(`  🔧 [TOOL: ${name}] ${summary}`, "#93c5fd");
-              break;
-            }
+          if (tc.name === "run_command") {
+            const cmd = unescapeCodeString(tc.args?.CommandLine || tc.args?.command || "").trim();
+            activeBackgroundTask = cmd;
+          } else if (tc.name === "schedule") {
+            const sec = parseInt(tc.args?.DurationSeconds || tc.args?.duration_seconds || "60", 10);
+            const p = String(tc.args?.Prompt || tc.args?.prompt || "Waiting for task");
+            scheduledUntilMs = Date.now() + sec * 1000;
+            scheduledPrompt = p;
           }
         }
+        routeStep(step, q, (a) => applyRouteAction(a, ctx));
         const first = step.tool_calls[0];
         const s = first?.args?.toolSummary ?? first?.name ?? "tool";
         stopSpinner(`▶ ${s}`);
         startSpinner(`${s}...`);
+        return;
       }
       return;
     }
@@ -2274,24 +2837,7 @@ async function main() {
       // status!=="RUNNING" output is a completed command; status==="RUNNING" output is
       // an async background task still executing and must leave the marker intact.
       if (step.status !== "RUNNING") activeBackgroundTask = null;
-      const raw = unescapeCodeString(capText(step.content)).trim();
-      if (raw) {
-        const lines = raw.split("\n");
-        const cardW = getCardWidth();
-        const innerW = Math.max(15, cardW - 13);
-        for (let i = 0; i < lines.length; i++) {
-          const l = lines[i];
-          if (!l.trim()) {
-            pushLine("");
-            continue;
-          }
-          const wrapped = wrapLine(l, innerW);
-          for (let j = 0; j < wrapped.length; j++) {
-            const prefix = i === 0 && j === 0 ? "  ↳ [Output] " : "             ";
-            pushLine(prefix + wrapped[j], "#94a3b8");
-          }
-        }
-      }
+      routeStep(step, q, (a) => applyRouteAction(a, ctx));
       stopSpinner("✓ Output received");
       startSpinner("Agent processing...");
     }
@@ -2530,6 +3076,7 @@ async function main() {
     pageMode = false;
     pageIndex = 0;
     pages = [];
+    q.pending.length = 0;
     historyScanned = false;
     recording = false;
     scheduledUntilMs = 0;
