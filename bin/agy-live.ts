@@ -447,17 +447,30 @@ export function replayPageInto(
   renderer: any,
   parent: any,
   items: PageItem[],
+  opts?: { registerDomBoxes?: boolean } | boolean,
 ): void {
+  const register = typeof opts === "boolean" ? opts : Boolean(opts?.registerDomBoxes);
   for (const item of items) {
     if (item.kind === "line") {
-      const opts: any = { content: item.text, fg: item.fg, wrapMode: "none", width: "100%" };
-      if (item.bg) opts.bg = item.bg;
-      parent.add(new TextRenderable(renderer, opts));
+      const lineOpts: any = {
+        content: item.text,
+        fg: item.fg,
+        wrapMode: "none",
+        width: "100%",
+        selectable: true,
+        selectionBg: "#2563eb",
+        selectionFg: "#ffffff",
+      };
+      if (item.bg) lineOpts.bg = item.bg;
+      parent.add(new TextRenderable(renderer, lineOpts));
     } else if (item.kind === "card") {
-      buildCardBox(renderer, parent, {
+      const box = buildCardBox(renderer, parent, {
         lines: item.lines,
         accent: item.accent,
       });
+      if (register) {
+        domBoxes.set(item, box);
+      }
     }
   }
 }
@@ -630,6 +643,8 @@ export interface RouteContext {
   pageMode: boolean;
   pushLine: (txt: string, fg?: string, bg?: string) => void;
   notePushes: (n: number, scrollBox?: any) => void;
+  recordPageItem?: (item: PageItem) => void;
+  recording?: boolean;
 }
 
 export function routeStep(
@@ -829,12 +844,16 @@ export function routeStep(
 export function applyRouteAction(action: RouteAction, ctx: RouteContext): void {
   switch (action.type) {
     case "open_card": {
-      let page = ctx.pages[ctx.pages.length - 1];
-      if (!page || page.length >= 200) {
-        page = [];
-        ctx.pages.push(page);
+      if (ctx.recordPageItem) {
+        ctx.recordPageItem(action.item);
+      } else if (ctx.recording !== false) {
+        let page = ctx.pages[ctx.pages.length - 1];
+        if (!page || page.length >= 200) {
+          page = [];
+          ctx.pages.push(page);
+        }
+        page.push(action.item);
       }
-      page.push(action.item);
       if (!ctx.pageMode) {
         const box = buildCardBox(ctx.renderer, ctx.parent, {
           lines: action.item.lines,
@@ -1206,6 +1225,50 @@ export function runSelfTest(): void {
   assertTest(
     Boolean(isTextCardBg && hasNoBg),
     "PageItem line background survives replay with STYLE.CARD_BG while unstyled lines have no bg set",
+  );
+
+  const replayedBareLineTr = replayRoot.children[1];
+  assertTest(
+    (replayedBareLineTr as any).selectable === true &&
+      ((replayedBareLineTr as any).selectionBg === "#2563eb" ||
+        (replayedBareLineTr as any).selectionBg?.equals?.(parseColor("#2563eb"))) &&
+      ((replayedBareLineTr as any).selectionFg === "#ffffff" ||
+        (replayedBareLineTr as any).selectionFg?.equals?.(parseColor("#ffffff"))),
+    "replayPageInto bare line TextRenderable preserves selectable: true and selection colors",
+  );
+
+  // Exit-page-mode DOM rebuild & domBoxes re-registration test
+  const exitPageRoot: any = {
+    children: [] as any[],
+    add(child: any) {
+      this.children.push(child);
+    },
+  };
+  const exitCardItem: PageItem = {
+    kind: "card",
+    accent: STYLE.ACCENT.tool,
+    lines: [{ text: "exit page mode test card", isTitle: true }],
+  };
+  const exitPages: PageItem[][] = [[exitCardItem]];
+  replayPageInto(stubRenderer, exitPageRoot, exitPages[0], { registerDomBoxes: true });
+  assertTest(
+    domBoxes.has(exitCardItem),
+    "replayPageInto with registerDomBoxes=true registers rebuilt card box in domBoxes",
+  );
+  const exitBox = domBoxes.get(exitCardItem)!;
+  const appendSuccess = cardAppend(exitCardItem, {
+    text: "live appended line after page exit",
+    fg: "#94a3b8",
+  });
+  assertTest(
+    appendSuccess &&
+      (exitBox as any).getChildren().length >= 2 &&
+      (exitBox as any)
+        .getChildren()
+        .some((c: any) =>
+          getRenderableText(c).includes("live appended line after page exit"),
+        ),
+    "after exitPageMode replay, cardAppend reaches live DOM box registered in domBoxes",
   );
 
   // 28. T3 prune-safety: cardAppend with destroyed box
@@ -1625,7 +1688,64 @@ export function runSelfTest(): void {
     "T4 flood QA: 500-line output appends to card item lines while transcript root child-count delta < 5",
   );
 
-  // 38. T5 Left-pane header line (C4) assertions
+  // 38. T4 recording gate test: with recording=false, applyRouteAction open_card must NOT mutate or grow ctx.pages
+  const recPages: PageItem[][] = [];
+  let recFlag = false;
+  const recRoot: any = {
+    children: [] as any[],
+    add(child: any) {
+      this.children.push(child);
+    },
+  };
+  const recCtx: RouteContext = {
+    renderer: stubRenderer,
+    parent: recRoot,
+    pages: recPages,
+    pageMode: true,
+    pushLine: (txt, fg, bg) => {
+      if (recFlag) {
+        let p = recPages[recPages.length - 1];
+        if (!p || p.length >= 200) {
+          p = [];
+          recPages.push(p);
+        }
+        p.push({ kind: "line", text: txt, fg, bg });
+      }
+    },
+    notePushes: () => {},
+    recordPageItem: (item) => {
+      if (recFlag) {
+        let p = recPages[recPages.length - 1];
+        if (!p || p.length >= 200) {
+          p = [];
+          recPages.push(p);
+        }
+        p.push(item);
+      }
+    },
+    get recording() {
+      return recFlag;
+    },
+  };
+  const recCard: PageItem = {
+    kind: "card",
+    accent: STYLE.ACCENT.tool,
+    lines: [{ text: "card in scan" }],
+  };
+  applyRouteAction({ type: "open_card", item: recCard, accent: STYLE.ACCENT.tool }, recCtx);
+  assertTest(
+    recPages.length === 0,
+    "with recording=false, applyRouteAction/open_card does NOT grow ctx.pages (total page count remains 0)",
+  );
+
+  recFlag = true;
+  applyRouteAction({ type: "open_card", item: recCard, accent: STYLE.ACCENT.tool }, recCtx);
+  assertTest(
+    recPages.length === 1 && recPages[0].length === 1 && recPages[0][0] === recCard,
+    "with recording=true, applyRouteAction/open_card records item into ctx.pages",
+  );
+
+  // 39. T5 Left-pane header line (C4) assertions
   const testRenderer5: any = {
     requestRender: () => {},
     registerLifecyclePass: () => {},
@@ -1721,8 +1841,8 @@ export function runSelfTest(): void {
 
   console.log("✔ deriveSessionState self-tests passed (25 assertions).");
   console.log("✔ pushCard Box self-test passed (1 assertion).");
-  console.log("✔ PageItem card replay & domBoxes self-tests passed (5 assertions).");
-  console.log("✔ routeStep & applyRouteAction FIFO cards self-tests passed (9 assertions).");
+  console.log("✔ PageItem card replay & domBoxes self-tests passed (8 assertions).");
+  console.log("✔ routeStep & applyRouteAction FIFO cards self-tests passed (19 assertions).");
   console.log("✔ left-pane header line self-tests passed (9 assertions).");
 }
 
@@ -1822,14 +1942,19 @@ export async function runRenderCheck(): Promise<void> {
     });
     setup.renderer.root.add(transcriptBox);
 
+    let recording = true;
     const pages: PageItem[][] = [[]];
-    function pushLine(txt: string, fg?: string, bg?: string) {
+    function recordPageItem(item: PageItem) {
+      if (!recording) return;
       let p = pages[pages.length - 1];
       if (!p || p.length >= 200) {
         p = [];
         pages.push(p);
       }
-      p.push({ kind: "line", text: txt, fg, bg });
+      p.push(item);
+    }
+    function pushLine(txt: string, fg?: string, bg?: string) {
+      recordPageItem({ kind: "line", text: txt, fg, bg });
       const opts: any = { content: txt, fg, wrapMode: "none", width: "100%" };
       if (bg) opts.bg = bg;
       transcriptBox.add(new TextRenderable(setup.renderer, opts));
@@ -1846,12 +1971,7 @@ export async function runRenderCheck(): Promise<void> {
         accent,
         lines: lines.map((l) => ({ ...l })),
       };
-      let p = pages[pages.length - 1];
-      if (!p || p.length >= 200) {
-        p = [];
-        pages.push(p);
-      }
-      p.push(item);
+      recordPageItem(item);
       const box = buildCardBox(setup.renderer, transcriptBox, { lines, accent });
       domBoxes.set(item, box);
       notePushes(lines.length, transcriptBox);
@@ -1865,6 +1985,10 @@ export async function runRenderCheck(): Promise<void> {
       pageMode: false,
       pushLine,
       notePushes: (n) => notePushes(n, transcriptBox),
+      recordPageItem,
+      get recording() {
+        return recording;
+      },
     };
 
     const q: { pending: (PageItem | null)[] } = { pending: [] };
@@ -2284,6 +2408,30 @@ export async function runRenderCheck(): Promise<void> {
     assertCheck(!appendThrew, "Prune", "cardAppend on destroyed box did not throw");
     assertCheck(pruneItem.lines.length === 2, "Prune", "pruneItem model lines grew to 2");
     assertCheck(!domBoxes.has(pruneItem), "Prune", "destroyed box entry removed from domBoxes");
+
+    // ─── Harness Recording Gate Scenario ────────────────────────────────────────
+    recording = false;
+    const preRecCount = pages[0].length;
+    pushLine(STYLE.GUTTER + "unrecorded harness line");
+    pushCard([{ text: "unrecorded harness card" }], "tool");
+    applyRouteAction(
+      {
+        type: "open_card",
+        item: {
+          kind: "card",
+          accent: STYLE.ACCENT.tool,
+          lines: [{ text: "unrecorded route card" }],
+        },
+        accent: STYLE.ACCENT.tool,
+      },
+      ctx,
+    );
+    assertCheck(
+      pages[0].length === preRecCount,
+      "HarnessRecording",
+      "Harness stub pushLine/pushCard/applyRouteAction honors recording flag when false (pages length unchanged)",
+    );
+    recording = true;
 
     // ─── Evidence Files Generation ──────────────────────────────────────────────
     const evidenceDir = path.resolve(process.cwd(), ".omo", "evidence");
@@ -3279,6 +3427,10 @@ async function main() {
     },
     pushLine,
     notePushes,
+    recordPageItem,
+    get recording() {
+      return recording;
+    },
   };
 
   // ── Clear scrollbox ────────────────────────────────────────────────────────────
@@ -3302,6 +3454,7 @@ async function main() {
       pageMode = true; // suppress DOM adds while scanning; DOM rendered after
       recording = true;
       resetCounters(); // scan re-counts from the true session start
+      pages = [];
       q.pending.length = 0;
       let pos = 0;
       let rem = "";
@@ -3358,8 +3511,12 @@ async function main() {
   }
 
   function exitPageMode() {
-    // Exiting page mode does not rebuild the DOM; a card open in replayed history receives model-only appends until next page switch.
     pageMode = false;
+    clearScrollBox();
+    const lastPage = pages[pages.length - 1];
+    if (lastPage) {
+      replayPageInto(renderer, scrollBox, lastPage, { registerDomBoxes: true });
+    }
     updateLiveLabel();
     renderer.requestRender();
   }
