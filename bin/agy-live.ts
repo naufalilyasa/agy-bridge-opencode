@@ -1117,8 +1117,22 @@ export function applyRouteAction(action: RouteAction, ctx: RouteContext): void {
   }
 }
 
+export const PROJECT_DETECTOR_VERSION = 2;
+
+export interface SessionMetaCacheEntry {
+  mtime: number;
+  size: number;
+  projectDir: string;
+  model: string;
+  title: string;
+  version: number;
+}
+
+export const sessionMetaCache = new Map<string, SessionMetaCacheEntry>();
+
 export function runSelfTest(): void {
   function assertTest(condition: boolean, msg: string) {
+
     if (!condition) {
       console.error(`❌ Assertion failed: ${msg}`);
       process.exit(1);
@@ -2259,6 +2273,158 @@ export function runSelfTest(): void {
     `F3 role empty: expected '(none detected)', got '${roleD}'`,
   );
 
+  // 43. Project Detection & Cache Invalidation Self-Tests
+  const projTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agy-proj-test-"));
+  try {
+    const shallowDir = path.join(projTmpDir, "shallow");
+    fs.mkdirSync(shallowDir, { recursive: true });
+    fs.writeFileSync(path.join(shallowDir, "package.json"), "{}", "utf8");
+
+    const deepDir = path.join(shallowDir, "sub", "deep-repo");
+    fs.mkdirSync(path.join(deepDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(deepDir, "package.json"), "{}", "utf8");
+
+    // 1. best-candidate-not-first: shallow candidate first, deeper candidate second
+    const logBest = path.join(projTmpDir, "best-candidate.jsonl");
+    fs.writeFileSync(
+      logBest,
+      `{"tool":"view_file","params":{"DirectoryPath":"${path.join(shallowDir, "file.ts")}"}}\n` +
+        `{"tool":"view_file","params":{"AbsolutePath":"${path.join(deepDir, "src", "app.ts")}"}}\n`,
+      "utf8",
+    );
+    const bestRes = detectProjectDir(logBest);
+    assertTest(
+      bestRes === deepDir,
+      `detectProjectDir best-candidate-not-first: expected deep dir '${deepDir}', got '${bestRes}'`,
+    );
+
+    // 2. relative candidate rejected: bare filename / relative path
+    const logRel = path.join(projTmpDir, "rel.jsonl");
+    fs.writeFileSync(
+      logRel,
+      `{"params":{"AbsolutePath":"relative/path/file.ts"}}\n{"params":{"DirectoryPath":"bare-file.txt"}}\n`,
+      "utf8",
+    );
+    const relRes = detectProjectDir(logRel);
+    assertTest(
+      relRes === "(Unbound session)",
+      `detectProjectDir relative candidate rejected: expected '(Unbound session)', got '${relRes}'`,
+    );
+
+    // 3. scratch-area candidate skipped in favour of a real project candidate
+    const logScratch = path.join(projTmpDir, "scratch.jsonl");
+    fs.writeFileSync(
+      logScratch,
+      `{"params":{"AbsolutePath":"${path.join(os.homedir(), ".gemini", "antigravity-cli", "brain", "abc-123", ".system_generated", "steps", "1", "output.txt")}"}}\n` +
+        `{"params":{"AbsolutePath":"${path.join(deepDir, "src", "app.ts")}"}}\n`,
+      "utf8",
+    );
+    const scratchRes = detectProjectDir(logScratch);
+    assertTest(
+      scratchRes === deepDir,
+      `detectProjectDir scratch-area candidate skipped: expected '${deepDir}', got '${scratchRes}'`,
+    );
+
+    // 4. tier-2 excluding home dir and $HOME/Downloads
+    const tier2Dir = path.join(projTmpDir, "plain-project-dir");
+    fs.mkdirSync(tier2Dir, { recursive: true });
+
+    const logHome = path.join(projTmpDir, "home.jsonl");
+    fs.writeFileSync(logHome, `{"params":{"AbsolutePath":"${os.homedir()}"}}\n`, "utf8");
+    const homeRes = detectProjectDir(logHome);
+    assertTest(
+      homeRes === "(Unbound session)",
+      `detectProjectDir tier-2 rejects bare home dir: expected '(Unbound session)', got '${homeRes}'`,
+    );
+
+    const logDl = path.join(projTmpDir, "dl.jsonl");
+    fs.writeFileSync(
+      logDl,
+      `{"params":{"AbsolutePath":"${path.join(os.homedir(), "Downloads", "some-image.png")}"}}\n`,
+      "utf8",
+    );
+    const dlRes = detectProjectDir(logDl);
+    assertTest(
+      dlRes === "(Unbound session)",
+      `detectProjectDir tier-2 rejects $HOME/Downloads: expected '(Unbound session)', got '${dlRes}'`,
+    );
+
+    const logTier2 = path.join(projTmpDir, "tier2.jsonl");
+    fs.writeFileSync(logTier2, `{"params":{"AbsolutePath":"${tier2Dir}"}}\n`, "utf8");
+    const tier2Res = detectProjectDir(logTier2);
+    assertTest(
+      tier2Res === tier2Dir,
+      `detectProjectDir tier-2 accepts valid dir: expected '${tier2Dir}', got '${tier2Res}'`,
+    );
+
+    // 5. sentinel when nothing qualifies
+    const logNone = path.join(projTmpDir, "none.jsonl");
+    fs.writeFileSync(
+      logNone,
+      `{"params":{"AbsolutePath":"/System/Library"}}\n{"params":{"DirectoryPath":"/usr/bin"}}\n`,
+      "utf8",
+    );
+    const noneRes = detectProjectDir(logNone);
+    assertTest(
+      noneRes === "(Unbound session)",
+      `detectProjectDir sentinel when nothing qualifies: expected '(Unbound session)', got '${noneRes}'`,
+    );
+
+    // 6. cache invalidation on algorithm version change
+    const logCache = path.join(projTmpDir, "cache.jsonl");
+    fs.writeFileSync(logCache, `{"params":{"AbsolutePath":"${tier2Dir}"}}\n`, "utf8");
+    const statCache = fs.statSync(logCache);
+    sessionMetaCache.set(logCache, {
+      mtime: statCache.mtimeMs,
+      size: statCache.size,
+      projectDir: "(Unbound session)",
+      model: "test-model",
+      title: "test-title",
+      version: 1,
+    });
+    const cachedEntry = sessionMetaCache.get(logCache);
+    const isOldValid = Boolean(
+      cachedEntry &&
+        cachedEntry.mtime === statCache.mtimeMs &&
+        cachedEntry.size === statCache.size &&
+        cachedEntry.version === PROJECT_DETECTOR_VERSION,
+    );
+    assertTest(!isOldValid, "cache invalidation: entry with old algorithm version (v1) is invalidated");
+
+    // Verify cache miss refreshes with new algorithm and stamps new version
+    let resolvedDir: string;
+    if (
+      cachedEntry &&
+      cachedEntry.mtime === statCache.mtimeMs &&
+      cachedEntry.size === statCache.size &&
+      cachedEntry.version === PROJECT_DETECTOR_VERSION
+    ) {
+      resolvedDir = cachedEntry.projectDir;
+    } else {
+      resolvedDir = detectProjectDir(logCache);
+      sessionMetaCache.set(logCache, {
+        mtime: statCache.mtimeMs,
+        size: statCache.size,
+        projectDir: resolvedDir,
+        model: "test-model",
+        title: "test-title",
+        version: PROJECT_DETECTOR_VERSION,
+      });
+    }
+    assertTest(
+      resolvedDir === tier2Dir,
+      `cache invalidation: re-detection ran and resolved to '${tier2Dir}', got '${resolvedDir}'`,
+    );
+    const refreshedEntry = sessionMetaCache.get(logCache);
+    assertTest(
+      refreshedEntry?.version === PROJECT_DETECTOR_VERSION &&
+        refreshedEntry.projectDir === tier2Dir,
+      "cache invalidation: cache entry updated with new detector version and bound projectDir",
+    );
+  } finally {
+    fs.rmSync(projTmpDir, { recursive: true, force: true });
+  }
+
   console.log("✔ deriveSessionState self-tests passed (25 assertions).");
   console.log("✔ pushCard Box self-test passed (1 assertion).");
   console.log("✔ PageItem card replay & domBoxes self-tests passed (8 assertions).");
@@ -2267,7 +2433,12 @@ export function runSelfTest(): void {
   console.log(
     "✔ session picker state pill, G-to-live, and real directives self-tests passed (15 assertions).",
   );
+  console.log(
+    "✔ detectProjectDir and cache invalidation self-tests passed (9 assertions).",
+  );
 }
+
+
 
 export function runDbTest(): void {
   if (!fs.existsSync(CONVERSATION_DB_PATH)) {
@@ -3012,12 +3183,8 @@ function detectSessionModel(logPath: string): string {
   }
 }
 
-const sessionMetaCache = new Map<
-  string,
-  { mtime: number; size: number; projectDir: string; model: string; title: string }
->();
-
 function getAllSessions(): AgySession[] {
+
   if (!fs.existsSync(BRAIN_DIR)) return [];
   const out: AgySession[] = [];
   for (const entry of fs.readdirSync(BRAIN_DIR)) {
@@ -3029,7 +3196,12 @@ function getAllSessions(): AgySession[] {
       let projectDir: string;
       let model: string;
       let title: string;
-      if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
+      if (
+        cached &&
+        cached.mtime === stat.mtimeMs &&
+        cached.size === stat.size &&
+        cached.version === PROJECT_DETECTOR_VERSION
+      ) {
         projectDir = cached.projectDir;
         model = cached.model;
         title = cached.title;
@@ -3044,6 +3216,7 @@ function getAllSessions(): AgySession[] {
           projectDir,
           model,
           title,
+          version: PROJECT_DETECTOR_VERSION,
         });
       }
       out.push({
@@ -3060,36 +3233,125 @@ function getAllSessions(): AgySession[] {
   return out.sort((a, b) => b.mtime - a.mtime);
 }
 
-function detectProjectDir(logPath: string): string {
-  try {
-    const fd = fs.openSync(logPath, "r");
-    const size = fs.fstatSync(fd).size;
-    const buf = Buffer.alloc(Math.min(32768, size));
-    fs.readSync(fd, buf, 0, buf.length, 0);
-    fs.closeSync(fd);
-    const text = buf.toString("utf8");
-    const rx = /(?:AbsolutePath|Cwd|SearchPath|DirectoryPath)[^:]*:\s*"?\\?"?([^"',\\]+)/g;
-    let m: RegExpExecArray | null;
-    while ((m = rx.exec(text)) !== null) {
-      let dir = m[1].trim();
+function isJunkCandidate(p: string): boolean {
+  if (p.includes("/.gemini/antigravity-cli/brain/") || p.includes("/.system_generated/")) return true;
+  return (
+    p === "/Applications" || p.startsWith("/Applications/") ||
+    p === "/System" || p.startsWith("/System/") ||
+    p === "/usr" || p.startsWith("/usr/") ||
+    p === "/private" || p.startsWith("/private/")
+  );
+}
+
+interface Tier1Candidate {
+  markerDir: string;
+  depth: number;
+  steps: number;
+}
+
+export function detectProjectDirFromText(text: string): string {
+  const HOME = os.homedir();
+  const DOWNLOADS = path.join(HOME, "Downloads");
+  const rx = /(?:AbsolutePath|Cwd|SearchPath|DirectoryPath)[^:]*:\s*"?\\?"?([^"',\\]+)/g;
+  let m: RegExpExecArray | null;
+
+  const tier1Candidates: Tier1Candidate[] = [];
+  const tier2Candidates: string[] = [];
+
+  while ((m = rx.exec(text)) !== null) {
+    const raw = m[1].trim();
+    if (!raw.startsWith("/")) continue;
+    if (isJunkCandidate(raw)) continue;
+
+    let dir = raw;
+    try {
+      if (fs.existsSync(dir) && !fs.statSync(dir).isDirectory()) {
+        dir = path.dirname(dir);
+      }
+    } catch {
+      continue;
+    }
+
+    let currentDir = dir;
+    let foundMarker = false;
+    for (let i = 0; i < 6; i++) {
       try {
-        if (fs.existsSync(dir) && !fs.statSync(dir).isDirectory()) dir = path.dirname(dir);
-        for (let i = 0; i < 6; i++) {
-          if (
-            [".git", "settings.gradle", "package.json"].some((f) =>
-              fs.existsSync(path.join(dir, f)),
-            )
+        if (
+          [".git", "settings.gradle", "package.json"].some((f) =>
+            fs.existsSync(path.join(currentDir, f)),
           )
-            return dir;
-          const p = path.dirname(dir);
-          if (p === dir) break;
-          dir = p;
+        ) {
+          if (
+            currentDir !== HOME &&
+            currentDir !== DOWNLOADS &&
+            currentDir !== "/" &&
+            !isJunkCandidate(currentDir)
+          ) {
+            const depth = currentDir.split("/").filter(Boolean).length;
+            tier1Candidates.push({
+              markerDir: currentDir,
+              depth,
+              steps: i,
+            });
+            foundMarker = true;
+          }
+          break;
+        }
+        const p = path.dirname(currentDir);
+        if (p === currentDir) break;
+        currentDir = p;
+      } catch {
+        break;
+      }
+    }
+
+    if (!foundMarker) {
+      try {
+        if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+          if (
+            dir !== HOME &&
+            dir !== "/" &&
+            dir !== DOWNLOADS &&
+            !dir.startsWith(DOWNLOADS + "/") &&
+            !isJunkCandidate(dir)
+          ) {
+            const segments = dir.split("/").filter(Boolean);
+            if (!segments.some((s) => s.startsWith("."))) {
+              tier2Candidates.push(dir);
+            }
+          }
         }
       } catch {}
     }
+  }
+
+  if (tier1Candidates.length > 0) {
+    tier1Candidates.sort((a, b) => {
+      if (b.depth !== a.depth) return b.depth - a.depth;
+      return a.steps - b.steps;
+    });
+    return tier1Candidates[0].markerDir;
+  }
+
+  if (tier2Candidates.length > 0) {
+    return tier2Candidates[0];
+  }
+
+  return "(Unbound session)";
+}
+
+export function detectProjectDir(logPath: string): string {
+  try {
+    const fd = fs.openSync(logPath, "r");
+    const size = fs.fstatSync(fd).size;
+    const buf = Buffer.alloc(Math.min(65536, size));
+    fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    return detectProjectDirFromText(buf.toString("utf8"));
   } catch {}
   return "(Unbound session)";
 }
+
 
 function findProjectSession(ss: AgySession[]): AgySession | null {
   const cwd = process.cwd();
@@ -4285,7 +4547,12 @@ async function main() {
     let projectDir = fallbackSession.projectDir;
     let model = fallbackSession.model;
     let title = "";
-    if (cached && cached.mtime === mtime && cached.size === size) {
+    if (
+      cached &&
+      cached.mtime === mtime &&
+      cached.size === size &&
+      cached.version === PROJECT_DETECTOR_VERSION
+    ) {
       projectDir = cached.projectDir;
       model = cached.model;
       title = cached.title;
@@ -4297,8 +4564,16 @@ async function main() {
       }
       const row = summaryReader.getSummary(id);
       title = row?.title?.trim() || "";
-      sessionMetaCache.set(logPath, { mtime, size, projectDir, model, title });
+      sessionMetaCache.set(logPath, {
+        mtime,
+        size,
+        projectDir,
+        model,
+        title,
+        version: PROJECT_DETECTOR_VERSION,
+      });
     }
+
     return {
       id,
       path: logPath,
