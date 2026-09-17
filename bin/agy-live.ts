@@ -615,13 +615,26 @@ export function parseSessionRole(conversationId: string, brainDir: string = BRAI
     }
     const fd = fs.openSync(transcriptPath, "r");
     const buf = Buffer.alloc(32768);
-    const bytesRead = fs.readSync(fd, buf, 0, 32768, 0);
-    fs.closeSync(fd);
+    let bytesRead = 0;
+    try {
+      bytesRead = fs.readSync(fd, buf, 0, 32768, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
     if (!bytesRead) return "(empty transcript)";
-    const firstLine = buf.toString("utf8", 0, bytesRead).split("\n")[0];
+    const rawText = buf.toString("utf8", 0, bytesRead);
+    const firstLine = rawText.split("\n")[0];
     if (!firstLine) return "(none detected)";
-    const step = JSON.parse(firstLine);
-    return parseSessionRoleFromContent(step?.content);
+    try {
+      const step = JSON.parse(firstLine);
+      return parseSessionRoleFromContent(step?.content);
+    } catch {
+      // 32KB buffer may truncate step 0 JSON: extract role from raw buffer text
+      const rawRole = parseSessionRoleFromContent(rawText);
+      return /\[DELEGATED AGENT ROLE:\s*([^\]]+)\]/.test(rawText)
+        ? rawRole
+        : "(none detected)";
+    }
   } catch {
     return "(none detected)";
   }
@@ -632,7 +645,15 @@ export function extractMarkdownHeading(filePath: string): string | null {
     if (!fs.existsSync(filePath)) return null;
     const stat = fs.statSync(filePath);
     if (!stat.isFile()) return null;
-    const content = fs.readFileSync(filePath, "utf8");
+    const fd = fs.openSync(filePath, "r");
+    let bytesRead = 0;
+    const buf = Buffer.alloc(4096);
+    try {
+      bytesRead = fs.readSync(fd, buf, 0, 4096, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const content = buf.toString("utf8", 0, bytesRead);
     for (const line of content.split("\n")) {
       const trimmed = line.trim();
       if (trimmed.startsWith("#")) {
@@ -2198,6 +2219,19 @@ export function runSelfTest(): void {
         ),
       "F3: loadInjectedDirectives extracts first headings from real rule files and returns real basenames",
     );
+    const synthSessionId = "synth-oversized-session";
+    const synthLogDir = path.join(tmpDir, synthSessionId, ".system_generated", "logs");
+    fs.mkdirSync(synthLogDir, { recursive: true });
+    const synthContent =
+      '{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"<USER_REQUEST>\\n[DELEGATED AGENT ROLE: OMO_TEST_ROLE]\\n' +
+      "X".repeat(40000);
+    fs.writeFileSync(path.join(synthLogDir, "transcript.jsonl"), synthContent, "utf8");
+
+    const recoveredRole = parseSessionRole(synthSessionId, tmpDir);
+    assertTest(
+      recoveredRole === "OMO_TEST_ROLE",
+      `F3 truncated step-0 fallback: expected OMO_TEST_ROLE, got '${recoveredRole}'`,
+    );
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -2231,7 +2265,7 @@ export function runSelfTest(): void {
   console.log("✔ routeStep & applyRouteAction FIFO cards self-tests passed (19 assertions).");
   console.log("✔ left-pane header line self-tests passed (9 assertions).");
   console.log(
-    "✔ session picker state pill, G-to-live, and real directives self-tests passed (14 assertions).",
+    "✔ session picker state pill, G-to-live, and real directives self-tests passed (15 assertions).",
   );
 }
 
@@ -4677,6 +4711,12 @@ async function main() {
       title: string,
       lines: { label: string; value: string; valFg?: string }[],
     ) {
+      const termW = renderer.width || 80;
+      const cardInnerW = Math.max(20, termW - 37);
+      const maxLabelLen = lines.reduce((m, row) => Math.max(m, row.label.length), 0);
+      const desiredW = Math.max(24, maxLabelLen + 3);
+      const labelW = Math.min(desiredW, Math.max(24, cardInnerW - 1));
+
       const card = new BoxRenderable(renderer, {
         width: "100%",
         flexDirection: "column",
@@ -4696,7 +4736,7 @@ async function main() {
       for (const row of lines) {
         const r = new BoxRenderable(renderer, { width: "100%", height: 1, flexDirection: "row" });
         r.add(
-          new TextRenderable(renderer, { content: `  ${row.label}`, fg: "#94a3b8", width: 24 }),
+          new TextRenderable(renderer, { content: `  ${row.label}`, fg: "#94a3b8", width: labelW }),
         );
         r.add(
           new TextRenderable(renderer, {
