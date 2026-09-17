@@ -120,10 +120,7 @@ export function parseSqliteDate(val: unknown): number {
 const transcriptLiveCache = new Map<string, { mtimeMs: number | undefined; at: number }>();
 const TRANSCRIPT_LIVE_TTL_MS = 1000;
 
-export function getTranscriptLiveMs(
-  conversationId: string,
-  now = Date.now(),
-): number | undefined {
+export function getTranscriptLiveMs(conversationId: string, now = Date.now()): number | undefined {
   if (!conversationId) return undefined;
   // #4 perf: memoize per conversation so per-descendant liveness checks don't fire
   // a fresh statSync for every session on every 250ms UI tick. Cache the ABSOLUTE
@@ -391,10 +388,7 @@ export function buildCardBox(
   },
 ): BoxRenderable {
   const titleLine = opts.lines.find((l) => l.isTitle);
-  const accent =
-    opts.accent ||
-    titleLine?.fg ||
-    STYLE.ACCENT.tool;
+  const accent = opts.accent || titleLine?.fg || STYLE.ACCENT.tool;
   const box = new BoxRenderable(renderer, {
     border: ["left"],
     borderColor: accent,
@@ -424,10 +418,7 @@ export function buildCardBox(
   return box;
 }
 
-export function cardAppend(
-  item: PageItem,
-  line: { text: string; fg?: string },
-): boolean {
+export function cardAppend(item: PageItem, line: { text: string; fg?: string }): boolean {
   if (item.kind !== "card") return false;
   item.lines.push(line);
   const box = domBoxes.get(item);
@@ -483,6 +474,271 @@ export interface LeftPaneHeaderOpts {
   model?: string;
   state?: SessionState | string;
   followingChildId?: string | null;
+  userPinned?: boolean;
+}
+
+export function formatSessionStatePill(
+  state?: SessionState | string,
+  followingChildId?: string | null,
+): { pill: string; pillFg: string } {
+  const normState = (state || "unknown").toLowerCase();
+  switch (normState) {
+    case "running":
+      return {
+        pill: followingChildId ? "● RUN (child)" : "● RUNNING",
+        pillFg: "#4ade80",
+      };
+    case "idle":
+      return { pill: "○ IDLE", pillFg: "#94a3b8" };
+    case "stuck":
+      return { pill: "▲ STUCK", pillFg: "#fbbf24" };
+    case "killed":
+      return { pill: "✕ KILLED", pillFg: "#ef4444" };
+    case "unknown":
+    default:
+      return { pill: "? UNKNOWN", pillFg: "#6b7280" };
+  }
+}
+
+export function handleNormalKey(
+  key: { name: string; seq?: string; ctrl?: boolean; shift?: boolean },
+  env: {
+    pageMode: boolean;
+    isLive: boolean;
+    exitPageMode: () => void;
+    scrollToBottom: () => void;
+    updateLiveLabel?: () => void;
+    requestRender?: () => void;
+    pagePrev?: () => void;
+    pageNext?: () => void;
+    openSelector?: () => void;
+    openContextView?: () => void;
+    scrollToTop?: () => void;
+    exitApp?: (code: number) => void;
+    scrollBy?: (delta: number) => void;
+    pageScroll?: (dir: "up" | "down") => void;
+  },
+): boolean {
+  const keyLower = (key.name || "").toLowerCase();
+  const seq = key.seq || "";
+  const seqLower = seq.toLowerCase();
+  const shift = Boolean(key.shift);
+
+  // Normal mode: in pageMode, G, q, escape return to live tail
+  if (
+    env.pageMode &&
+    (keyLower === "q" || keyLower === "escape" || (keyLower === "g" && shift) || seq === "G")
+  ) {
+    env.exitPageMode();
+    env.scrollToBottom();
+    env.updateLiveLabel?.();
+    env.requestRender?.();
+    return true;
+  }
+  if (keyLower === "left") {
+    env.pagePrev?.();
+    return true;
+  }
+  if (keyLower === "right") {
+    env.pageNext?.();
+    return true;
+  }
+  if (keyLower === "q" || keyLower === "escape") {
+    env.exitApp?.(0);
+    return true;
+  }
+  if (keyLower === "s" || seqLower === "s") {
+    env.openSelector?.();
+    return true;
+  }
+  if (keyLower === "c" || seqLower === "c") {
+    env.openContextView?.();
+    return true;
+  }
+  if (keyLower === "g" && !shift && seq !== "G") {
+    env.scrollToTop?.();
+    return true;
+  }
+  if ((keyLower === "g" && shift) || seq === "G") {
+    env.scrollToBottom();
+    env.updateLiveLabel?.();
+    env.requestRender?.();
+    return true;
+  }
+  if (keyLower === "up" || keyLower === "k") {
+    env.scrollBy?.(-3);
+    return true;
+  }
+  if (keyLower === "down" || keyLower === "j") {
+    env.scrollBy?.(3);
+    return true;
+  }
+  if (keyLower === "pageup") {
+    env.pageScroll?.("up");
+    return true;
+  }
+  if (keyLower === "pagedown") {
+    env.pageScroll?.("down");
+    return true;
+  }
+  return false;
+}
+
+export function parseSessionRoleFromContent(content: string | undefined | null): string {
+  if (!content) return "(none detected)";
+  const match = content.match(/\[DELEGATED AGENT ROLE:\s*([^\]]+)\]/);
+  if (match && match[1]?.trim()) {
+    return match[1].trim();
+  }
+  const firstLine = content
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  if (firstLine) {
+    return firstLine.length > 50 ? firstLine.slice(0, 47) + "…" : firstLine;
+  }
+  return "(none detected)";
+}
+
+export function parseSessionRole(conversationId: string, brainDir: string = BRAIN_DIR): string {
+  if (!conversationId) return "(none detected)";
+  const transcriptPath = path.join(
+    brainDir,
+    conversationId,
+    ".system_generated",
+    "logs",
+    "transcript.jsonl",
+  );
+  try {
+    if (!fs.existsSync(transcriptPath)) {
+      return "(transcript not found)";
+    }
+    const fd = fs.openSync(transcriptPath, "r");
+    const buf = Buffer.alloc(32768);
+    const bytesRead = fs.readSync(fd, buf, 0, 32768, 0);
+    fs.closeSync(fd);
+    if (!bytesRead) return "(empty transcript)";
+    const firstLine = buf.toString("utf8", 0, bytesRead).split("\n")[0];
+    if (!firstLine) return "(none detected)";
+    const step = JSON.parse(firstLine);
+    return parseSessionRoleFromContent(step?.content);
+  } catch {
+    return "(none detected)";
+  }
+}
+
+export function extractMarkdownHeading(filePath: string): string | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return null;
+    const content = fs.readFileSync(filePath, "utf8");
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("#")) {
+        const heading = trimmed.replace(/^#+\s*/, "").trim();
+        if (heading) return heading;
+      }
+    }
+    return `${fmtSize(stat.size)} (${filePath})`;
+  } catch {
+    return null;
+  }
+}
+
+export function loadInjectedDirectives(opts: {
+  sessionId: string;
+  projectDir?: string;
+  brainDir?: string;
+  configDir?: string;
+}): { label: string; value: string; valFg?: string }[] {
+  const rows: { label: string; value: string; valFg?: string }[] = [];
+  const brainDir = opts.brainDir || BRAIN_DIR;
+  const configDir = opts.configDir || path.join(os.homedir(), ".gemini", "config");
+
+  // 1. Session Role
+  const role = parseSessionRole(opts.sessionId, brainDir);
+  rows.push({
+    label: "Session Role:",
+    value: role,
+    valFg: role.startsWith("(") ? "#94a3b8" : "#4ade80",
+  });
+
+  // 2. Global Rule Files: ~/.gemini/config/GEMINI.md and ~/.gemini/config/rules/*.md
+  let foundGlobal = false;
+  const geminiMd = path.join(configDir, "GEMINI.md");
+  const geminiHeading = extractMarkdownHeading(geminiMd);
+  if (geminiHeading) {
+    rows.push({
+      label: path.basename(geminiMd),
+      value: geminiHeading,
+      valFg: "#38bdf8",
+    });
+    foundGlobal = true;
+  }
+
+  const rulesDir = path.join(configDir, "rules");
+  try {
+    if (fs.existsSync(rulesDir) && fs.statSync(rulesDir).isDirectory()) {
+      const entries = fs
+        .readdirSync(rulesDir)
+        .filter((f) => f.endsWith(".md"))
+        .sort();
+      for (const entry of entries) {
+        const full = path.join(rulesDir, entry);
+        const heading = extractMarkdownHeading(full);
+        if (heading) {
+          rows.push({
+            label: entry,
+            value: heading,
+            valFg: "#38bdf8",
+          });
+          foundGlobal = true;
+        }
+      }
+    }
+  } catch {}
+
+  if (!foundGlobal) {
+    rows.push({
+      label: "Global Rules:",
+      value: "(not found: GEMINI.md, rules/*.md)",
+      valFg: "#6b7280",
+    });
+  }
+
+  // 3. Workspace project rules: CLAUDE.md and AGENTS.md in projectDir
+  const proj = opts.projectDir;
+  if (!proj || proj === "(Unbound session)") {
+    rows.push({
+      label: "Project Rules:",
+      value: "(Unbound session)",
+      valFg: "#6b7280",
+    });
+  } else {
+    let foundProjRule = false;
+    for (const ruleName of ["CLAUDE.md", "AGENTS.md"]) {
+      const full = path.join(proj, ruleName);
+      const heading = extractMarkdownHeading(full);
+      if (heading) {
+        rows.push({
+          label: ruleName,
+          value: heading,
+          valFg: "#fbbf24",
+        });
+        foundProjRule = true;
+      }
+    }
+    if (!foundProjRule) {
+      rows.push({
+        label: "Project Rules:",
+        value: "(not found: CLAUDE.md, AGENTS.md)",
+        valFg: "#6b7280",
+      });
+    }
+  }
+
+  return rows;
 }
 
 export function formatLeftPaneHeader(opts: LeftPaneHeaderOpts): {
@@ -497,36 +753,10 @@ export function formatLeftPaneHeader(opts: LeftPaneHeaderOpts): {
       ? path.basename(opts.projectDir)
       : "Unbound";
   const model = opts.model || "Gemini 3.7 Flash";
-  const state = (opts.state || "unknown").toLowerCase();
+  const { pill, pillFg } = formatSessionStatePill(opts.state, opts.followingChildId);
 
-  let pill = "? UNKNOWN";
-  let pillFg = "#6b7280";
-
-  switch (state) {
-    case "running":
-      pill = opts.followingChildId ? "● RUN (child)" : "● RUNNING";
-      pillFg = "#4ade80";
-      break;
-    case "idle":
-      pill = "○ IDLE";
-      pillFg = "#94a3b8";
-      break;
-    case "stuck":
-      pill = "▲ STUCK";
-      pillFg = "#fbbf24";
-      break;
-    case "killed":
-      pill = "✕ KILLED";
-      pillFg = "#ef4444";
-      break;
-    case "unknown":
-    default:
-      pill = "? UNKNOWN";
-      pillFg = "#6b7280";
-      break;
-  }
-
-  const info = `${sid8} · ${proj} · ${model}`;
+  const pinPrefix = opts.userPinned ? "📌 " : "";
+  const info = `${pinPrefix}${sid8} · ${proj} · ${model}`;
   const fullText = ` ${info} ${pill} `;
   return { info, pill, pillFg, fullText };
 }
@@ -542,10 +772,7 @@ function getRenderableText(node: any): string {
   return String(node.content ?? "");
 }
 
-export function buildLeftPaneHeader(
-  renderer: any,
-  opts: LeftPaneHeaderOpts,
-): BoxRenderable {
+export function buildLeftPaneHeader(renderer: any, opts: LeftPaneHeaderOpts): BoxRenderable {
   const formatted = formatLeftPaneHeader(opts);
   const hdr = new BoxRenderable(renderer, {
     width: "100%",
@@ -590,10 +817,7 @@ export function buildLeftPaneHeader(
   return hdr;
 }
 
-export function updateLeftPaneHeader(
-  hdr: BoxRenderable,
-  opts: LeftPaneHeaderOpts,
-): void {
+export function updateLeftPaneHeader(hdr: BoxRenderable, opts: LeftPaneHeaderOpts): void {
   if (!hdr || (hdr as any).isDestroyed) return;
   const formatted = formatLeftPaneHeader(opts);
   const children = (hdr as any).getChildren?.() || [];
@@ -655,11 +879,7 @@ export function routeStep(
   if (!step) return;
 
   // 1. Hard resets: USER_INPUT, CHECKPOINT, SYSTEM_MESSAGE
-  if (
-    step.type === "USER_INPUT" ||
-    step.type === "CHECKPOINT" ||
-    step.type === "SYSTEM_MESSAGE"
-  ) {
+  if (step.type === "USER_INPUT" || step.type === "CHECKPOINT" || step.type === "SYSTEM_MESSAGE") {
     q.pending.length = 0;
     return;
   }
@@ -812,9 +1032,7 @@ export function routeStep(
   // 4. Tool Output Steps (GENERIC, etc. with step.content)
   if (step.content && typeof step.content === "string") {
     const target =
-      step.status === "RUNNING" && q.pending.length > 0
-        ? q.pending[0]
-        : q.pending.shift();
+      step.status === "RUNNING" && q.pending.length > 0 ? q.pending[0] : q.pending.shift();
     const raw = unescapeCodeString(capText(step.content)).trim();
     if (raw) {
       const lines = raw.split("\n");
@@ -1016,7 +1234,10 @@ export function runSelfTest(): void {
     },
     { now, staleMs, liveMs: 4000 },
   );
-  assertTest(s6b === "running", `Expected running for active child with fresh transcript, got ${s6b}`);
+  assertTest(
+    s6b === "running",
+    `Expected running for active child with fresh transcript, got ${s6b}`,
+  );
 
   // 7c. Descendant child with blank status & stale transcript -> unknown (not running)
   const s6c = deriveSessionState(
@@ -1028,14 +1249,20 @@ export function runSelfTest(): void {
     },
     { now, staleMs, liveMs: 300_000 },
   );
-  assertTest(s6c === "unknown", `Expected unknown for idle child with stale transcript, got ${s6c}`);
+  assertTest(
+    s6c === "unknown",
+    `Expected unknown for idle child with stale transcript, got ${s6c}`,
+  );
 
   // 8. Null row = unknown
   const s7 = deriveSessionState(null, { now, staleMs });
   assertTest(s7 === "unknown", `Expected unknown for null, got ${s7}`);
 
   // 9. getTranscriptLiveMs helper checks
-  assertTest(getTranscriptLiveMs("") === undefined, "getTranscriptLiveMs empty id returns undefined");
+  assertTest(
+    getTranscriptLiveMs("") === undefined,
+    "getTranscriptLiveMs empty id returns undefined",
+  );
   assertTest(
     getTranscriptLiveMs("non-existent-uuid-test") === undefined,
     "getTranscriptLiveMs missing file returns undefined",
@@ -1120,16 +1347,14 @@ export function runSelfTest(): void {
     lines: { text: string; fg?: string; isTitle?: boolean }[],
     kind?: "user" | "tool" | "thinking" | "error",
   ) {
-    const accent =
-      kind ? STYLE.ACCENT[kind] : (lines.find((l) => l.isTitle)?.fg ?? STYLE.ACCENT.tool);
+    const accent = kind
+      ? STYLE.ACCENT[kind]
+      : (lines.find((l) => l.isTitle)?.fg ?? STYLE.ACCENT.tool);
     return buildCardBox(stubRenderer, stubRoot, { lines, accent });
   }
 
   const cardBox = selfTestPushCard(
-    [
-      { text: "Test Card Title", fg: STYLE.ACCENT.tool, isTitle: true },
-      { text: "Test line 1" },
-    ],
+    [{ text: "Test Card Title", fg: STYLE.ACCENT.tool, isTitle: true }, { text: "Test line 1" }],
     "tool",
   );
 
@@ -1177,9 +1402,7 @@ export function runSelfTest(): void {
 
   replayPageInto(stubRenderer, replayRoot, testPages[0]);
 
-  const replayedCardBox = replayRoot.children.find(
-    (c: any) => c instanceof BoxRenderable,
-  );
+  const replayedCardBox = replayRoot.children.find((c: any) => c instanceof BoxRenderable);
   const isReplayedCardBg =
     replayedCardBox &&
     ((replayedCardBox.backgroundColor as any) === STYLE.CARD_BG ||
@@ -1189,9 +1412,9 @@ export function runSelfTest(): void {
   assertTest(
     Boolean(
       replayedCardBox &&
-        Array.isArray(replayedCardBox.border) &&
-        replayedCardBox.border.includes("left") &&
-        isReplayedCardBg,
+      Array.isArray(replayedCardBox.border) &&
+      replayedCardBox.border.includes("left") &&
+      isReplayedCardBg,
     ),
     "replayPageInto constructs a Box child with border including 'left' and backgroundColor === STYLE.CARD_BG",
   );
@@ -1265,9 +1488,7 @@ export function runSelfTest(): void {
       (exitBox as any).getChildren().length >= 2 &&
       (exitBox as any)
         .getChildren()
-        .some((c: any) =>
-          getRenderableText(c).includes("live appended line after page exit"),
-        ),
+        .some((c: any) => getRenderableText(c).includes("live appended line after page exit")),
     "after exitPageMode replay, cardAppend reaches live DOM box registered in domBoxes",
   );
 
@@ -1431,17 +1652,13 @@ export function runSelfTest(): void {
   const bashCardC = (openCardsC[1] as any).item;
 
   const outActionsC1: RouteAction[] = [];
-  routeStep(
-    { type: "GENERIC", status: "DONE", content: "written ok" },
-    qC,
-    (a) => outActionsC1.push(a),
+  routeStep({ type: "GENERIC", status: "DONE", content: "written ok" }, qC, (a) =>
+    outActionsC1.push(a),
   );
 
   const outActionsC2: RouteAction[] = [];
-  routeStep(
-    { type: "GENERIC", status: "DONE", content: "test passed" },
-    qC,
-    (a) => outActionsC2.push(a),
+  routeStep({ type: "GENERIC", status: "DONE", content: "test passed" }, qC, (a) =>
+    outActionsC2.push(a),
   );
 
   assertTest(
@@ -1478,10 +1695,8 @@ export function runSelfTest(): void {
   assertTest(qD.pending.length === 0, "T4 (d): turn-final assistant text clears q.pending");
 
   const stragglerActions: RouteAction[] = [];
-  routeStep(
-    { type: "GENERIC", content: "delayed straggler output" },
-    qD,
-    (a) => stragglerActions.push(a),
+  routeStep({ type: "GENERIC", content: "delayed straggler output" }, qD, (a) =>
+    stragglerActions.push(a),
   );
   assertTest(
     stragglerActions.length > 0 && stragglerActions.every((a) => a.type === "bare"),
@@ -1674,11 +1889,7 @@ export function runSelfTest(): void {
   );
   const rootCountBefore = floodRoot.children.length;
   const floodLines = Array.from({ length: 500 }, (_, i) => `flood line ${i}`).join("\n");
-  routeStep(
-    { type: "GENERIC", content: floodLines },
-    floodQ,
-    (a) => applyRouteAction(a, floodCtx),
-  );
+  routeStep({ type: "GENERIC", content: floodLines }, floodQ, (a) => applyRouteAction(a, floodCtx));
   const rootCountAfter = floodRoot.children.length;
   const floodCardItem = floodPages[0][0];
   assertTest(
@@ -1778,26 +1989,14 @@ export function runSelfTest(): void {
   testLeftPane.add(testFooterBar);
 
   const headerNode5 = (testLeftPane.getChildren() as any[])[0];
-  assertTest(
-    headerNode5 === headerBox5,
-    "T5: header node exists as first child of leftPane",
-  );
+  assertTest(headerNode5 === headerBox5, "T5: header node exists as first child of leftPane");
   assertTest(
     headerNode5.text.includes("f83a1b2c"),
     "T5: header text contains session id (first 8 chars) after fixture session start",
   );
-  assertTest(
-    headerNode5.text.includes("my-project"),
-    "T5: header text contains project basename",
-  );
-  assertTest(
-    headerNode5.text.includes("gemini-3.7-flash"),
-    "T5: header text contains model",
-  );
-  assertTest(
-    headerNode5.text.includes("RUNNING"),
-    "T5: header text contains running state pill",
-  );
+  assertTest(headerNode5.text.includes("my-project"), "T5: header text contains project basename");
+  assertTest(headerNode5.text.includes("gemini-3.7-flash"), "T5: header text contains model");
+  assertTest(headerNode5.text.includes("RUNNING"), "T5: header text contains running state pill");
 
   // Adversarial check: state change updates header (anti-stale-state)
   updateLeftPaneHeader(headerBox5, {
@@ -1825,7 +2024,10 @@ export function runSelfTest(): void {
   } catch {
     teardownException5 = true;
   }
-  assertTest(!teardownException5, "T5: header pill text updates/teardown executes without throwing");
+  assertTest(
+    !teardownException5,
+    "T5: header pill text updates/teardown executes without throwing",
+  );
 
   // Production wiring assertions
   const paneHdrAddIdx = selfSource.indexOf("leftPane.add(leftPaneHdr)");
@@ -1839,11 +2041,198 @@ export function runSelfTest(): void {
     "T5 (wiring): updateLeftPaneHeader is wired into updateLiveLabel",
   );
 
+  // 40. Feature 1: session picker state pill mapping assertions (5 states + child)
+  const pillRunning = formatSessionStatePill("running");
+  assertTest(
+    pillRunning.pill === "● RUNNING" && pillRunning.pillFg === "#4ade80",
+    `F1: running state pill expected '● RUNNING' / #4ade80, got ${pillRunning.pill} / ${pillRunning.pillFg}`,
+  );
+  const pillChild = formatSessionStatePill("running", "child-123");
+  assertTest(
+    pillChild.pill === "● RUN (child)" && pillChild.pillFg === "#4ade80",
+    `F1: running child pill expected '● RUN (child)' / #4ade80, got ${pillChild.pill} / ${pillChild.pillFg}`,
+  );
+  const pillIdle = formatSessionStatePill("idle");
+  assertTest(
+    pillIdle.pill === "○ IDLE" && pillIdle.pillFg === "#94a3b8",
+    `F1: idle state pill expected '○ IDLE' / #94a3b8, got ${pillIdle.pill} / ${pillIdle.pillFg}`,
+  );
+  const pillStuck = formatSessionStatePill("stuck");
+  assertTest(
+    pillStuck.pill === "▲ STUCK" && pillStuck.pillFg === "#fbbf24",
+    `F1: stuck state pill expected '▲ STUCK' / #fbbf24, got ${pillStuck.pill} / ${pillStuck.pillFg}`,
+  );
+  const pillKilled = formatSessionStatePill("killed");
+  assertTest(
+    pillKilled.pill === "✕ KILLED" && pillKilled.pillFg === "#ef4444",
+    `F1: killed state pill expected '✕ KILLED' / #ef4444, got ${pillKilled.pill} / ${pillKilled.pillFg}`,
+  );
+  const pillUnknown = formatSessionStatePill("unknown");
+  assertTest(
+    pillUnknown.pill === "? UNKNOWN" && pillUnknown.pillFg === "#6b7280",
+    `F1: unknown state pill expected '? UNKNOWN' / #6b7280, got ${pillUnknown.pill} / ${pillUnknown.pillFg}`,
+  );
+
+  // 41. Feature 2: G in pageMode exits pageMode and targets live tail
+  const navStateA = { pageMode: true, isLive: false };
+  let exitCalledA = false;
+  let scrollBottomCalledA = false;
+  const navCtxA = {
+    get pageMode() {
+      return navStateA.pageMode;
+    },
+    get isLive() {
+      return navStateA.isLive;
+    },
+    exitPageMode: () => {
+      exitCalledA = true;
+      navStateA.pageMode = false;
+    },
+    scrollToBottom: () => {
+      scrollBottomCalledA = true;
+      navStateA.isLive = true;
+    },
+    updateLiveLabel: () => {},
+    requestRender: () => {},
+  };
+  const handledA = handleNormalKey({ name: "G", seq: "G", shift: true }, navCtxA);
+  assertTest(
+    handledA === true &&
+      exitCalledA === true &&
+      scrollBottomCalledA === true &&
+      navStateA.pageMode === false &&
+      navStateA.isLive === true,
+    "F2: G in pageMode exits pageMode (pageMode=false) and targets live tail (isLive=true)",
+  );
+
+  const navStateB = { pageMode: false, isLive: false };
+  let exitCalledB = false;
+  let scrollBottomCalledB = false;
+  const navCtxB = {
+    get pageMode() {
+      return navStateB.pageMode;
+    },
+    get isLive() {
+      return navStateB.isLive;
+    },
+    exitPageMode: () => {
+      exitCalledB = true;
+      navStateB.pageMode = false;
+    },
+    scrollToBottom: () => {
+      scrollBottomCalledB = true;
+      navStateB.isLive = true;
+    },
+    updateLiveLabel: () => {},
+    requestRender: () => {},
+  };
+  const handledB = handleNormalKey({ name: "G", seq: "G", shift: true }, navCtxB);
+  assertTest(
+    handledB === true &&
+      exitCalledB === false &&
+      scrollBottomCalledB === true &&
+      navStateB.isLive === true,
+    "F2: G outside pageMode scrolls to bottom without exiting pageMode",
+  );
+
+  // 42. Feature 3: Injected directives card reader (real files + graceful fallback)
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agy-directives-test-"));
+  try {
+    const missingRows = loadInjectedDirectives({
+      sessionId: "non-existent-session-id",
+      projectDir: path.join(tmpDir, "missing-project"),
+      configDir: path.join(tmpDir, "missing-config"),
+      brainDir: path.join(tmpDir, "missing-brain"),
+    });
+    assertTest(
+      missingRows.length >= 3 &&
+        missingRows.some(
+          (r) => r.label.includes("Session Role") && r.value.includes("not found"),
+        ) &&
+        missingRows.some(
+          (r) => r.label.includes("Global Rules") && r.value.includes("not found"),
+        ) &&
+        missingRows.some((r) => r.label.includes("Project Rules") && r.value.includes("not found")),
+      "F3: loadInjectedDirectives degrades gracefully on missing directories with honest not-found values",
+    );
+
+    // Create real mock rules in tmpDir
+    const mockConfig = path.join(tmpDir, "config");
+    fs.mkdirSync(mockConfig, { recursive: true });
+    fs.writeFileSync(
+      path.join(mockConfig, "GEMINI.md"),
+      "# Mock Global Protocol Directive\nDetails here",
+      "utf8",
+    );
+    const mockRules = path.join(mockConfig, "rules");
+    fs.mkdirSync(mockRules, { recursive: true });
+    fs.writeFileSync(
+      path.join(mockRules, "rule-sample.md"),
+      "# Sample Specific Rule\nSample text",
+      "utf8",
+    );
+
+    const mockProj = path.join(tmpDir, "project");
+    fs.mkdirSync(mockProj, { recursive: true });
+    fs.writeFileSync(
+      path.join(mockProj, "CLAUDE.md"),
+      "# Project Specific Instructions\nInstructions body",
+      "utf8",
+    );
+
+    const populatedRows = loadInjectedDirectives({
+      sessionId: "non-existent-session-id",
+      projectDir: mockProj,
+      configDir: mockConfig,
+      brainDir: path.join(tmpDir, "missing-brain"),
+    });
+    assertTest(
+      populatedRows.some(
+        (r) => r.label === "GEMINI.md" && r.value === "Mock Global Protocol Directive",
+      ) &&
+        populatedRows.some(
+          (r) => r.label === "rule-sample.md" && r.value === "Sample Specific Rule",
+        ) &&
+        populatedRows.some(
+          (r) => r.label === "CLAUDE.md" && r.value === "Project Specific Instructions",
+        ),
+      "F3: loadInjectedDirectives extracts first headings from real rule files and returns real basenames",
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  // 43. Feature 3 & 4: parseSessionRoleFromContent pattern matching
+  const roleA = parseSessionRoleFromContent(
+    "<USER_REQUEST>\n[DELEGATED AGENT ROLE: OMO_DEEP_ENGINEER]\nMission: Test",
+  );
+  assertTest(
+    roleA === "OMO_DEEP_ENGINEER",
+    `F3 role regex: expected OMO_DEEP_ENGINEER, got '${roleA}'`,
+  );
+  const roleB = parseSessionRoleFromContent(
+    "Mission: You are the Test Agent\n[DELEGATED AGENT ROLE:    QA_LEAD   ]\nDo work",
+  );
+  assertTest(roleB === "QA_LEAD", `F3 role regex: expected QA_LEAD, got '${roleB}'`);
+  const roleC = parseSessionRoleFromContent("Just a plain user request\nLine 2");
+  assertTest(
+    roleC === "Just a plain user request",
+    `F3 role fallback: expected first line excerpt, got '${roleC}'`,
+  );
+  const roleD = parseSessionRoleFromContent("");
+  assertTest(
+    roleD === "(none detected)",
+    `F3 role empty: expected '(none detected)', got '${roleD}'`,
+  );
+
   console.log("✔ deriveSessionState self-tests passed (25 assertions).");
   console.log("✔ pushCard Box self-test passed (1 assertion).");
   console.log("✔ PageItem card replay & domBoxes self-tests passed (8 assertions).");
   console.log("✔ routeStep & applyRouteAction FIFO cards self-tests passed (19 assertions).");
   console.log("✔ left-pane header line self-tests passed (9 assertions).");
+  console.log(
+    "✔ session picker state pill, G-to-live, and real directives self-tests passed (14 assertions).",
+  );
 }
 
 export function runDbTest(): void {
@@ -1964,8 +2353,9 @@ export async function runRenderCheck(): Promise<void> {
       lines: { text: string; fg?: string; isTitle?: boolean }[],
       kind?: "user" | "tool" | "thinking" | "error",
     ) {
-      const accent =
-        kind ? STYLE.ACCENT[kind] : (lines.find((l) => l.isTitle)?.fg ?? STYLE.ACCENT.tool);
+      const accent = kind
+        ? STYLE.ACCENT[kind]
+        : (lines.find((l) => l.isTitle)?.fg ?? STYLE.ACCENT.tool);
       const item: PageItem = {
         kind: "card",
         accent,
@@ -2177,7 +2567,9 @@ export async function runRenderCheck(): Promise<void> {
       .filter((c) => c instanceof TextRenderable)
       .map((c) => getRenderableText(c));
     assertCheck(
-      !rootDirectTexts.some((t) => t.includes("Wrote 34 bytes") || t.includes("3 passed, 0 failed")),
+      !rootDirectTexts.some(
+        (t) => t.includes("Wrote 34 bytes") || t.includes("3 passed, 0 failed"),
+      ),
       "A2",
       "Tool output lines are not bare/separate children of transcriptBox root",
     );
@@ -2369,10 +2761,8 @@ export async function runRenderCheck(): Promise<void> {
     applyRouteAction({ type: "open_card", item: floodCardItem, accent: STYLE.ACCENT.tool }, ctx);
     const rootCountBeforeFlood = (transcriptBox.getChildren() as any[]).length;
     const floodLines = Array.from({ length: 500 }, (_, i) => `flood line ${i + 1}`).join("\n");
-    routeStep(
-      { type: "GENERIC", status: "DONE", content: floodLines },
-      q,
-      (a) => applyRouteAction(a, ctx),
+    routeStep({ type: "GENERIC", status: "DONE", content: floodLines }, q, (a) =>
+      applyRouteAction(a, ctx),
     );
     const rootCountAfterFlood = (transcriptBox.getChildren() as any[]).length;
     assertCheck(
@@ -2494,9 +2884,7 @@ export async function runRenderCheck(): Promise<void> {
     );
 
     console.log("=== AGY-LIVE RENDERCHECK HARNESS ===");
-    console.log(
-      "✔ A1 PASS: tree walk found 4 BoxRenderables with left border and STYLE.CARD_BG",
-    );
+    console.log("✔ A1 PASS: tree walk found 4 BoxRenderables with left border and STYLE.CARD_BG");
     console.log(
       "✔ A2 PASS: card titles and tool output lines live inside owning cards (120 cols, 70 cols, replay)",
     );
@@ -2513,9 +2901,7 @@ export async function runRenderCheck(): Promise<void> {
       "✔ Flood PASS: 500-line output appends inside card without expanding root children",
     );
     console.log("✔ Prune-append PASS: cardAppend on pruned box is safe and cleans domBoxes");
-    console.log(
-      "Frames written to .omo/evidence/task-6-frame-120.txt and task-6-frame-70.txt",
-    );
+    console.log("Frames written to .omo/evidence/task-6-frame-120.txt and task-6-frame-70.txt");
     console.log("Evidence written to .omo/evidence/task-6-agy-live-opencode-cards.txt");
     console.log("All rendercheck assertions passed.");
   } finally {
@@ -2859,6 +3245,7 @@ async function main() {
   sidebar.add(vTitleBox);
 
   const vState = addSbRow("⚡ State:", "#4ade80");
+  const vFollow = addSbRow("👁 Follow:", "#38bdf8");
   const vProj = addSbRow("📁 Project:", "#4ade80");
   const vSess = addSbRow("🆔 Session:", "#67e8f9");
   const vModel = addSbRow("🤖 Model:", "#fbbf24");
@@ -2918,7 +3305,7 @@ async function main() {
   addSbKey("↑/↓/k/j", "Scroll log");
   addSbKey("PgUp/Dn", "Fast scroll");
   addSbKey("g", "Scroll to top");
-  addSbKey("G", "Live (bottom)");
+  addSbKey("G", "Live tail (exit page)");
   addSbKey("s", "Switch session");
   addSbKey("c", "Full context");
   addSbKey("Drag/Select", "Copy on release");
@@ -2982,6 +3369,7 @@ async function main() {
     checkpointCount = 0;
   let activeContextChars = 0;
   let isViewingContext = false;
+  let cachedContextDirectives: { label: string; value: string; valFg?: string }[] | null = null;
 
   interface AgyQuota {
     category: string;
@@ -3113,6 +3501,7 @@ async function main() {
         model: currentModel || currentSession.model,
         state: currentDerivedState,
         followingChildId,
+        userPinned,
       });
       return;
     }
@@ -3150,6 +3539,7 @@ async function main() {
       model: currentModel || currentSession.model,
       state: currentDerivedState,
       followingChildId,
+      userPinned,
     });
   }
 
@@ -3166,29 +3556,17 @@ async function main() {
 
     vTitleVal1.content = "  " + (titleStr.length > 28 ? titleStr.slice(0, 27) + "…" : titleStr);
 
-    switch (currentDerivedState) {
-      case "running":
-        vState.content = followingChildId ? "● RUN (child)" : "● RUNNING";
-        vState.fg = "#4ade80" as any;
-        break;
-      case "idle":
-        vState.content = "○ IDLE";
-        vState.fg = "#94a3b8" as any;
-        break;
-      case "stuck":
-        vState.content = "▲ STUCK";
-        vState.fg = "#fbbf24" as any;
-        break;
-      case "killed":
-        vState.content = "✕ KILLED";
-        vState.fg = "#ef4444" as any;
-        break;
-      case "unknown":
-      default:
-        vState.content = "? UNKNOWN";
-        vState.fg = "#6b7280" as any;
-        break;
-    }
+    const statePill = formatSessionStatePill(currentDerivedState, followingChildId);
+    vState.content = statePill.pill;
+    vState.fg = statePill.pillFg as any;
+
+    const followStr = userPinned
+      ? "📌 Pinned"
+      : followingChildId
+        ? `↳ Child (${followingChildId.slice(0, 6)})`
+        : "🟢 Auto-follow";
+    vFollow.content = followStr;
+    vFollow.fg = (userPinned ? "#fbbf24" : followingChildId ? "#c084fc" : "#38bdf8") as any;
 
     const folder =
       currentSession.projectDir !== "(Unbound session)"
@@ -3242,7 +3620,7 @@ async function main() {
   }
 
   function setStatus(txt: string) {
-    if (isSelectingSession || isViewingContext) return;
+    if (isSelectingSession || isViewingContext || pageMode) return;
     statusTxt.content = txt;
     updateSidebar();
   }
@@ -3506,6 +3884,7 @@ async function main() {
     isLive = false;
     pageIndex = Math.max(0, Math.min(idx, pages.length - 1));
     renderPageIntoDom(pageIndex);
+    statusTxt.content = `📖 Reviewing page ${pageIndex + 1}/${pages.length} · [←/→] prev/next · [G/q/Esc] live tail`;
     updateLiveLabel();
     renderer.requestRender();
   }
@@ -3517,6 +3896,7 @@ async function main() {
     if (lastPage) {
       replayPageInto(renderer, scrollBox, lastPage, { registerDomBoxes: true });
     }
+    statusTxt.content = "💤 Idle — waiting for next agy command...";
     updateLiveLabel();
     renderer.requestRender();
   }
@@ -3606,8 +3986,9 @@ async function main() {
     lines: { text: string; fg?: string; isTitle?: boolean }[],
     kind?: "user" | "tool" | "thinking" | "error",
   ) {
-    const accent =
-      kind ? STYLE.ACCENT[kind] : (lines.find((l) => l.isTitle)?.fg ?? STYLE.ACCENT.tool);
+    const accent = kind
+      ? STYLE.ACCENT[kind]
+      : (lines.find((l) => l.isTitle)?.fg ?? STYLE.ACCENT.tool);
     const item: PageItem = {
       kind: "card",
       accent,
@@ -3666,7 +4047,10 @@ async function main() {
       } else if (trimmed.startsWith("> ")) {
         pushLine(STYLE.GUTTER + `  ▎ ${trimmed.slice(2)}`, "#cbd5e1");
       } else if (trimmed === "---" || trimmed === "___" || trimmed === "***") {
-        pushLine(STYLE.GUTTER + "────────────────────────────────────────────────────────────", "#374151");
+        pushLine(
+          STYLE.GUTTER + "────────────────────────────────────────────────────────────",
+          "#374151",
+        );
       } else if (!trimmed) {
         pushLine("");
       } else {
@@ -3803,8 +4187,14 @@ async function main() {
             }
 
             pushLine("");
-            pushLine(STYLE.GUTTER + "────────────────────────────────────────────────────────────", "#374151");
-            pushLine(STYLE.GUTTER + "✨ [COMPLETED] Tugas agy telah selesai dengan sukses!", "#4ade80");
+            pushLine(
+              STYLE.GUTTER + "────────────────────────────────────────────────────────────",
+              "#374151",
+            );
+            pushLine(
+              STYLE.GUTTER + "✨ [COMPLETED] Tugas agy telah selesai dengan sukses!",
+              "#4ade80",
+            );
             pushLine("");
             stopSpinner("✓ Finished");
             return;
@@ -3921,8 +4311,7 @@ async function main() {
 
     if (userPinned) {
       const liveMs = getTranscriptLiveMs(rootWatchedSession.id, now);
-      const inFlight =
-        currentSession?.id === rootWatchedSession.id && isCurrentActive;
+      const inFlight = currentSession?.id === rootWatchedSession.id && isCurrentActive;
       const pinnedRow = summaryReader.getSummary(rootWatchedSession.id);
       const pinnedState = deriveSessionState(pinnedRow, {
         now,
@@ -3947,8 +4336,7 @@ async function main() {
       return;
     }
 
-    const rootInFlight =
-      currentSession?.id === rootWatchedSession.id && isCurrentActive;
+    const rootInFlight = currentSession?.id === rootWatchedSession.id && isCurrentActive;
     const rootLiveMs = getTranscriptLiveMs(rootWatchedSession.id, now);
     const rootRow = summaryReader.getSummary(rootWatchedSession.id);
     const rootState = deriveSessionState(rootRow, {
@@ -3958,8 +4346,7 @@ async function main() {
     });
 
     if (followingChildId) {
-      const childInFlight =
-        currentSession?.id === followingChildId && isCurrentActive;
+      const childInFlight = currentSession?.id === followingChildId && isCurrentActive;
       const childLiveMs = getTranscriptLiveMs(followingChildId, now);
       const childRow = summaryReader.getSummary(followingChildId);
       const childState = deriveSessionState(childRow, {
@@ -4172,13 +4559,28 @@ async function main() {
           width: 2,
         }),
       );
-      const titleDisplay = s.title ? `📁 ${folder} — ${s.title}` : `📁 ${folder}`;
+      const row = summaryReader.getSummary(s.id);
+      const state = deriveSessionState(row, { now: Date.now(), liveMs: getTranscriptLiveMs(s.id) });
+      const statePill = formatSessionStatePill(state);
+
+      const isPinnedItem = userPinned && s.id === rootWatchedSession.id;
+      const pinMark = isPinnedItem ? "📌 " : "";
+      const titleDisplay = s.title
+        ? `📁 ${pinMark}${folder} — ${s.title}`
+        : `📁 ${pinMark}${folder}`;
       topRow.add(
         new TextRenderable(renderer, {
           content: titleDisplay,
           fg: sel ? "#ffffff" : "#38bdf8",
           attributes: sel ? BOLD_ATTR : 0,
           flexGrow: 1,
+        }),
+      );
+      topRow.add(
+        new TextRenderable(renderer, {
+          content: statePill.pill,
+          fg: statePill.pillFg,
+          width: 11,
         }),
       );
       topRow.add(
@@ -4309,8 +4711,16 @@ async function main() {
     }
 
     // Card 1: Session & Model Overview
+    const followModeStr = userPinned
+      ? "📌 Pinned (manual)"
+      : followingChildId
+        ? `↳ Following Child (${followingChildId.slice(0, 8)})`
+        : "🟢 Auto-following root session";
+
     addContextCard("SESSION & MODEL OVERVIEW", [
       { label: "Session ID:", value: currentSession.id, valFg: "#67e8f9" },
+      { label: "Session State:", value: currentDerivedState.toUpperCase(), valFg: "#4ade80" },
+      { label: "Follow Mode:", value: followModeStr, valFg: "#38bdf8" },
       { label: "Workspace Root:", value: folder, valFg: "#4ade80" },
       { label: "Active Model:", value: model, valFg: "#fbbf24" },
       {
@@ -4319,6 +4729,7 @@ async function main() {
         valFg: "#e2e8f0",
       },
       { label: "Transcript Size:", value: fmtSize(currentSession.size), valFg: "#e2e8f0" },
+      { label: "Transcript Path:", value: currentSession.path, valFg: "#94a3b8" },
     ]);
 
     // Card 2: Active Context Window Load
@@ -4378,29 +4789,23 @@ async function main() {
     ]);
 
     // Card 6: Injected Rules & Protocols
-    addContextCard("INJECTED DIRECTIVES & RULES", [
-      {
-        label: "Global Protocol:",
-        value: "Caveman Communication + Ponytail Engineering Ladder",
-        valFg: "#4ade80",
-      },
-      {
-        label: "Project Architecture:",
-        value: "Clean Architecture MVVM (Pure Kotlin Domain)",
-        valFg: "#38bdf8",
-      },
-      {
-        label: "CodeGraph / Memory:",
-        value: "Auto-Recall agentmemory + CodeGraph MCP",
-        valFg: "#fbbf24",
-      },
-    ]);
+    const directiveRows =
+      cachedContextDirectives ||
+      loadInjectedDirectives({
+        sessionId: currentSession.id,
+        projectDir: currentSession.projectDir,
+      });
+    addContextCard("INJECTED DIRECTIVES & RULES", directiveRows);
   }
 
   function openContextView() {
     if (isAppDestroyed || isViewingContext) return;
     if (isSelectingSession) closeSelector();
     isViewingContext = true;
+    cachedContextDirectives = loadInjectedDirectives({
+      sessionId: currentSession.id,
+      projectDir: currentSession.projectDir,
+    });
     fetchLiveQuotaAsync();
     renderContextView();
     leftPane.remove(scrollBox);
@@ -4414,6 +4819,7 @@ async function main() {
   function closeContextView() {
     if (isAppDestroyed || !isViewingContext) return;
     isViewingContext = false;
+    cachedContextDirectives = null;
     leftPane.remove(contextBox);
     leftPane.insertBefore(scrollBox, footerBar);
     if (!spinnerTimer) {
@@ -4560,90 +4966,67 @@ async function main() {
     }
 
     // Normal mode
-    if (pageMode && (keyLower === "q" || keyLower === "escape")) {
-      // Don't kill the app while reviewing pages — return to LIVE first.
-      exitPageMode();
-      scrollToBottom();
-      updateLiveLabel();
-      renderer.requestRender();
-      return;
-    }
-    if (keyLower === "left") {
-      pagePrev();
-      return;
-    }
-    if (keyLower === "right") {
-      pageNext();
-      return;
-    }
-    if (keyLower === "q" || keyLower === "escape") {
-      exitApp(0);
-      return;
-    }
-    if (keyLower === "s" || seqLower === "s") {
-      if (now - lastModalToggleTime < 100) return;
-      lastModalToggleTime = now;
-      openSelector();
-      return;
-    }
-    if (keyLower === "c" || seqLower === "c") {
-      openContextView();
-      return;
-    }
-    if (keyLower === "g" && !shift && seq !== "G") {
-      scrollToTop();
-      updateLiveLabel();
-      renderer.requestRender();
-      return;
-    }
-    if ((keyLower === "g" && shift) || seq === "G") {
-      scrollToBottom();
-      updateLiveLabel();
-      renderer.requestRender();
-      return;
-    }
-    if (keyLower === "up" || keyLower === "k") {
-      isLive = false;
-      scrollBox.stickyScroll = false;
-      scrollBox.scrollTop = Math.max(0, scrollBox.scrollTop - 3);
-      updateLiveLabel();
-      renderer.requestRender();
-      return;
-    }
-    if (keyLower === "down" || keyLower === "j") {
-      scrollBox.scrollTop = Math.min(scrollBox.scrollHeight, scrollBox.scrollTop + 3);
-      if (scrollBox.scrollTop >= scrollBox.scrollHeight - 2) {
-        isLive = true;
-        scrollBox.stickyScroll = true;
-      }
-      updateLiveLabel();
-      renderer.requestRender();
-      return;
-    }
-    if (keyLower === "pageup") {
-      isLive = false;
-      scrollBox.stickyScroll = false;
-      scrollBox.scrollTop = Math.max(
-        0,
-        scrollBox.scrollTop - Math.max(1, (renderer.height || 24) - 4),
-      );
-      updateLiveLabel();
-      renderer.requestRender();
-      return;
-    }
-    if (keyLower === "pagedown") {
-      scrollBox.scrollTop = Math.min(
-        scrollBox.scrollHeight,
-        scrollBox.scrollTop + Math.max(1, (renderer.height || 24) - 4),
-      );
-      if (scrollBox.scrollTop >= scrollBox.scrollHeight - 2) {
-        isLive = true;
-        scrollBox.stickyScroll = true;
-      }
-      updateLiveLabel();
-      renderer.requestRender();
-      return;
-    }
+    const handled = handleNormalKey(
+      { name, seq, ctrl, shift },
+      {
+        get pageMode() {
+          return pageMode;
+        },
+        get isLive() {
+          return isLive;
+        },
+        exitPageMode,
+        scrollToBottom,
+        updateLiveLabel,
+        requestRender: () => renderer.requestRender(),
+        pagePrev,
+        pageNext,
+        exitApp: (code) => exitApp(code),
+        openSelector: () => {
+          if (now - lastModalToggleTime < 100) return;
+          lastModalToggleTime = now;
+          openSelector();
+        },
+        openContextView,
+        scrollToTop: () => {
+          scrollToTop();
+          updateLiveLabel();
+          renderer.requestRender();
+        },
+        scrollBy: (delta) => {
+          if (delta < 0) {
+            isLive = false;
+            scrollBox.stickyScroll = false;
+            scrollBox.scrollTop = Math.max(0, scrollBox.scrollTop + delta);
+          } else {
+            scrollBox.scrollTop = Math.min(scrollBox.scrollHeight, scrollBox.scrollTop + delta);
+            if (scrollBox.scrollTop >= scrollBox.scrollHeight - 2) {
+              isLive = true;
+              scrollBox.stickyScroll = true;
+            }
+          }
+          updateLiveLabel();
+          renderer.requestRender();
+        },
+        pageScroll: (dir) => {
+          const step = Math.max(1, (renderer.height || 24) - 4);
+          if (dir === "up") {
+            isLive = false;
+            scrollBox.stickyScroll = false;
+            scrollBox.scrollTop = Math.max(0, scrollBox.scrollTop - step);
+          } else {
+            scrollBox.scrollTop = Math.min(scrollBox.scrollHeight, scrollBox.scrollTop + step);
+            if (scrollBox.scrollTop >= scrollBox.scrollHeight - 2) {
+              isLive = true;
+              scrollBox.stickyScroll = true;
+            }
+          }
+          updateLiveLabel();
+          renderer.requestRender();
+        },
+      },
+    );
+    if (handled) return;
   }
 
   // OpenTUI native key handler (exclusive)
@@ -4669,8 +5052,7 @@ async function main() {
   const sidebarInterval = setInterval(() => {
     if (isAppDestroyed) return;
     pollDbState();
-    const hasActiveWait =
-      scheduledUntilMs > Date.now() || Boolean(activeBackgroundTask);
+    const hasActiveWait = scheduledUntilMs > Date.now() || Boolean(activeBackgroundTask);
     if (currentDerivedState === "running" && !spinnerTimer) {
       startSpinner("Agent processing...");
     } else if (currentDerivedState === "idle" && spinnerTimer && !hasActiveWait) {
