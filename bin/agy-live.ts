@@ -27,6 +27,17 @@ const esmRequire = createRequire(import.meta.url);
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BRAIN_DIR = path.join(os.homedir(), ".gemini", "antigravity-cli", "brain");
+const TRANSCRIPT_PLAIN = "transcript.jsonl";
+const TRANSCRIPT_FULL = "transcript_full.jsonl";
+
+// The plain transcript stores only ~4 KiB per field (upstream truncation);
+// transcript_full.jsonl holds the complete content. Prefer it, fall back to plain.
+export function resolveTranscriptPath(logDir: string): string {
+  const full = path.join(logDir, TRANSCRIPT_FULL);
+  if (fs.existsSync(full)) return full;
+  return path.join(logDir, TRANSCRIPT_PLAIN);
+}
+
 const CONVERSATION_DB_PATH = path.join(
   os.homedir(),
   ".gemini",
@@ -161,12 +172,8 @@ export function getTranscriptLiveMs(conversationId: string, now = Date.now()): n
   if (hit && now >= hit.at && now - hit.at < TRANSCRIPT_LIVE_TTL_MS) {
     return hit.mtimeMs === undefined ? undefined : Math.max(0, now - hit.mtimeMs);
   }
-  const logPath = path.join(
-    BRAIN_DIR,
-    conversationId,
-    ".system_generated",
-    "logs",
-    "transcript.jsonl",
+  const logPath = resolveTranscriptPath(
+    path.join(BRAIN_DIR, conversationId, ".system_generated", "logs"),
   );
   let mtimeMs: number | undefined;
   try {
@@ -694,12 +701,8 @@ export function parseSessionRoleFromContent(content: string | undefined | null):
 
 export function parseSessionRole(conversationId: string, brainDir: string = BRAIN_DIR): string {
   if (!conversationId) return "(none detected)";
-  const transcriptPath = path.join(
-    brainDir,
-    conversationId,
-    ".system_generated",
-    "logs",
-    "transcript.jsonl",
+  const transcriptPath = resolveTranscriptPath(
+    path.join(brainDir, conversationId, ".system_generated", "logs"),
   );
   try {
     if (!fs.existsSync(transcriptPath)) {
@@ -2471,6 +2474,28 @@ export function runSelfTest(): void {
     assertTest(
       recoveredRole === "OMO_TEST_ROLE",
       `F3 truncated step-0 fallback: expected OMO_TEST_ROLE, got '${recoveredRole}'`,
+    );
+
+    const fullWinsDir = path.join(tmpDir, "full-wins", ".system_generated", "logs");
+    fs.mkdirSync(fullWinsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(fullWinsDir, "transcript.jsonl"),
+      '{"step_index":0,"content":"<truncated 999 bytes>"}',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(fullWinsDir, "transcript_full.jsonl"),
+      '{"step_index":0,"content":"complete untruncated prompt"}',
+      "utf8",
+    );
+    assertTest(
+      path.basename(resolveTranscriptPath(fullWinsDir)) === "transcript_full.jsonl",
+      "resolveTranscriptPath prefers transcript_full.jsonl when both exist",
+    );
+    fs.rmSync(path.join(fullWinsDir, "transcript_full.jsonl"));
+    assertTest(
+      path.basename(resolveTranscriptPath(fullWinsDir)) === "transcript.jsonl",
+      "resolveTranscriptPath falls back to transcript.jsonl when full is absent",
     );
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -4272,7 +4297,9 @@ function getAllSessions(): AgySession[] {
   if (!fs.existsSync(BRAIN_DIR)) return [];
   const out: AgySession[] = [];
   for (const entry of fs.readdirSync(BRAIN_DIR)) {
-    const logPath = path.join(BRAIN_DIR, entry, ".system_generated", "logs", "transcript.jsonl");
+    const logPath = resolveTranscriptPath(
+      path.join(BRAIN_DIR, entry, ".system_generated", "logs"),
+    );
     if (!fs.existsSync(logPath)) continue;
     try {
       const stat = fs.statSync(logPath);
@@ -5632,7 +5659,7 @@ async function main() {
   }
 
   function getSessionForId(id: string, fallbackSession: AgySession): AgySession {
-    const logPath = path.join(BRAIN_DIR, id, ".system_generated", "logs", "transcript.jsonl");
+    const logPath = resolveTranscriptPath(path.join(BRAIN_DIR, id, ".system_generated", "logs"));
     let size = 0;
     // A missing/unreadable transcript must NOT read as freshly active -> 0 (stale).
     let mtime = 0;
