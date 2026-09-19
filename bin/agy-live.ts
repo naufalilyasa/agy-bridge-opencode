@@ -59,7 +59,7 @@ export const STYLE = {
     rightT: " ",
     cross: " ",
   },
-  GUTTER: "   ",
+  GUTTER: "┃  ",
   CARD_PAD_LEFT: 2,
 } as const;
 
@@ -379,8 +379,8 @@ export function createCardLineText(
   } as any);
 }
 
-export function indentCardLine(level: number, text: string): string {
-  return level <= 0 ? text : "  ".repeat(level) + text;
+export function indentCardLine(_level: number, text: string): string {
+  return text;
 }
 
 export function buildCardBox(
@@ -2431,14 +2431,14 @@ export function runSelfTest(): void {
   }
 
   // 44. Spacing & layout unification: content column assertions
-  assertTest(STYLE.GUTTER === "   ", 'STYLE.GUTTER is exactly 3 spaces ("   ")');
+  assertTest(STYLE.GUTTER === "┃  ", 'STYLE.GUTTER is border glyph plus 2 spaces ("┃  ")');
   assertTest(
     STYLE.CARD_PAD_LEFT !== undefined && 1 + STYLE.CARD_PAD_LEFT === STYLE.GUTTER.length,
     "Card content column (border 1 + pad 2 = 3) matches bare content column (STYLE.GUTTER = 3)",
   );
   assertTest(indentCardLine(0, "text") === "text", "indentCardLine level 0 returns unindented text");
-  assertTest(indentCardLine(1, "text") === "  text", "indentCardLine level 1 returns 2-space indented text");
-  assertTest(indentCardLine(2, "text") === "    text", "indentCardLine level 2 returns 4-space indented text");
+  assertTest(indentCardLine(1, "text") === "text", "indentCardLine level 1 returns flush text (no added spaces)");
+  assertTest(indentCardLine(2, "text") === "text", "indentCardLine level 2 returns flush text (no added spaces)");
 
   // Synthetic full page item column verification across headers, bodies, trailers, and bare lines
   const testSpacingPages: PageItem[][] = [[]];
@@ -2524,7 +2524,15 @@ export function runSelfTest(): void {
   const expectedContentCol = 1 + STYLE.CARD_PAD_LEFT; // 3
   for (const item of testSpacingPages[0]) {
     if (item.kind === "line") {
-      const bareCol = item.text.length - item.text.trimStart().length;
+      assertTest(
+        item.text.startsWith(STYLE.GUTTER),
+        `Bare line starts with uniform STYLE.GUTTER prefix ("${STYLE.GUTTER}"): "${item.text}"`,
+      );
+      assertTest(
+        item.text.startsWith("┃"),
+        `Bare line renders col-1 left border glyph "┃": "${item.text}"`,
+      );
+      const bareCol = 1 + (item.text.slice(1).length - item.text.slice(1).trimStart().length);
       assertTest(
         bareCol === 3,
         `Bare line content column is 3 (actual ${bareCol}): "${item.text}"`,
@@ -2536,41 +2544,19 @@ export function runSelfTest(): void {
     } else if (item.kind === "card") {
       for (const l of item.lines) {
         const leadSpaces = l.text.length - l.text.trimStart().length;
-        if (l.isTitle) {
-          const headerCol = expectedContentCol + leadSpaces;
-          assertTest(
-            headerCol === 3,
-            `Card header content column is 3 (actual ${headerCol}): "${l.text}"`,
-          );
-          assertTest(
-            headerCol === expectedContentCol,
-            `Card header matches expected content column 3 (${headerCol} === ${expectedContentCol})`,
-          );
-        } else if (leadSpaces >= 2) {
-          assertTest(
-            leadSpaces === 2,
-            `Card body line has uniform 2-space nesting (actual ${leadSpaces}): "${l.text}"`,
-          );
-          const bodyCol = expectedContentCol + leadSpaces;
-          assertTest(
-            bodyCol === 5,
-            `Card body content column is 5 (actual ${bodyCol}): "${l.text}"`,
-          );
-          assertTest(
-            bodyCol - 2 === expectedContentCol,
-            `Card body base content column matches header/bare column 3`,
-          );
-        } else {
-          const trailerCol = expectedContentCol + leadSpaces;
-          assertTest(
-            trailerCol === 3,
-            `Card trailer content column is 3 (actual ${trailerCol}): "${l.text}"`,
-          );
-          assertTest(
-            trailerCol === expectedContentCol,
-            `Card trailer matches expected content column 3 (${trailerCol} === ${expectedContentCol})`,
-          );
-        }
+        const lineCol = expectedContentCol + leadSpaces;
+        assertTest(
+          leadSpaces === 0,
+          `Card line is flush with header (actual leadSpaces ${leadSpaces}): "${l.text}"`,
+        );
+        assertTest(
+          lineCol === 3,
+          `Card line content column is 3 (actual ${lineCol}): "${l.text}"`,
+        );
+        assertTest(
+          lineCol === expectedContentCol,
+          `Card line matches expected content column 3 (${lineCol} === ${expectedContentCol})`,
+        );
       }
     }
   }
@@ -2587,7 +2573,7 @@ export function runSelfTest(): void {
     "✔ detectProjectDir and cache invalidation self-tests passed (9 assertions).",
   );
   console.log(
-    "✔ live content spacing & column alignment self-tests passed (37 assertions).",
+    "✔ live content spacing & column alignment self-tests passed (51 assertions).",
   );
 }
 
@@ -2963,7 +2949,17 @@ export async function runRenderCheck(): Promise<void> {
     for (const item of pages[0]) {
       if (item.kind === "line") {
         if (item.text.length > 0) {
-          const bareCol = item.text.length - item.text.trimStart().length;
+          assertCheck(
+            item.text.startsWith(STYLE.GUTTER),
+            "A3",
+            `Bare line missing uniform STYLE.GUTTER prefix ("${STYLE.GUTTER}"): "${item.text}"`,
+          );
+          assertCheck(
+            item.text.startsWith("┃"),
+            "A3",
+            `Bare line missing left border glyph "┃": "${item.text}"`,
+          );
+          const bareCol = 1 + (item.text.slice(1).length - item.text.slice(1).trimStart().length);
           assertCheck(
             bareCol === 3,
             "A3",
@@ -2978,41 +2974,48 @@ export async function runRenderCheck(): Promise<void> {
       } else if (item.kind === "card") {
         for (const l of item.lines) {
           const leadSpaces = l.text.length - l.text.trimStart().length;
-          if (l.isTitle) {
-            const headerCol = cardContentCol + leadSpaces;
-            assertCheck(
-              headerCol === 3,
-              "A3",
-              `Card header content column is 3: "${l.text}"`,
-            );
-          } else if (leadSpaces >= 2) {
-            assertCheck(
-              leadSpaces === 2,
-              "A3",
-              `Card body line has uniform 2-space nesting (actual ${leadSpaces}): "${l.text}"`,
-            );
-            const bodyCol = cardContentCol + leadSpaces;
-            assertCheck(
-              bodyCol === 5,
-              "A3",
-              `Card body content column is 5: "${l.text}"`,
-            );
-            assertCheck(
-              bodyCol - 2 === cardContentCol,
-              "A3",
-              `Card body base content column matches card content column 3`,
-            );
-          } else {
-            const trailerCol = cardContentCol + leadSpaces;
-            assertCheck(
-              trailerCol === 3,
-              "A3",
-              `Card trailer content column is 3: "${l.text}"`,
-            );
-          }
+          const lineCol = cardContentCol + leadSpaces;
+          assertCheck(
+            leadSpaces === 0,
+            "A3",
+            `Card line is flush with header (actual leadSpaces ${leadSpaces}): "${l.text}"`,
+          );
+          assertCheck(
+            lineCol === 3,
+            "A3",
+            `Card line content column is 3: "${l.text}"`,
+          );
+          assertCheck(
+            lineCol === cardContentCol,
+            "A3",
+            `Card line matches expected content column 3 (${lineCol} === ${cardContentCol})`,
+          );
         }
       }
     }
+
+    // Column histogram check on rendered frame120 (Round 2: collapsed to ONE column: col 3)
+    const frameLines = frame120.split("\n");
+    const frameColHist: Record<number, number> = {};
+    for (const raw of frameLines) {
+      if (raw.startsWith("┃")) {
+        const rest = raw.slice(1);
+        if (rest.trim().length > 0) {
+          const spaces = rest.length - rest.trimStart().length;
+          const col = 1 + spaces;
+          frameColHist[col] = (frameColHist[col] || 0) + 1;
+        }
+      } else if (raw.trim().length > 0) {
+        const col = raw.length - raw.trimStart().length;
+        frameColHist[col] = (frameColHist[col] || 0) + 1;
+      }
+    }
+    const colsFound = Object.keys(frameColHist);
+    assertCheck(
+      colsFound.length === 1 && frameColHist[3] === 15,
+      "A3",
+      `Frame 120-col content columns collapsed to ONE (expected {3: 15}, actual ${JSON.stringify(frameColHist)})`,
+    );
 
     const selfSource = fs.readFileSync(__filename, "utf8");
     const cardBuilderSlice = selfSource.slice(
@@ -3041,7 +3044,7 @@ export async function runRenderCheck(): Promise<void> {
     assertCheck(spans120.cols === 120, "A3", "Captured spans column count is 120");
     for (let r = 0; r < spans120.lines.length; r++) {
       const line = spans120.lines[r];
-      if (line.spans.length > 0 && line.spans[0].text.startsWith("┃")) {
+      if (line.spans.length > 0 && line.spans[0].text.startsWith("┃") && line.spans.some(isCardBgSpan)) {
         const totalRowWidth = line.spans.reduce((sum, s) => sum + s.width, 0);
         assertCheck(
           totalRowWidth === 120,
@@ -3091,7 +3094,7 @@ export async function runRenderCheck(): Promise<void> {
     assertCheck(spans70.cols === 70, "A4", "Captured spans column count is 70");
     for (let r = 0; r < spans70.lines.length; r++) {
       const line = spans70.lines[r];
-      if (line.spans.length > 0 && line.spans[0].text.startsWith("┃")) {
+      if (line.spans.length > 0 && line.spans[0].text.startsWith("┃") && line.spans.some(isCardBgSpan)) {
         const totalRowWidth = line.spans.reduce((sum, s) => sum + s.width, 0);
         assertCheck(
           totalRowWidth === 70,
@@ -3244,7 +3247,8 @@ export async function runRenderCheck(): Promise<void> {
     }
     fs.writeFileSync(path.join(evidenceDir, "task-6-frame-120.txt"), frame120, "utf8");
     fs.writeFileSync(path.join(evidenceDir, "task-6-frame-70.txt"), frame70, "utf8");
-    fs.writeFileSync(path.join(evidenceDir, "AFTER-spacing-frame-120.txt"), frame120, "utf8");
+    fs.writeFileSync(path.join(evidenceDir, "AFTER2-spacing-frame-120.txt"), frame120, "utf8");
+    console.log(`Round-2 column histogram: ${JSON.stringify(frameColHist)}`);
 
     const evidenceLog = [
       "=== TASK 6 VERIFICATION EVIDENCE: agy-live-opencode-cards ===",
