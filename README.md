@@ -33,13 +33,14 @@ This fork is a **customized, production-hardened build** for OpenCode + Oh My Op
 | **`agy-delegation` skill** | Comprehensive delegation protocol (all 8 MCP tools, roles, memory directives). Installed to `~/.gemini/config/skills/agy-delegation/` and **guaranteed the first slot** in every delegated prompt's skill list                                         |
 | **Hardened prompts**       | OMO-native parity: `<Category_Context>`, `EXECUTION DISCIPLINE` (anti-delegation, verification mandates, anti-optimism checkpoints, scope discipline), mandatory agentmemory recall/persist directives, English-only output                            |
 | **Guard plugin**           | `agy-delegate-guard.js` — intercepts heavy `git log/diff/blame`, `grep -r`, `rg`, `cat` calls in the main context and redirects them to agy-bridge delegation                                                                                          |
-| **`agy-live2` TUI**        | OpenTUI (v2) live session monitor with quota/context meters, hardened against giant-transcript OOM crashes                                                                                                                                             |
-| **Config templates**       | `config/*.example` — model routing (19-role chains), OMO config, OpenCode config, guard plugin, and agy CLI runtime configs (mcp/hooks/GEMINI.md), secrets-free                                                                                        |
+| **`agy-live` TUI**         | OpenTUI (`@opentui/core`) live session monitor — card-based transcript, quota/context meters, session switcher with live state pills, **reads `transcript_full.jsonl` so prompts render untruncated**, hardened against giant-transcript OOM crashes   |
+| **Config templates**       | `config/*.example` — model routing (18-role chains), OMO config, OpenCode config, guard plugin, and agy CLI runtime configs (mcp/hooks/GEMINI.md), secrets-free                                                                                        |
 | **Model config SSOT**      | Role → model chains live in `~/.gemini/config/agy_bridge.jsonc` (single source of truth), validated against `agy models`                                                                                                                               |
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 18+ (for the MCP server)
+- [bun](https://bun.sh) >= 1.3 (required only for the `agy-live` TUI — `@opentui/core` uses native FFI that Node cannot load)
 - [Antigravity CLI](https://antigravity.google/docs/cli-getting-started) (`agy`) installed and authenticated
 - **OpenCode** (for the full install path) or **Claude Code** (manual MCP registration)
 
@@ -61,7 +62,7 @@ The installer detects missing prerequisites (`node`, `bun`, `agy`, `opencode`), 
 - OMO config → `~/.omo/omo.jsonc` (`.new` fallback)
 - OpenCode config → **merged** into `~/.config/opencode/opencode.jsonc` (pins `oh-my-openagent@4.19.4`, adds the MCP server + per-tool timeouts; timestamped backup first)
 - agy CLI runtime configs (`mcp_config.json`, `hooks.json`, `GEMINI.md`) → `~/.gemini/config/` with `{{ANDROID_HOME}}` auto-substitution
-- CLI shims: `agy-bridge-toggle` / `agy-live` / `agy-live2` → `~/.local/bin`
+- CLI shims: `agy-bridge-toggle` / `agy-live` / `agy-live2` → `~/.local/bin` (`agy-live2` is an alias for the same TUI)
 
 **Restart OpenCode** to load the new MCP server and config. Full walkthrough: [docs/INSTALL.md](docs/INSTALL.md).
 
@@ -101,7 +102,7 @@ Removes every component the installer added and restores `opencode.jsonc` from i
 | `web_lookup`            | Docs, API references, external/current knowledge                | per-tool chain                                  |
 | `adversarial_review`    | Plan critiques, design and code reviews (second model family)   | per-tool chain (critic roles lead with Claude)  |
 | `follow_up`             | Continue a prior session by `session_id` — no context resend    | inherits the session                            |
-| `delegate`              | Autonomous execution with 19 subagent roles (6-section prompt)  | per-role chain (see below)                      |
+| `delegate`              | Autonomous execution with 18 subagent roles (6-section prompt)  | per-role chain (see below)                      |
 | `get_session_status`    | Current/latest session ID, status, directory binding            | —                                               |
 | `list_sessions`         | All recorded sessions (find IDs to resume with `follow_up`)     | —                                               |
 | **Team mode**           |                                                                 |                                                 |
@@ -169,7 +170,7 @@ All optional, via environment variables:
 | `AGY_TEAM_MEMBER_TIMEOUT_SEC` | `300`      | Execution timeout in seconds per member agy run                                          |
 | `AGY_TEAM_KILL_GRACE_MS`      | `5000`     | Timeout in milliseconds to await child process exit during team deletion                 |
 
-The 19-role model chains live in `~/.gemini/config/agy_bridge.jsonc` (see `config/agy_bridge.jsonc.example`). The file is JSONC: `//` and `/* */` comments plus trailing commas are stripped before parsing. There is no `defaultModel` key — when a chain is empty the server falls through to agy's own default model.
+The 18-role model chains live in `~/.gemini/config/agy_bridge.jsonc` (see `config/agy_bridge.jsonc.example`). The file is JSONC: `//` and `/* */` comments plus trailing commas are stripped before parsing. There is no `defaultModel` key — when a chain is empty the server falls through to agy's own default model.
 
 ## Delegation protocol
 
@@ -219,22 +220,64 @@ Members communicate asynchronously through mailbox queues (`team_send_message`) 
 
 For detailed architecture, state layout, role mapping, and known engine differences, see [docs/TEAM-MODE.md](docs/TEAM-MODE.md).
 
-## Live telemetry — agy-live2
+## Live telemetry — `agy-live`
+
+`agy-live` is a live session monitor built on [`@opentui/core`](https://github.com/sst/opentui). It tails an agy session's transcript in real time and renders each step as a card, with quota/context meters and a session switcher.
 
 ```bash
-agy-live2        # OpenTUI monitor (bun) — current session live, quota/context meters, session switcher
-agy-live         # lighter node runner
+agy-live                                    # monitor the current/most-recent session
+agy-live --state <conversation_id>          # one-shot state query, no TUI (CI/script friendly)
+agy-live --selftest                         # run the headless assert suites (10 suites)
+agy-live --rendercheck                      # headless visual-structure harness (layout/spacing/color regressions)
+agy-live --dbtest                           # exercise the session-summary DB reader
 ```
 
-Reads the agy transcript (`~/.gemini/antigravity-cli/brain/<id>/.../transcript.jsonl`) in real time with per-step caps (256KB/tick, 50k chars/step) so even multi-MB transcripts render without OOM.
+### Requirements
+
+- **bun >= 1.3 is required.** The TUI loads `@opentui/core`, which uses native FFI that Node cannot load — the shims fail with `agy-live requires bun >= 1.3.0`. Node is still fine for the MCP server itself.
+- **No build step.** `agy-live` runs `bin/agy-live.ts` directly via bun, so source edits take effect immediately — restart the monitor and you're on the new code.
+
+There are two launcher names, both pointing at the same `bin/agy-live.ts`:
+
+- `agy-live` — node shim (`bin/agy-live-runner.js`, and `bin/agy-live.js`) that `spawnSync`s bun on the TS source. Also mapped as the package `bin`.
+- `agy-live2` — bun-exec alias shim created by the installer. Same TUI, same behaviour; the name is just a convenience.
+
+### Data source
+
+Reads the agy brain transcript for the session:
+
+- **`transcript_full.jsonl`** — preferred. Holds the untruncated history (the CLI stores an untruncated copy here).
+- **`transcript.jsonl`** — fallback when the full file is absent.
+
+The resolver is `resolveTranscriptPath()`; it is exercised by a regression test. Because the full file is preferred, prompt context renders in full (a 15 KB prompt shows as 15 KB, not the ~4 KB the CLI's truncated `transcript.jsonl` records) and the `⚠️ [SOURCE TRUNCATED BY CLI]` notice only appears when agy-live is genuinely forced onto the truncated file.
+
+### Resource behaviour
+
+Designed to stay bounded on multi-MB transcripts:
+
+- **Paging** — the transcript is chunked into 200-item pages (`PAGE_SIZE`); page review renders one page at a time instead of the whole transcript.
+- **DOM pruning** — the scroll box is pruned past 300 children, so the DOM never grows unbounded.
+- **Incremental tailing** — the live poll reads at most 256 KB (`MAX_POLL_READ`) per tick from the last read offset, and fast-seeks to the final 50 KB on initial load instead of replaying the whole history.
+- **One-time full scan** — entering page mode parses the whole transcript once into string pages. Measured cost on the largest real session (4.4 MB) is ~31 MB transient peak versus ~2.4 MB retained; typical sessions (median ~161 KB) are negligible.
 
 ## Development
 
 ```bash
-npm install
-npm test           # vitest unit tests (exec mocked — no agy needed)
-npm run typecheck
-npm run build      # tsup → dist/index.js
+npm install          # installs dev deps (tsup, vitest, typescript, husky)
+npm test             # vitest unit tests (exec mocked — no agy needed)
+npm run typecheck    # tsc --noEmit
+npm run build        # tsup → dist/index.js (the MCP server bundle)
+npm run live         # run the agy-live TUI from source (bun bin/agy-live.ts)
+```
+
+The `agy-live` TUI is **not bundled** — it runs `bin/agy-live.ts` directly under bun, so there is no build step for it. Its self-tests are separate from `npm test`:
+
+```bash
+bun ./bin/agy-live.ts --selftest      # headless assert suites
+bun ./bin/agy-live.ts --rendercheck   # headless layout/color regression harness
+bun ./bin/agy-live.ts --dbtest        # session-summary DB reader
+bun ./bin/agy-live.ts --state <id>    # one-shot state query (no TUI)
+bun x tsc --noEmit                    # typecheck (also covers bin/agy-live.ts)
 ```
 
 ## License
