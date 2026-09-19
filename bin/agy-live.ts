@@ -59,7 +59,7 @@ export const STYLE = {
     rightT: " ",
     cross: " ",
   },
-  GUTTER: "┃  ",
+  GUTTER: "   ",
   CARD_PAD_LEFT: 2,
 } as const;
 
@@ -437,6 +437,55 @@ export function cardAppend(item: PageItem, line: { text: string; fg?: string }):
     return true;
   }
   return false;
+}
+
+export function buildBareLineBox(
+  renderer: any,
+  parent: any,
+  opts: {
+    lines?: (TextRenderable | string)[];
+    fg?: string;
+    bg?: string;
+    borderColor?: string;
+  },
+): BoxRenderable {
+  const borderColor = opts.borderColor || opts.fg || "#d1d5db";
+  const box = new BoxRenderable(renderer, {
+    border: ["left"],
+    borderColor,
+    customBorderChars: STYLE.BORDER_CHARS,
+    paddingLeft: STYLE.CARD_PAD_LEFT,
+    width: "100%",
+    flexShrink: 0,
+    ...(opts.bg ? { backgroundColor: opts.bg } : {}),
+  });
+
+  if (opts.lines) {
+    for (const l of opts.lines) {
+      if (typeof l === "string") {
+        box.add(
+          new TextRenderable(renderer, {
+            content: l || " ",
+            fg: opts.fg || "#d1d5db",
+            wrapMode: "none",
+            width: "100%",
+            selectable: true,
+            selectionBg: "#2563eb",
+            selectionFg: "#ffffff",
+            ...(opts.bg ? { bg: opts.bg } : {}),
+          } as any),
+        );
+      } else {
+        box.add(l);
+      }
+    }
+  }
+
+  if (parent && typeof parent.add === "function") {
+    parent.add(box);
+  }
+
+  return box;
 }
 
 export function replayPageInto(
@@ -1116,7 +1165,7 @@ export function applyRouteAction(action: RouteAction, ctx: RouteContext): void {
       break;
     }
     case "bare": {
-      ctx.pushLine(action.text ? STYLE.GUTTER + action.text : "", action.fg);
+      ctx.pushLine(action.text || "", action.fg);
       break;
     }
   }
@@ -2431,10 +2480,11 @@ export function runSelfTest(): void {
   }
 
   // 44. Spacing & layout unification: content column assertions
-  assertTest(STYLE.GUTTER === "┃  ", 'STYLE.GUTTER is border glyph plus 2 spaces ("┃  ")');
+  assertTest(STYLE.GUTTER === "   ", 'STYLE.GUTTER is pure spaces ("   ") with no border glyph');
+  assertTest(!STYLE.GUTTER.includes("┃"), 'STYLE.GUTTER contains no border glyph "┃"');
   assertTest(
     STYLE.CARD_PAD_LEFT !== undefined && 1 + STYLE.CARD_PAD_LEFT === STYLE.GUTTER.length,
-    "Card content column (border 1 + pad 2 = 3) matches bare content column (STYLE.GUTTER = 3)",
+    "Card content column (border 1 + pad 2 = 3) matches gutter spaces length (STYLE.GUTTER = 3)",
   );
   assertTest(indentCardLine(0, "text") === "text", "indentCardLine level 0 returns unindented text");
   assertTest(indentCardLine(1, "text") === "text", "indentCardLine level 1 returns flush text (no added spaces)");
@@ -2507,8 +2557,8 @@ export function runSelfTest(): void {
   );
 
   // Bare prose and non-card tool
-  testSpacingCtx.pushLine(STYLE.GUTTER + "💬 [Assistant Response]");
-  testSpacingCtx.pushLine(STYLE.GUTTER + "Harness verified.");
+  testSpacingCtx.pushLine("💬 [Assistant Response]");
+  testSpacingCtx.pushLine("Harness verified.");
   routeStep(
     {
       type: "PLANNER_RESPONSE",
@@ -2525,22 +2575,20 @@ export function runSelfTest(): void {
   for (const item of testSpacingPages[0]) {
     if (item.kind === "line") {
       assertTest(
-        item.text.startsWith(STYLE.GUTTER),
-        `Bare line starts with uniform STYLE.GUTTER prefix ("${STYLE.GUTTER}"): "${item.text}"`,
+        !item.text.includes("┃"),
+        `Bare line recorded text contains NO border glyph "┃": "${item.text}"`,
       );
       assertTest(
-        item.text.startsWith("┃"),
-        `Bare line renders col-1 left border glyph "┃": "${item.text}"`,
+        !item.text.startsWith("   "),
+        `Bare line recorded text contains NO leftover gutter spaces: "${item.text}"`,
       );
-      const bareCol = 1 + (item.text.slice(1).length - item.text.slice(1).trimStart().length);
-      assertTest(
-        bareCol === 3,
-        `Bare line content column is 3 (actual ${bareCol}): "${item.text}"`,
-      );
-      assertTest(
-        bareCol === expectedContentCol,
-        `Bare line content column matches card content column (${bareCol} === ${expectedContentCol})`,
-      );
+      if (item.text.length > 0) {
+        const bareCol = item.text.length - item.text.trimStart().length;
+        assertTest(
+          bareCol === 0,
+          `Bare line recorded text is flush at column 0 (actual offset ${bareCol}): "${item.text}"`,
+        );
+      }
     } else if (item.kind === "card") {
       for (const l of item.lines) {
         const leadSpaces = l.text.length - l.text.trimStart().length;
@@ -2688,9 +2736,14 @@ export async function runRenderCheck(): Promise<void> {
     }
     function pushLine(txt: string, fg?: string, bg?: string) {
       recordPageItem({ kind: "line", text: txt, fg, bg });
-      const opts: any = { content: txt, fg, wrapMode: "none", width: "100%" };
-      if (bg) opts.bg = bg;
-      transcriptBox.add(new TextRenderable(setup.renderer, opts));
+      const lineFg = fg || "#d1d5db";
+      const box = buildBareLineBox(setup.renderer, transcriptBox, {
+        lines: [txt || " "],
+        fg: lineFg,
+        bg,
+      });
+      notePushes(1, transcriptBox);
+      return box;
     }
 
     function pushCard(
@@ -2789,8 +2842,8 @@ export async function runRenderCheck(): Promise<void> {
     );
 
     // 5. Bare assistant prose
-    pushLine(STYLE.GUTTER + "💬 [Assistant Response]", "#4ade80");
-    pushLine(STYLE.GUTTER + "Harness verified and all test cases green.");
+    pushLine("💬 [Assistant Response]", "#4ade80");
+    pushLine("Harness verified and all test cases green.");
 
     // 6. Non-card tool (view_file) and its bare output
     routeStep(
@@ -2918,7 +2971,7 @@ export async function runRenderCheck(): Promise<void> {
       "Tool output lines are not bare/separate children of transcriptBox root",
     );
 
-    // ─── (A3) No Authored Padding, Uniform Gutter, Frame-Whitespace ─────────────
+    // ─── (A3) Clean Recorded Text, Native Border Box, Single Column Col 3 ─────────────
     for (const item of pages[0]) {
       if (item.kind === "line") {
         assertCheck(
@@ -2926,13 +2979,16 @@ export async function runRenderCheck(): Promise<void> {
           "A3",
           `Line item has trailing whitespace: "${item.text}"`,
         );
-        if (item.text.length > 0) {
-          assertCheck(
-            item.text.startsWith(STYLE.GUTTER),
-            "A3",
-            `Bare line missing uniform STYLE.GUTTER prefix ("${STYLE.GUTTER}"): "${item.text}"`,
-          );
-        }
+        assertCheck(
+          !item.text.includes("┃"),
+          "A3",
+          `Bare line recorded text contains border glyph "┃": "${item.text}"`,
+        );
+        assertCheck(
+          !item.text.startsWith("   "),
+          "A3",
+          `Bare line recorded text has leftover gutter padding: "${item.text}"`,
+        );
       } else if (item.kind === "card") {
         for (const l of item.lines) {
           assertCheck(
@@ -2950,25 +3006,20 @@ export async function runRenderCheck(): Promise<void> {
       if (item.kind === "line") {
         if (item.text.length > 0) {
           assertCheck(
-            item.text.startsWith(STYLE.GUTTER),
+            !item.text.includes("┃"),
             "A3",
-            `Bare line missing uniform STYLE.GUTTER prefix ("${STYLE.GUTTER}"): "${item.text}"`,
+            `Bare line recorded text contains border glyph "┃": "${item.text}"`,
           );
           assertCheck(
-            item.text.startsWith("┃"),
+            !item.text.startsWith("   "),
             "A3",
-            `Bare line missing left border glyph "┃": "${item.text}"`,
+            `Bare line recorded text starts with leftover gutter spaces: "${item.text}"`,
           );
-          const bareCol = 1 + (item.text.slice(1).length - item.text.slice(1).trimStart().length);
+          const bareOffset = item.text.length - item.text.trimStart().length;
           assertCheck(
-            bareCol === 3,
+            bareOffset === 0,
             "A3",
-            `Bare line content column is 3 (actual ${bareCol}): "${item.text}"`,
-          );
-          assertCheck(
-            bareCol === cardContentCol,
-            "A3",
-            `Bare line content column matches card content column (${bareCol} === ${cardContentCol})`,
+            `Bare line recorded text is flush at column 0 (actual offset ${bareOffset}): "${item.text}"`,
           );
         }
       } else if (item.kind === "card") {
@@ -2993,6 +3044,25 @@ export async function runRenderCheck(): Promise<void> {
         }
       }
     }
+
+    // Verify bare lines in DOM tree are native BoxRenderables with left border
+    const isBoxCardBg = (box: BoxRenderable) =>
+      (box.backgroundColor as any) === STYLE.CARD_BG ||
+      (typeof box.backgroundColor?.equals === "function" &&
+        box.backgroundColor.equals(parseColor(STYLE.CARD_BG)));
+
+    const bareLineBoxes = (transcriptBox.getChildren() as any[]).filter(
+      (c: any) =>
+        c instanceof BoxRenderable &&
+        Array.isArray(c.border) &&
+        c.border.includes("left") &&
+        !isBoxCardBg(c),
+    );
+    assertCheck(
+      bareLineBoxes.length === 4,
+      "A3",
+      `Transcript tree has 4 native left-bordered bare line boxes (actual ${bareLineBoxes.length})`,
+    );
 
     // Column histogram check on rendered frame120 (Round 2: collapsed to ONE column: col 3)
     const frameLines = frame120.split("\n");
@@ -3219,7 +3289,7 @@ export async function runRenderCheck(): Promise<void> {
     // ─── Harness Recording Gate Scenario ────────────────────────────────────────
     recording = false;
     const preRecCount = pages[0].length;
-    pushLine(STYLE.GUTTER + "unrecorded harness line");
+    pushLine("unrecorded harness line");
     pushCard([{ text: "unrecorded harness card" }], "tool");
     applyRouteAction(
       {
@@ -3247,8 +3317,8 @@ export async function runRenderCheck(): Promise<void> {
     }
     fs.writeFileSync(path.join(evidenceDir, "task-6-frame-120.txt"), frame120, "utf8");
     fs.writeFileSync(path.join(evidenceDir, "task-6-frame-70.txt"), frame70, "utf8");
-    fs.writeFileSync(path.join(evidenceDir, "AFTER2-spacing-frame-120.txt"), frame120, "utf8");
-    console.log(`Round-2 column histogram: ${JSON.stringify(frameColHist)}`);
+    fs.writeFileSync(path.join(evidenceDir, "AFTER3-spacing-frame-120.txt"), frame120, "utf8");
+    console.log(`Round-3 column histogram: ${JSON.stringify(frameColHist)}`);
 
     const evidenceLog = [
       "=== TASK 6 VERIFICATION EVIDENCE: agy-live-opencode-cards ===",
@@ -3257,7 +3327,7 @@ export async function runRenderCheck(): Promise<void> {
       "$ bun ./bin/agy-live.ts --rendercheck",
       "✔ A1 PASS: tree walk found 4 BoxRenderables with left border and STYLE.CARD_BG (expected >= 3)",
       "✔ A2 PASS: card titles and tool output lines live inside owning cards (120 cols, 70 cols, replay)",
-      "✔ A3 PASS: no authored padding, bare lines use uniform STYLE.GUTTER, card spans fill 100% width",
+      "✔ A3 PASS: clean recorded text (no border glyph), bare lines use left-border Box, card spans fill 100% width",
       "✔ A4 PASS: resize to 70 cols preserves 4 cards, renders left border, fills width with no JS math",
       "✔ A5 PASS: replayPageInto rebuilds identical 4 cards and all content substrings without domBoxes leak",
       "✔ Flood PASS: 500-line output appends inside card without expanding root children",
@@ -3288,7 +3358,7 @@ export async function runRenderCheck(): Promise<void> {
       "- structure: A1 verifies native BoxRenderable left-accent SplitBorder and STYLE.CARD_BG background.",
       "- content: A2 proves anti-empty-box; all card titles and tool output lines verified present in captured frame.",
       "- hierarchy: A2 verifies tool output lines live inside owning tool card renderables, never escaping to root bare lines.",
-      "- padding: A3 asserts zero authored trailing whitespace across all PageItems and uniform 3-space STYLE.GUTTER prefix on bare lines.",
+      "- padding: A3 asserts zero authored trailing whitespace, clean recorded text (no border glyph/gutter), bare lines rendered in left-border Box (col 3), card spans fill 100% width.",
       "- frame-whitespace: A3 asserts using captureSpans() that card row background extends across 100% width with no trailing padding spans beyond the border.",
       "- resize: A4 proves responsive width without terminal math; card count preserved and border renders in both 120 and 70 cols.",
       "- replay: A5 proves page model rebuilds identical cards with full content fidelity and zero WeakMap domBoxes leak.",
@@ -3308,7 +3378,7 @@ export async function runRenderCheck(): Promise<void> {
       "✔ A2 PASS: card titles and tool output lines live inside owning cards (120 cols, 70 cols, replay)",
     );
     console.log(
-      "✔ A3 PASS: no authored padding, bare lines use uniform STYLE.GUTTER, card spans fill 100% width",
+      "✔ A3 PASS: clean recorded text (no border glyph), bare lines use left-border Box, card spans fill 100% width",
     );
     console.log(
       "✔ A4 PASS: resize to 70 cols preserves 4 cards, renders left border, fills width with no JS math",
@@ -4262,6 +4332,11 @@ async function main() {
     const cardW = getCardWidth();
     const lines = clean.length > cardW && !bg ? wrapLine(clean, cardW) : [clean];
 
+    const box = buildBareLineBox(renderer, scrollBox, {
+      fg,
+      bg,
+    });
+
     for (const l of lines) {
       const hasMarkdown = l.includes("**") || l.includes("`");
       if (!hasMarkdown) {
@@ -4275,7 +4350,7 @@ async function main() {
           selectionFg: "#ffffff",
         };
         if (bg) opts.bg = bg;
-        scrollBox.add(new TextRenderable(renderer, opts));
+        box.add(new TextRenderable(renderer, opts));
       } else {
         const opts: any = {
           wrapMode: "none",
@@ -4295,7 +4370,7 @@ async function main() {
           node.add(s.text);
           tr.add(node);
         }
-        scrollBox.add(tr);
+        box.add(tr);
       }
     }
 
@@ -4525,7 +4600,7 @@ async function main() {
         if (inCodeBlock) {
           const lang = trimmed.slice(3).trim();
           pushLine("");
-          pushLine(STYLE.GUTTER + `💻 Code ${lang ? `(${lang})` : ""}`, "#22c55e");
+          pushLine(`💻 Code ${lang ? `(${lang})` : ""}`, "#22c55e");
         } else {
           pushLine("");
         }
@@ -4545,26 +4620,26 @@ async function main() {
       }
 
       if (trimmed.startsWith("# ")) {
-        pushLine(STYLE.GUTTER + `🔷 ${trimmed.slice(2)}`, "#c084fc");
+        pushLine(`🔷 ${trimmed.slice(2)}`, "#c084fc");
       } else if (trimmed.startsWith("## ")) {
-        pushLine(STYLE.GUTTER + `🔹 ${trimmed.slice(3)}`, "#38bdf8");
+        pushLine(`🔹 ${trimmed.slice(3)}`, "#38bdf8");
       } else if (trimmed.startsWith("### ")) {
-        pushLine(STYLE.GUTTER + `▸ ${trimmed.slice(4)}`, "#fbbf24");
+        pushLine(`▸ ${trimmed.slice(4)}`, "#fbbf24");
       } else if (/^[-*]\s+/.test(trimmed)) {
-        pushLine(STYLE.GUTTER + `  • ${trimmed.replace(/^[-*]\s+/, "")}`, "#ffffff");
+        pushLine(`• ${trimmed.replace(/^[-*]\s+/, "")}`, "#ffffff");
       } else if (/^\d+\.\s+/.test(trimmed)) {
-        pushLine(STYLE.GUTTER + `  ${trimmed}`, "#fde047");
+        pushLine(trimmed, "#fde047");
       } else if (trimmed.startsWith("> ")) {
-        pushLine(STYLE.GUTTER + `  ▎ ${trimmed.slice(2)}`, "#cbd5e1");
+        pushLine(`▎ ${trimmed.slice(2)}`, "#cbd5e1");
       } else if (trimmed === "---" || trimmed === "___" || trimmed === "***") {
         pushLine(
-          STYLE.GUTTER + "────────────────────────────────────────────────────────────",
+          "────────────────────────────────────────────────────────────",
           "#374151",
         );
       } else if (!trimmed) {
         pushLine("");
       } else {
-        pushLine(STYLE.GUTTER + raw, "#ffffff");
+        pushLine(raw, "#ffffff");
       }
     }
   }
@@ -4626,7 +4701,7 @@ async function main() {
     // 2. CHECKPOINT
     if (step.type === "CHECKPOINT") {
       q.pending.length = 0;
-      pushLine(STYLE.GUTTER + "📌 [CHECKPOINT / SUMMARY CONTEXT]", "#ca8a04");
+      pushLine("📌 [CHECKPOINT / SUMMARY CONTEXT]", "#ca8a04");
       return;
     }
 
@@ -4637,15 +4712,15 @@ async function main() {
       activeBackgroundTask = null;
       q.pending.length = 0;
       if (raw.includes("exited with code 0")) {
-        pushLine(STYLE.GUTTER + "⚡ [TASK SUCCESS] Background task exited with code 0", "#4ade80");
+        pushLine("⚡ [TASK SUCCESS] Background task exited with code 0", "#4ade80");
       } else if (
         raw.includes("exited with code") ||
         raw.includes("error") ||
         raw.includes("Error")
       ) {
-        pushLine(STYLE.GUTTER + "⚠️  [TASK ERROR] " + raw.slice(0, 150), "#f87171");
+        pushLine("⚠️  [TASK ERROR] " + raw.slice(0, 150), "#f87171");
       } else {
-        pushLine(STYLE.GUTTER + "⚡ [SYSTEM] " + raw.slice(0, 150), "#94a3b8");
+        pushLine("⚡ [SYSTEM] " + raw.slice(0, 150), "#94a3b8");
       }
       return;
     }
@@ -4678,7 +4753,7 @@ async function main() {
         if (clean) {
           pushLine("");
           pushLine(
-            STYLE.GUTTER + (hasTools ? "💬 [Assistant]" : "💬 [Assistant Response]"),
+            hasTools ? "💬 [Assistant]" : "💬 [Assistant Response]",
             hasTools ? "#38bdf8" : "#4ade80",
           );
           renderMarkdown(clean);
@@ -4691,18 +4766,18 @@ async function main() {
               const waitMsg = isTimer
                 ? `⏳ Menunggu timer "${scheduledPrompt}" (${sec}s)...`
                 : "⚙️ Menunggu background task selesai...";
-              pushLine(STYLE.GUTTER + waitMsg, "#f59e0b");
+              pushLine(waitMsg, "#f59e0b");
               startSpinner(waitMsg);
               return;
             }
 
             pushLine("");
             pushLine(
-              STYLE.GUTTER + "────────────────────────────────────────────────────────────",
+              "────────────────────────────────────────────────────────────",
               "#374151",
             );
             pushLine(
-              STYLE.GUTTER + "✨ [COMPLETED] Tugas agy telah selesai dengan sukses!",
+              "✨ [COMPLETED] Tugas agy telah selesai dengan sukses!",
               "#4ade80",
             );
             pushLine("");
