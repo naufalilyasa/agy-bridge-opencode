@@ -59,7 +59,8 @@ export const STYLE = {
     rightT: " ",
     cross: " ",
   },
-  GUTTER: "  ",
+  GUTTER: "   ",
+  CARD_PAD_LEFT: 2,
 } as const;
 
 // Perf guards: bound per-tick file reads and per-step rendering so a giant
@@ -378,6 +379,10 @@ export function createCardLineText(
   } as any);
 }
 
+export function indentCardLine(level: number, text: string): string {
+  return level <= 0 ? text : "  ".repeat(level) + text;
+}
+
 export function buildCardBox(
   renderer: any,
   parent: any,
@@ -396,7 +401,7 @@ export function buildCardBox(
     backgroundColor: STYLE.CARD_BG,
     paddingTop: 1,
     paddingBottom: 1,
-    paddingLeft: 2,
+    paddingLeft: STYLE.CARD_PAD_LEFT,
     width: "100%",
     flexShrink: 0,
   });
@@ -932,7 +937,7 @@ export function routeStep(
             if (raw) {
               for (let k = 0; k < lines.length; k++) {
                 cardLines.push({
-                  text: `  + ${String(1 + k).padStart(4)}: ${lines[k]}`,
+                  text: indentCardLine(1, `+ ${String(1 + k).padStart(4)}: ${lines[k]}`),
                   fg: "#4ade80",
                 });
               }
@@ -963,26 +968,26 @@ export function routeStep(
             for (let k = 0; k < total; k++) {
               if (k < tLines.length && k < rLines.length && tLines[k] !== rLines[k]) {
                 cardLines.push({
-                  text: `  - ${String(sLine + k).padStart(4)}: ${tLines[k]}`,
+                  text: indentCardLine(1, `- ${String(sLine + k).padStart(4)}: ${tLines[k]}`),
                   fg: "#f87171",
                 });
                 cardLines.push({
-                  text: `  + ${String(sLine + k).padStart(4)}: ${rLines[k]}`,
+                  text: indentCardLine(1, `+ ${String(sLine + k).padStart(4)}: ${rLines[k]}`),
                   fg: "#4ade80",
                 });
               } else if (k < tLines.length && k >= rLines.length) {
                 cardLines.push({
-                  text: `  - ${String(sLine + k).padStart(4)}: ${tLines[k]}`,
+                  text: indentCardLine(1, `- ${String(sLine + k).padStart(4)}: ${tLines[k]}`),
                   fg: "#f87171",
                 });
               } else if (k < rLines.length && k >= tLines.length) {
                 cardLines.push({
-                  text: `  + ${String(sLine + k).padStart(4)}: ${rLines[k]}`,
+                  text: indentCardLine(1, `+ ${String(sLine + k).padStart(4)}: ${rLines[k]}`),
                   fg: "#4ade80",
                 });
               } else if (k < rLines.length) {
                 cardLines.push({
-                  text: `    ${String(sLine + k).padStart(4)}: ${rLines[k]}`,
+                  text: indentCardLine(1, `  ${String(sLine + k).padStart(4)}: ${rLines[k]}`),
                   fg: "#94a3b8",
                 });
               }
@@ -1000,7 +1005,7 @@ export function routeStep(
             const cmd = unescapeCodeString(args.CommandLine || args.command || "").trim();
             const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
               { text: "💻 [BASH EXECUTION]", fg: "#38bdf8", isTitle: true },
-              { text: `  $ ${cmd}`, fg: "#fde047" },
+              { text: indentCardLine(1, `$ ${cmd}`), fg: "#fde047" },
             ];
             const item: PageItem = {
               kind: "card",
@@ -1111,7 +1116,7 @@ export function applyRouteAction(action: RouteAction, ctx: RouteContext): void {
       break;
     }
     case "bare": {
-      ctx.pushLine(STYLE.GUTTER + action.text, action.fg);
+      ctx.pushLine(action.text ? STYLE.GUTTER + action.text : "", action.fg);
       break;
     }
   }
@@ -2425,6 +2430,151 @@ export function runSelfTest(): void {
     fs.rmSync(projTmpDir, { recursive: true, force: true });
   }
 
+  // 44. Spacing & layout unification: content column assertions
+  assertTest(STYLE.GUTTER === "   ", 'STYLE.GUTTER is exactly 3 spaces ("   ")');
+  assertTest(
+    STYLE.CARD_PAD_LEFT !== undefined && 1 + STYLE.CARD_PAD_LEFT === STYLE.GUTTER.length,
+    "Card content column (border 1 + pad 2 = 3) matches bare content column (STYLE.GUTTER = 3)",
+  );
+  assertTest(indentCardLine(0, "text") === "text", "indentCardLine level 0 returns unindented text");
+  assertTest(indentCardLine(1, "text") === "  text", "indentCardLine level 1 returns 2-space indented text");
+  assertTest(indentCardLine(2, "text") === "    text", "indentCardLine level 2 returns 4-space indented text");
+
+  // Synthetic full page item column verification across headers, bodies, trailers, and bare lines
+  const testSpacingPages: PageItem[][] = [[]];
+  const testSpacingCtx: RouteContext = {
+    renderer: stubRenderer,
+    parent: stubRoot,
+    pages: testSpacingPages,
+    pageMode: true,
+    pushLine: (txt, fg, bg) => {
+      let p = testSpacingPages[testSpacingPages.length - 1];
+      if (!p || p.length >= 200) {
+        p = [];
+        testSpacingPages.push(p);
+      }
+      p.push({ kind: "line", text: txt, fg, bg });
+    },
+    notePushes: () => {},
+  };
+  const testSpacingQ = { pending: [] as (PageItem | null)[] };
+
+  // User card
+  testSpacingPages[0].push({
+    kind: "card",
+    accent: STYLE.ACCENT.user,
+    lines: [
+      { text: "👤 [USER TASK]", fg: STYLE.ACCENT.user, isTitle: true },
+      { text: indentCardLine(1, "Sample user prompt"), fg: "#ffffff" },
+    ],
+  });
+
+  // Thinking card
+  testSpacingPages[0].push({
+    kind: "card",
+    accent: STYLE.ACCENT.thinking,
+    lines: [
+      { text: "🧠 [Thinking]", fg: STYLE.ACCENT.thinking, isTitle: true },
+      { text: indentCardLine(1, "Sample thinking"), fg: "#a855f7" },
+    ],
+  });
+
+  // Tool calls (write + run_command)
+  routeStep(
+    {
+      type: "PLANNER_RESPONSE",
+      tool_calls: [
+        {
+          name: "write_to_file",
+          args: { TargetFile: "/workspace/src/foo.ts", CodeContent: "const x = 1;" },
+        },
+        {
+          name: "run_command",
+          args: { CommandLine: "bun test" },
+        },
+      ],
+    },
+    testSpacingQ,
+    (a) => applyRouteAction(a, testSpacingCtx),
+  );
+
+  // Tool outputs (trailers)
+  routeStep({ type: "GENERIC", status: "DONE", content: "Wrote 12 bytes" }, testSpacingQ, (a) =>
+    applyRouteAction(a, testSpacingCtx),
+  );
+  routeStep({ type: "GENERIC", status: "DONE", content: "1 passed" }, testSpacingQ, (a) =>
+    applyRouteAction(a, testSpacingCtx),
+  );
+
+  // Bare prose and non-card tool
+  testSpacingCtx.pushLine(STYLE.GUTTER + "💬 [Assistant Response]");
+  testSpacingCtx.pushLine(STYLE.GUTTER + "Harness verified.");
+  routeStep(
+    {
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "view_file", args: { AbsolutePath: "/workspace/src/foo.ts" } }],
+    },
+    testSpacingQ,
+    (a) => applyRouteAction(a, testSpacingCtx),
+  );
+  routeStep({ type: "GENERIC", status: "DONE", content: "1: const x = 1;" }, testSpacingQ, (a) =>
+    applyRouteAction(a, testSpacingCtx),
+  );
+
+  const expectedContentCol = 1 + STYLE.CARD_PAD_LEFT; // 3
+  for (const item of testSpacingPages[0]) {
+    if (item.kind === "line") {
+      const bareCol = item.text.length - item.text.trimStart().length;
+      assertTest(
+        bareCol === 3,
+        `Bare line content column is 3 (actual ${bareCol}): "${item.text}"`,
+      );
+      assertTest(
+        bareCol === expectedContentCol,
+        `Bare line content column matches card content column (${bareCol} === ${expectedContentCol})`,
+      );
+    } else if (item.kind === "card") {
+      for (const l of item.lines) {
+        const leadSpaces = l.text.length - l.text.trimStart().length;
+        if (l.isTitle) {
+          const headerCol = expectedContentCol + leadSpaces;
+          assertTest(
+            headerCol === 3,
+            `Card header content column is 3 (actual ${headerCol}): "${l.text}"`,
+          );
+          assertTest(
+            headerCol === expectedContentCol,
+            `Card header matches expected content column 3 (${headerCol} === ${expectedContentCol})`,
+          );
+        } else if (leadSpaces >= 2) {
+          assertTest(
+            leadSpaces === 2,
+            `Card body line has uniform 2-space nesting (actual ${leadSpaces}): "${l.text}"`,
+          );
+          const bodyCol = expectedContentCol + leadSpaces;
+          assertTest(
+            bodyCol === 5,
+            `Card body content column is 5 (actual ${bodyCol}): "${l.text}"`,
+          );
+          assertTest(
+            bodyCol - 2 === expectedContentCol,
+            `Card body base content column matches header/bare column 3`,
+          );
+        } else {
+          const trailerCol = expectedContentCol + leadSpaces;
+          assertTest(
+            trailerCol === 3,
+            `Card trailer content column is 3 (actual ${trailerCol}): "${l.text}"`,
+          );
+          assertTest(
+            trailerCol === expectedContentCol,
+            `Card trailer matches expected content column 3 (${trailerCol} === ${expectedContentCol})`,
+          );
+        }
+      }
+    }
+  }
+
   console.log("✔ deriveSessionState self-tests passed (25 assertions).");
   console.log("✔ pushCard Box self-test passed (1 assertion).");
   console.log("✔ PageItem card replay & domBoxes self-tests passed (8 assertions).");
@@ -2435,6 +2585,9 @@ export function runSelfTest(): void {
   );
   console.log(
     "✔ detectProjectDir and cache invalidation self-tests passed (9 assertions).",
+  );
+  console.log(
+    "✔ live content spacing & column alignment self-tests passed (37 assertions).",
   );
 }
 
@@ -2592,7 +2745,7 @@ export async function runRenderCheck(): Promise<void> {
     pushCard(
       [
         { text: "👤 [USER TASK]", fg: STYLE.ACCENT.user, isTitle: true },
-        { text: "  Implement rendercheck headless harness", fg: "#ffffff" },
+        { text: indentCardLine(1, "Implement rendercheck headless harness"), fg: "#ffffff" },
       ],
       "user",
     );
@@ -2601,7 +2754,7 @@ export async function runRenderCheck(): Promise<void> {
     pushCard(
       [
         { text: "🧠 [Thinking]", fg: STYLE.ACCENT.thinking, isTitle: true },
-        { text: "Verifying card borders and spacing", fg: "#a855f7" },
+        { text: indentCardLine(1, "Verifying card borders and spacing"), fg: "#a855f7" },
       ],
       "thinking",
     );
@@ -2801,6 +2954,62 @@ export async function runRenderCheck(): Promise<void> {
             "A3",
             `Card line has trailing whitespace: "${l.text}"`,
           );
+        }
+      }
+    }
+
+    // Column alignment check across all recorded PageItems
+    const cardContentCol = 1 + STYLE.CARD_PAD_LEFT;
+    for (const item of pages[0]) {
+      if (item.kind === "line") {
+        if (item.text.length > 0) {
+          const bareCol = item.text.length - item.text.trimStart().length;
+          assertCheck(
+            bareCol === 3,
+            "A3",
+            `Bare line content column is 3 (actual ${bareCol}): "${item.text}"`,
+          );
+          assertCheck(
+            bareCol === cardContentCol,
+            "A3",
+            `Bare line content column matches card content column (${bareCol} === ${cardContentCol})`,
+          );
+        }
+      } else if (item.kind === "card") {
+        for (const l of item.lines) {
+          const leadSpaces = l.text.length - l.text.trimStart().length;
+          if (l.isTitle) {
+            const headerCol = cardContentCol + leadSpaces;
+            assertCheck(
+              headerCol === 3,
+              "A3",
+              `Card header content column is 3: "${l.text}"`,
+            );
+          } else if (leadSpaces >= 2) {
+            assertCheck(
+              leadSpaces === 2,
+              "A3",
+              `Card body line has uniform 2-space nesting (actual ${leadSpaces}): "${l.text}"`,
+            );
+            const bodyCol = cardContentCol + leadSpaces;
+            assertCheck(
+              bodyCol === 5,
+              "A3",
+              `Card body content column is 5: "${l.text}"`,
+            );
+            assertCheck(
+              bodyCol - 2 === cardContentCol,
+              "A3",
+              `Card body base content column matches card content column 3`,
+            );
+          } else {
+            const trailerCol = cardContentCol + leadSpaces;
+            assertCheck(
+              trailerCol === 3,
+              "A3",
+              `Card trailer content column is 3: "${l.text}"`,
+            );
+          }
         }
       }
     }
@@ -3035,6 +3244,7 @@ export async function runRenderCheck(): Promise<void> {
     }
     fs.writeFileSync(path.join(evidenceDir, "task-6-frame-120.txt"), frame120, "utf8");
     fs.writeFileSync(path.join(evidenceDir, "task-6-frame-70.txt"), frame70, "utf8");
+    fs.writeFileSync(path.join(evidenceDir, "AFTER-spacing-frame-120.txt"), frame120, "utf8");
 
     const evidenceLog = [
       "=== TASK 6 VERIFICATION EVIDENCE: agy-live-opencode-cards ===",
@@ -3074,7 +3284,7 @@ export async function runRenderCheck(): Promise<void> {
       "- structure: A1 verifies native BoxRenderable left-accent SplitBorder and STYLE.CARD_BG background.",
       "- content: A2 proves anti-empty-box; all card titles and tool output lines verified present in captured frame.",
       "- hierarchy: A2 verifies tool output lines live inside owning tool card renderables, never escaping to root bare lines.",
-      "- padding: A3 asserts zero authored trailing whitespace across all PageItems and uniform 2-space STYLE.GUTTER prefix on bare lines.",
+      "- padding: A3 asserts zero authored trailing whitespace across all PageItems and uniform 3-space STYLE.GUTTER prefix on bare lines.",
       "- frame-whitespace: A3 asserts using captureSpans() that card row background extends across 100% width with no trailing padding spans beyond the border.",
       "- resize: A4 proves responsive width without terminal math; card count preserved and border renders in both 120 and 70 cols.",
       "- replay: A5 proves page model rebuilds identical cards with full content fidelity and zero WeakMap domBoxes leak.",
@@ -4401,7 +4611,7 @@ async function main() {
       const lines = clean.split("\n");
       const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
         { text: "👤 [USER TASK]", fg: "#60a5fa", isTitle: true },
-        ...lines.map((l) => ({ text: "  " + l, fg: "#ffffff" })),
+        ...lines.map((l) => ({ text: indentCardLine(1, l), fg: "#ffffff" })),
       ];
       pushCard(cardLines, "user");
       stopSpinner("✓ Task received");
@@ -4452,7 +4662,7 @@ async function main() {
         const lines = capText(step.thinking).trim().split("\n");
         const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
           { text: "🧠 [Thinking]", fg: "#c084fc", isTitle: true },
-          ...lines.map((l) => ({ text: l, fg: "#a855f7" })),
+          ...lines.map((l) => ({ text: indentCardLine(1, l), fg: "#a855f7" })),
         ];
         pushCard(cardLines, "thinking");
       }
