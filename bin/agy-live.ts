@@ -402,12 +402,13 @@ export function buildCardBox(
     borderColor: accent,
     customBorderChars: STYLE.BORDER_CHARS,
     backgroundColor: STYLE.CARD_BG,
-    paddingTop: 1,
+    paddingTop: 0,
     paddingBottom: 1,
     paddingLeft: STYLE.CARD_PAD_LEFT,
     width: "100%",
     flexShrink: 0,
   });
+  (box as any).isCard = true;
 
   const allLines = [...opts.lines];
   if (opts.title && !titleLine) {
@@ -453,6 +454,7 @@ export function buildBareLineBox(
   },
 ): BoxRenderable {
   const borderColor = opts.borderColor || opts.fg || "#d1d5db";
+  const bg = opts.bg !== undefined ? opts.bg : STYLE.CARD_BG;
   const box = new BoxRenderable(renderer, {
     border: ["left"],
     borderColor,
@@ -460,8 +462,9 @@ export function buildBareLineBox(
     paddingLeft: STYLE.CARD_PAD_LEFT,
     width: "100%",
     flexShrink: 0,
-    ...(opts.bg ? { backgroundColor: opts.bg } : {}),
+    ...(bg ? { backgroundColor: bg } : {}),
   });
+  (box as any).isBareLine = true;
 
   if (opts.lines) {
     for (const l of opts.lines) {
@@ -475,7 +478,7 @@ export function buildBareLineBox(
             selectable: true,
             selectionBg: "#2563eb",
             selectionFg: "#ffffff",
-            ...(opts.bg ? { bg: opts.bg } : {}),
+            ...(bg ? { bg } : {}),
           } as any),
         );
       } else {
@@ -489,6 +492,15 @@ export function buildBareLineBox(
   }
 
   return box;
+}
+
+export function pushBlockGap(ctx: RouteContext): void {
+  const page = ctx.pages[ctx.pages.length - 1];
+  if (!page || page.length === 0) return;
+  const last = page[page.length - 1];
+  if (last.kind === "card") return;
+  if (last.kind === "line" && !last.text.trim()) return;
+  ctx.pushLine("", undefined, STYLE.CARD_BG);
 }
 
 export function replayPageInto(
@@ -930,7 +942,7 @@ export function unescapeCodeString(str: any): string {
 export type RouteAction =
   | { type: "open_card"; item: PageItem; accent: string }
   | { type: "append"; item: PageItem; line: { text: string; fg?: string } }
-  | { type: "bare"; text: string; fg?: string };
+  | { type: "bare"; text: string; fg?: string; gapBefore?: boolean };
 
 export interface RouteContext {
   renderer: any;
@@ -945,7 +957,7 @@ export interface RouteContext {
 
 export function routeStep(
   step: any,
-  q: { pending: (PageItem | null)[] },
+  q: { pending: (PageItem | null)[]; inBareOutput?: boolean },
   emit: (a: RouteAction) => void,
 ): void {
   if (!step) return;
@@ -953,14 +965,16 @@ export function routeStep(
   // 1. Hard resets: USER_INPUT, CHECKPOINT, SYSTEM_MESSAGE
   if (step.type === "USER_INPUT" || step.type === "CHECKPOINT" || step.type === "SYSTEM_MESSAGE") {
     q.pending.length = 0;
+    q.inBareOutput = false;
     return;
   }
 
   // 2. ERROR_MESSAGE: clears q.pending, renders bare, never consumes a slot
   if (step.type === "ERROR_MESSAGE") {
     q.pending.length = 0;
+    q.inBareOutput = false;
     const raw = String(step.error || step.content || "Error");
-    emit({ type: "bare", text: `⚠️  [ERROR] ${raw}`, fg: STYLE.ACCENT.error });
+    emit({ type: "bare", text: `⚠️  [ERROR] ${raw}`, fg: STYLE.ACCENT.error, gapBefore: true });
     return;
   }
 
@@ -968,6 +982,7 @@ export function routeStep(
   if (step.type === "PLANNER_RESPONSE") {
     const hasTools = Array.isArray(step.tool_calls) && step.tool_calls.length > 0;
     if (hasTools) {
+      q.inBareOutput = false;
       for (const tc of step.tool_calls) {
         const name = tc.name || "tool";
         const args = tc.args || {};
@@ -1000,43 +1015,49 @@ export function routeStep(
           case "replace_file_content": {
             const file = args.TargetFile || args.target_file || "";
             const rel = file ? path.relative(process.cwd(), file) || file : "";
-            const sLine = args.StartLine ? Number(args.StartLine) : 1;
-            const rawT = unescapeCodeString(capText(args.TargetContent || ""));
-            const rawR = unescapeCodeString(capText(args.ReplacementContent || ""));
-            const tLines = rawT ? rawT.split("\n") : [];
-            const rLines = rawR ? rawR.split("\n") : [];
-            const total = Math.max(tLines.length, rLines.length);
-
+            const sLine = parseInt(args.StartLine || "1", 10);
+            const target = unescapeCodeString(capText(args.TargetContent || ""));
+            const repl = unescapeCodeString(capText(args.ReplacementContent || ""));
+            const tLines = target ? target.split("\n") : [];
+            const rLines = repl ? repl.split("\n") : [];
             const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
-              { text: `✏️  [DIFF EDIT] ${rel} (Line ${sLine})`, fg: "#fbbf24", isTitle: true },
+              { text: `⚡ [DIFF EDIT] ${rel}`, fg: "#f59e0b", isTitle: true },
             ];
-
-            for (let k = 0; k < total; k++) {
-              if (k < tLines.length && k < rLines.length && tLines[k] !== rLines[k]) {
+            const maxL = Math.max(tLines.length, rLines.length);
+            for (let k = 0; k < maxL && k < 8; k++) {
+              if (k < tLines.length && k < rLines.length) {
+                if (tLines[k] !== rLines[k]) {
+                  cardLines.push({
+                    text: indentCardLine(1, `- ${String(sLine + k).padStart(4)}: ${tLines[k]}`),
+                    fg: "#f87171",
+                  });
+                  cardLines.push({
+                    text: indentCardLine(1, `+ ${String(sLine + k).padStart(4)}: ${rLines[k]}`),
+                    fg: "#4ade80",
+                  });
+                } else {
+                  cardLines.push({
+                    text: indentCardLine(1, `  ${String(sLine + k).padStart(4)}: ${tLines[k]}`),
+                    fg: "#94a3b8",
+                  });
+                }
+              } else if (k < tLines.length) {
                 cardLines.push({
                   text: indentCardLine(1, `- ${String(sLine + k).padStart(4)}: ${tLines[k]}`),
                   fg: "#f87171",
-                });
-                cardLines.push({
-                  text: indentCardLine(1, `+ ${String(sLine + k).padStart(4)}: ${rLines[k]}`),
-                  fg: "#4ade80",
-                });
-              } else if (k < tLines.length && k >= rLines.length) {
-                cardLines.push({
-                  text: indentCardLine(1, `- ${String(sLine + k).padStart(4)}: ${tLines[k]}`),
-                  fg: "#f87171",
-                });
-              } else if (k < rLines.length && k >= tLines.length) {
-                cardLines.push({
-                  text: indentCardLine(1, `+ ${String(sLine + k).padStart(4)}: ${rLines[k]}`),
-                  fg: "#4ade80",
                 });
               } else if (k < rLines.length) {
                 cardLines.push({
-                  text: indentCardLine(1, `  ${String(sLine + k).padStart(4)}: ${rLines[k]}`),
-                  fg: "#94a3b8",
+                  text: indentCardLine(1, `+ ${String(sLine + k).padStart(4)}: ${rLines[k]}`),
+                  fg: "#4ade80",
                 });
               }
+            }
+            if (maxL > 8) {
+              cardLines.push({
+                text: indentCardLine(1, `... (${maxL - 8} more diff lines)`),
+                fg: "#64748b",
+              });
             }
             const item: PageItem = {
               kind: "card",
@@ -1062,32 +1083,97 @@ export function routeStep(
             emit({ type: "open_card", item, accent: STYLE.ACCENT.tool });
             break;
           }
+          case "call_mcp_tool": {
+            const server = unescapeCodeString(args.ServerName || args.server_name || args.server || "").trim();
+            const tool = unescapeCodeString(args.ToolName || args.tool_name || args.tool || "").trim();
+            const title = `🔧 [MCP: ${server || "unknown"}/${tool || "unknown"}]`;
+
+            let summary = unescapeCodeString(args.toolSummary || args.toolAction || "").trim();
+            let rawArgs = args.Arguments !== undefined ? args.Arguments : args.arguments;
+            let parsedArgs: any = null;
+            let formattedArgs = "";
+
+            if (typeof rawArgs === "string") {
+              const unescaped = unescapeCodeString(rawArgs).trim();
+              try {
+                parsedArgs = JSON.parse(unescaped);
+                formattedArgs = JSON.stringify(parsedArgs, null, 2);
+              } catch {
+                formattedArgs = unescaped;
+              }
+            } else if (typeof rawArgs === "object" && rawArgs !== null) {
+              parsedArgs = rawArgs;
+              formattedArgs = JSON.stringify(rawArgs, null, 2);
+            } else if (rawArgs !== undefined && rawArgs !== null) {
+              formattedArgs = String(rawArgs);
+            }
+
+            if (!summary && parsedArgs && typeof parsedArgs === "object") {
+              summary = Object.entries(parsedArgs)
+                .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
+                .join(", ");
+            }
+            if (!summary && formattedArgs) {
+              summary = formattedArgs.replace(/\s+/g, " ").trim();
+            }
+
+            const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
+              { text: title, fg: "#38bdf8", isTitle: true },
+            ];
+
+            if (summary) {
+              cardLines.push({
+                text: indentCardLine(1, capText(summary, 120)),
+                fg: "#fde047",
+              });
+            }
+
+            if (formattedArgs) {
+              const capped = capText(formattedArgs);
+              const pLines = capped.split("\n");
+              for (const pl of pLines) {
+                cardLines.push({
+                  text: indentCardLine(1, pl),
+                  fg: "#94a3b8",
+                });
+              }
+            }
+
+            const item: PageItem = {
+              kind: "card",
+              accent: STYLE.ACCENT.tool,
+              lines: cardLines,
+            };
+            q.pending.push(item);
+            emit({ type: "open_card", item, accent: STYLE.ACCENT.tool });
+            break;
+          }
           case "view_file": {
             const file = args.AbsolutePath || args.file || "";
             const rel = file ? path.relative(process.cwd(), file) || file : "";
             const sLine = args.StartLine ? ` (L${args.StartLine}-${args.EndLine || ""})` : "";
             q.pending.push(null);
-            emit({ type: "bare", text: `🔍 [VIEW FILE] ${rel}${sLine}`, fg: "#38bdf8" });
+            emit({ type: "bare", text: `🔍 [VIEW FILE] ${rel}${sLine}`, fg: "#38bdf8", gapBefore: true });
             break;
           }
           case "grep_search":
           case "find_by_name": {
             const query = args.Query || args.Pattern || "";
             q.pending.push(null);
-            emit({ type: "bare", text: `🔎 [SEARCH] ${name} -> "${query}"`, fg: "#818cf8" });
+            emit({ type: "bare", text: `🔎 [SEARCH] ${name} -> "${query}"`, fg: "#818cf8", gapBefore: true });
             break;
           }
           case "schedule": {
             const sec = parseInt(args.DurationSeconds || args.duration_seconds || "60", 10);
             const p = String(args.Prompt || args.prompt || "Waiting for task");
             q.pending.push(null);
-            emit({ type: "bare", text: `⏳ [SCHEDULE] "${p}" (${sec}s)`, fg: "#f59e0b" });
+            emit({ type: "bare", text: `⏳ [SCHEDULE] "${p}" (${sec}s)`, fg: "#f59e0b", gapBefore: true });
             break;
           }
           default: {
             const summary = capText(args.toolSummary || tc.name || "tool", 200);
             q.pending.push(null);
-            emit({ type: "bare", text: `🔧 [TOOL: ${name}] ${summary}`, fg: "#93c5fd" });
+            emit({ type: "bare", text: `🔧 [TOOL: ${name}] ${summary}`, fg: "#93c5fd", gapBefore: true });
             break;
           }
         }
@@ -1096,6 +1182,7 @@ export function routeStep(
     } else if (step.content) {
       // Turn-final assistant text (assistant text with NO tool_calls)
       q.pending.length = 0;
+      q.inBareOutput = false;
       return;
     }
     return;
@@ -1117,14 +1204,23 @@ export function routeStep(
           });
         }
       } else {
+        const prefix = "↳ [Output] ";
+        const indent = "           ";
         for (let i = 0; i < lines.length; i++) {
           const l = lines[i];
           if (!l.trim()) {
             emit({ type: "bare", text: "", fg: "#94a3b8" });
             continue;
           }
-          const text = i === 0 ? `↳ [Output] ${l.trimEnd()}` : l.trimEnd();
-          emit({ type: "bare", text, fg: "#94a3b8" });
+          if (!q.inBareOutput) {
+            emit({ type: "bare", text: `${prefix}${l.trimEnd()}`, fg: "#94a3b8" });
+            q.inBareOutput = true;
+          } else {
+            emit({ type: "bare", text: `${indent}${l.trimEnd()}`, fg: "#94a3b8" });
+          }
+        }
+        if (step.status !== "RUNNING") {
+          q.inBareOutput = false;
         }
       }
     }
@@ -1134,6 +1230,7 @@ export function routeStep(
 export function applyRouteAction(action: RouteAction, ctx: RouteContext): void {
   switch (action.type) {
     case "open_card": {
+      pushBlockGap(ctx);
       if (ctx.recordPageItem) {
         ctx.recordPageItem(action.item);
       } else if (ctx.recording !== false) {
@@ -1162,6 +1259,9 @@ export function applyRouteAction(action: RouteAction, ctx: RouteContext): void {
       break;
     }
     case "bare": {
+      if (action.gapBefore) {
+        pushBlockGap(ctx);
+      }
       ctx.pushLine(action.text || "", action.fg);
       break;
     }
@@ -1474,8 +1574,14 @@ export function runSelfTest(): void {
     fg: "#ffffff",
     bg: STYLE.CARD_BG,
   };
+  const replayedCustomBg: PageItem = {
+    kind: "line",
+    text: "Line with custom bg",
+    fg: "#ffffff",
+    bg: "#334155",
+  };
   const testPages: PageItem[][] = [
-    [replayedCardItem, replayedLine1, replayedLine2, replayedLineWithBg],
+    [replayedCardItem, replayedLine1, replayedLine2, replayedLineWithBg, replayedCustomBg],
   ];
 
   const replayRoot: any = {
@@ -1519,6 +1625,7 @@ export function runSelfTest(): void {
 
   const replayedBgBox = replayRoot.children[3];
   const replayedNoBgBox = replayRoot.children[1];
+  const replayedCustomBox = replayRoot.children[4];
   const isBoxCardBgMatch = (b: any) =>
     b &&
     ((b.backgroundColor as any) === STYLE.CARD_BG ||
@@ -1529,11 +1636,20 @@ export function runSelfTest(): void {
         b.bg.equals(parseColor(STYLE.CARD_BG))));
 
   const isTextCardBg = isBoxCardBgMatch(replayedBgBox);
-  const hasNoBg = replayedNoBgBox && !isBoxCardBgMatch(replayedNoBgBox);
+  const isDefaultCardBg = isBoxCardBgMatch(replayedNoBgBox);
+  const isCustomBgMatch = (b: any) =>
+    b &&
+    ((b.backgroundColor as any) === "#334155" ||
+      (b.bg as any) === "#334155" ||
+      (typeof b.backgroundColor?.equals === "function" &&
+        b.backgroundColor.equals(parseColor("#334155"))) ||
+      (typeof b.bg?.equals === "function" &&
+        b.bg.equals(parseColor("#334155"))));
+  const hasCustomBg = isCustomBgMatch(replayedCustomBox);
 
   assertTest(
-    Boolean(isTextCardBg && hasNoBg),
-    "PageItem line background survives replay with STYLE.CARD_BG while unstyled lines have no bg set",
+    Boolean(isTextCardBg && isDefaultCardBg && hasCustomBg),
+    "PageItem line background defaults to STYLE.CARD_BG while custom bg overrides intact",
   );
 
   const replayedBareLineBox = replayRoot.children[1];
@@ -2616,6 +2732,149 @@ export function runSelfTest(): void {
     }
   }
 
+  // 45. Polish M1-M4 (B1-B4): bare-line default bg, uniform 1-row gap, call_mcp_tool card, single ↳ [Output]
+  // (a) buildBareLineBox default bg and override
+  const defaultBareBox = buildBareLineBox(stubRenderer, stubRoot, { lines: ["default bg line"] });
+  const isDefaultBareBg =
+    defaultBareBox.backgroundColor &&
+    ((defaultBareBox.backgroundColor as any) === STYLE.CARD_BG ||
+      (typeof (defaultBareBox.backgroundColor as any).equals === "function" &&
+        (defaultBareBox.backgroundColor as any).equals(parseColor(STYLE.CARD_BG))));
+  assertTest(Boolean(isDefaultBareBg), "buildBareLineBox applies STYLE.CARD_BG by default (M1/B3)");
+
+  const overrideBareBox = buildBareLineBox(stubRenderer, stubRoot, {
+    lines: ["override bg line"],
+    bg: "#3b82f6",
+  });
+  const isOverrideBareBg =
+    overrideBareBox.backgroundColor &&
+    ((overrideBareBox.backgroundColor as any) === "#3b82f6" ||
+      (typeof (overrideBareBox.backgroundColor as any).equals === "function" &&
+        (overrideBareBox.backgroundColor as any).equals(parseColor("#3b82f6"))));
+  assertTest(Boolean(isOverrideBareBg), "buildBareLineBox allows opts.bg to override default (M1)");
+
+  // (b) pushBlockGap invariant and idempotence (M2/B2)
+  const gapPages: PageItem[][] = [[]];
+  const gapCtx: RouteContext = {
+    renderer: stubRenderer,
+    parent: stubRoot,
+    pages: gapPages,
+    pageMode: true,
+    pushLine: (txt, fg, bg) => {
+      gapPages[0].push({ kind: "line", text: txt, fg, bg });
+    },
+    notePushes: () => {},
+  };
+  pushBlockGap(gapCtx);
+  assertTest(gapPages[0].length === 0, "pushBlockGap on empty page is a no-op");
+
+  gapPages[0].push({ kind: "card", accent: "#38bdf8", lines: [{ text: "card 1", isTitle: true }] });
+  pushBlockGap(gapCtx);
+  assertTest(gapPages[0].length === 1, "pushBlockGap after card is a no-op (card bottom padding provides 1 blank row)");
+
+  gapPages[0].push({ kind: "line", text: "bare prose", fg: "#ffffff" });
+  assertTest(gapPages[0].length === 2, "bare prose appended");
+  pushBlockGap(gapCtx);
+  assertTest(
+    gapPages[0].length === 3 && gapPages[0][2].kind === "line" && gapPages[0][2].text === "" && gapPages[0][2].bg === STYLE.CARD_BG,
+    "pushBlockGap after bare line appends exactly 1 empty line with STYLE.CARD_BG",
+  );
+  pushBlockGap(gapCtx);
+  assertTest(gapPages[0].length === 3, "pushBlockGap is idempotent: consecutive gap calls do not add duplicate blank lines");
+
+  // (c) call_mcp_tool renders as card with ServerName/ToolName, summary, and formatted Arguments (M3/B1)
+  const mcpQ: { pending: (PageItem | null)[] } = { pending: [] };
+  const mcpActions: RouteAction[] = [];
+  routeStep(
+    {
+      type: "PLANNER_RESPONSE",
+      tool_calls: [
+        {
+          name: "call_mcp_tool",
+          args: {
+            ServerName: "agentmemory",
+            ToolName: "memory_recall",
+            toolSummary: "Memory recall query",
+            Arguments: { query: "spacing invariant", max_results: 5 },
+          },
+        },
+      ],
+    },
+    mcpQ,
+    (a) => mcpActions.push(a),
+  );
+  assertTest(mcpQ.pending.length === 1, "call_mcp_tool registers owning card in q.pending (B1)");
+  assertTest(mcpActions.length === 1 && mcpActions[0].type === "open_card", "call_mcp_tool emits open_card action");
+  const mcpCard = (mcpActions[0] as any).item as PageItem;
+  assertTest(mcpCard.kind === "card", "call_mcp_tool item kind is card");
+  assertTest(
+    mcpCard.lines.some((l) => l.isTitle && l.text.includes("🔧 [MCP: agentmemory/memory_recall]")),
+    "call_mcp_tool title includes server and tool names (M3)",
+  );
+  assertTest(
+    mcpCard.lines.some((l) => l.text.includes("Memory recall query")),
+    "call_mcp_tool includes args summary line",
+  );
+  assertTest(
+    mcpCard.lines.some((l) => l.text.includes('"query": "spacing invariant"')),
+    "call_mcp_tool includes formatted Arguments JSON body (M3)",
+  );
+
+  // Tool output for MCP card routes into card via q.pending
+  routeStep(
+    {
+      type: "GENERIC",
+      status: "DONE",
+      content: "Found 2 memories",
+    },
+    mcpQ,
+    (a) => mcpActions.push(a),
+  );
+  assertTest(mcpQ.pending.length === 0, "MCP card output consumed q.pending entry");
+  assertTest(
+    mcpActions.length === 2 && mcpActions[1].type === "append" && (mcpActions[1] as any).item === mcpCard,
+    "MCP tool output appends into owning card, not as bare output (M3)",
+  );
+
+  // (d) ↳ [Output] single label once per group with 11-space indent (M4/B4)
+  const bareQ: { pending: (PageItem | null)[]; inBareOutput?: boolean } = { pending: [null] };
+  const bareActions: RouteAction[] = [];
+  routeStep(
+    {
+      type: "GENERIC",
+      status: "RUNNING",
+      content: "First output line\nSecond output line\nThird output line",
+    },
+    bareQ,
+    (a) => bareActions.push(a),
+  );
+  const bareTexts = bareActions.filter((a) => a.type === "bare").map((a: any) => a.text);
+  assertTest(
+    bareTexts[0] === "↳ [Output] First output line",
+    `First output line has single ↳ [Output] prefix: "${bareTexts[0]}"`,
+  );
+  assertTest(
+    bareTexts[1] === "           Second output line",
+    `Second output line has 11-space indentation: "${bareTexts[1]}"`,
+  );
+  assertTest(
+    bareTexts[2] === "           Third output line",
+    `Third output line has 11-space indentation: "${bareTexts[2]}"`,
+  );
+  assertTest(bareQ.inBareOutput === true, "bareQ remains inBareOutput during RUNNING status");
+
+  // Completion resets inBareOutput
+  routeStep(
+    {
+      type: "GENERIC",
+      status: "DONE",
+      content: "Final output line",
+    },
+    bareQ,
+    (a) => bareActions.push(a),
+  );
+  assertTest(bareQ.inBareOutput === false, "inBareOutput resets on step DONE completion (M4)");
+
   console.log("✔ deriveSessionState self-tests passed (25 assertions).");
   console.log("✔ pushCard Box self-test passed (1 assertion).");
   console.log("✔ PageItem card replay & domBoxes self-tests passed (8 assertions).");
@@ -2629,6 +2888,9 @@ export function runSelfTest(): void {
   );
   console.log(
     "✔ live content spacing & column alignment self-tests passed (51 assertions).",
+  );
+  console.log(
+    "✔ bare-line polish (B1-B4: MCP card, uniform 1-row gap, default CARD_BG, single output label) self-tests passed (18 assertions).",
   );
 }
 
@@ -2757,6 +3019,7 @@ export async function runRenderCheck(): Promise<void> {
       lines: { text: string; fg?: string; isTitle?: boolean }[],
       kind?: "user" | "tool" | "thinking" | "error",
     ) {
+      pushBlockGap(ctx);
       const accent = kind
         ? STYLE.ACCENT[kind]
         : (lines.find((l) => l.isTitle)?.fg ?? STYLE.ACCENT.tool);
@@ -2892,7 +3155,7 @@ export async function runRenderCheck(): Promise<void> {
             (node.backgroundColor as any) === STYLE.CARD_BG ||
             (typeof node.backgroundColor?.equals === "function" &&
               node.backgroundColor.equals(parseColor(STYLE.CARD_BG)));
-          if (hasLeftBorder && isCardBg) {
+          if (hasLeftBorder && isCardBg && (node as any).isCard) {
             results.push(node);
           }
         }
@@ -3039,10 +3302,11 @@ export async function runRenderCheck(): Promise<void> {
       .map((item, idx) => ({ item, box: transcriptChildren[idx] }))
       .filter(({ item, box }) => item.kind === "line" && isBareLineBox(box))
       .map(({ box }) => box);
+    const lineItemCountA3 = pages[0].filter((item) => item.kind === "line").length;
     assertCheck(
-      bareLineBoxes.length === 4,
+      bareLineBoxes.length === lineItemCountA3 && bareLineBoxes.length === 5,
       "A3",
-      `Transcript tree has 4 native left-bordered bare line boxes (actual ${bareLineBoxes.length})`,
+      `Transcript tree has 5 native left-bordered bare line boxes (actual ${bareLineBoxes.length})`,
     );
 
     // Column histogram check on rendered frame120 (Round 2: collapsed to ONE column: col 3)
@@ -3109,6 +3373,43 @@ export async function runRenderCheck(): Promise<void> {
         );
       }
     }
+
+    // ─── (B2) Uniform 1-blank-row spacing invariant ─────────────────────────────
+    const borderLines = frame120.split("\n").filter((l) => l.startsWith("┃"));
+    for (let i = 0; i < borderLines.length - 1; i++) {
+      const isBlank1 = borderLines[i].replace(/^┃\s*$/, "") === "";
+      const isBlank2 = borderLines[i + 1].replace(/^┃\s*$/, "") === "";
+      assertCheck(
+        !(isBlank1 && isBlank2),
+        "B2",
+        `Frame has consecutive blank border lines at rows ${i} and ${i + 1} (expected exactly 1 blank row between blocks)`,
+      );
+    }
+
+    // ─── (B3) Bare line default STYLE.CARD_BG (#1e293b) in spans ───────────────
+    const bareLineRows = spans120.lines.filter((l) =>
+      l.spans.some((s) => s.text.includes("[Assistant Response]") || s.text.includes("[VIEW FILE]")),
+    );
+    assertCheck(
+      bareLineRows.length >= 2,
+      "B3",
+      `Found ${bareLineRows.length} bare line rows in spans120 (expected >= 2)`,
+    );
+    for (const blRow of bareLineRows) {
+      assertCheck(
+        blRow.spans.every(isCardBgSpan),
+        "B3",
+        "Bare line row spans carry STYLE.CARD_BG (#1e293b) by default across width",
+      );
+    }
+
+    // ─── (B4) Single ↳ [Output] prefix per output group ─────────────────────────
+    const outputPrefixMatches = frame120.match(/↳ \[Output\]/g) || [];
+    assertCheck(
+      outputPrefixMatches.length === 1,
+      "B4",
+      `Output prefix ↳ [Output] appears exactly ONCE per output group (found ${outputPrefixMatches.length})`,
+    );
 
     // ─── (A4) Resize to 70 Columns ──────────────────────────────────────────────
     setup.resize(70, 30);
@@ -3361,6 +3662,119 @@ export async function runRenderCheck(): Promise<void> {
     fs.writeFileSync(path.join(evidenceDir, "task-6-frame-120.txt"), frame120, "utf8");
     fs.writeFileSync(path.join(evidenceDir, "task-6-frame-70.txt"), frame70, "utf8");
     fs.writeFileSync(path.join(evidenceDir, "AFTER3-spacing-frame-120.txt"), frame120, "utf8");
+
+    // ─── Reproduce BEFORE Scene for AFTER-bareline-frame-120.txt ────────────────
+    const reproSetup = await createTestRenderer({ width: 120, height: 40 });
+    const reproTranscript = new BoxRenderable(reproSetup.renderer, {
+      flexDirection: "column",
+      width: "100%",
+    });
+    reproSetup.renderer.root.add(reproTranscript);
+    const reproPages: PageItem[][] = [[]];
+    const reproCtx: RouteContext = {
+      renderer: reproSetup.renderer,
+      parent: reproTranscript,
+      pages: reproPages,
+      pageMode: false,
+      pushLine: (txt, fg, bg) => {
+        let p = reproPages[reproPages.length - 1];
+        if (!p || p.length >= 200) {
+          p = [];
+          reproPages.push(p);
+        }
+        p.push({ kind: "line", text: txt, fg, bg });
+        const box = buildBareLineBox(reproSetup.renderer, reproTranscript, {
+          lines: [txt || " "],
+          fg: fg || "#d1d5db",
+          bg,
+        });
+        return box;
+      },
+      notePushes: () => {},
+      recordPageItem: (it) => {
+        let p = reproPages[reproPages.length - 1];
+        if (!p || p.length >= 200) {
+          p = [];
+          reproPages.push(p);
+        }
+        p.push(it);
+      },
+      recording: true,
+    };
+    function reproPushCard(
+      lines: { text: string; fg?: string; isTitle?: boolean }[],
+      kind?: "user" | "tool" | "thinking" | "error",
+    ) {
+      pushBlockGap(reproCtx);
+      const accent = kind
+        ? STYLE.ACCENT[kind]
+        : (lines.find((l) => l.isTitle)?.fg ?? STYLE.ACCENT.tool);
+      const item: PageItem = {
+        kind: "card",
+        accent,
+        lines: lines.map((l) => ({ ...l })),
+      };
+      reproCtx.recordPageItem!(item);
+      const box = buildCardBox(reproSetup.renderer, reproTranscript, { lines, accent });
+      return box;
+    }
+    const reproQ: { pending: (PageItem | null)[]; inBareOutput?: boolean } = { pending: [] };
+
+    // 1. User task card
+    reproPushCard(
+      [
+        { text: "👤 [USER TASK]", fg: STYLE.ACCENT.user, isTitle: true },
+        { text: indentCardLine(1, "<USER_REQUEST>"), fg: "#ffffff" },
+        { text: indentCardLine(1, "[DELEGATED AGENT ROLE: OMO_DEEP_ENGINEER]"), fg: "#ffffff" },
+      ],
+      "user",
+    );
+
+    // 2. Thinking card
+    reproPushCard(
+      [
+        { text: "🧠 [Thinking]", fg: STYLE.ACCENT.thinking, isTitle: true },
+        { text: indentCardLine(1, "I'm thinking through how to approach this."), fg: "#a855f7" },
+      ],
+      "thinking",
+    );
+
+    // 3. MCP tool call (call_mcp_tool)
+    routeStep(
+      {
+        type: "PLANNER_RESPONSE",
+        tool_calls: [
+          {
+            name: "call_mcp_tool",
+            args: {
+              ServerName: "agentmemory",
+              ToolName: "memory_recall",
+              toolSummary: "Memory recall",
+              Arguments: { query: "agy-live bare line polish" },
+            },
+          },
+        ],
+      },
+      reproQ,
+      (a) => applyRouteAction(a, reproCtx),
+    );
+
+    // 4. Output into MCP tool card
+    routeStep(
+      {
+        type: "GENERIC",
+        status: "DONE",
+        content:
+          "Created At: 2026-09-20T00:21:02+07:00\nThe output was large and was saved to:\nfile:///Users/ctp-itdev2/.gemini/.../steps/2/output.txt dan ini",
+      },
+      reproQ,
+      (a) => applyRouteAction(a, reproCtx),
+    );
+
+    await reproSetup.renderOnce();
+    const reproFrame120 = reproSetup.captureCharFrame();
+    fs.writeFileSync(path.join(evidenceDir, "AFTER-bareline-frame-120.txt"), reproFrame120, "utf8");
+    destroyRenderable(reproTranscript);
     console.log(`Round-3 column histogram: ${JSON.stringify(frameColHist)}`);
 
     const evidenceLog = [
@@ -4619,6 +5033,7 @@ async function main() {
     lines: { text: string; fg?: string; isTitle?: boolean }[],
     kind?: "user" | "tool" | "thinking" | "error",
   ) {
+    pushBlockGap(ctx);
     const accent = kind
       ? STYLE.ACCENT[kind]
       : (lines.find((l) => l.isTitle)?.fg ?? STYLE.ACCENT.tool);
@@ -4796,7 +5211,7 @@ async function main() {
       if (step.content) {
         const clean = capText(step.content).trim();
         if (clean) {
-          pushLine("");
+          pushBlockGap(ctx);
           pushLine(
             hasTools ? "💬 [Assistant]" : "💬 [Assistant Response]",
             hasTools ? "#38bdf8" : "#4ade80",
@@ -4816,7 +5231,7 @@ async function main() {
               return;
             }
 
-            pushLine("");
+            pushBlockGap(ctx);
             pushLine(
               "────────────────────────────────────────────────────────────",
               "#374151",
@@ -4825,7 +5240,7 @@ async function main() {
               "✨ [COMPLETED] Tugas agy telah selesai dengan sukses!",
               "#4ade80",
             );
-            pushLine("");
+            pushBlockGap(ctx);
             stopSpinner("✓ Finished");
             return;
           }
