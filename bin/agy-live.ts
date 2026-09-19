@@ -79,6 +79,33 @@ function capText(s: unknown, max = MAX_STEP_CHARS): string {
   return str.slice(0, max) + `\n… [truncated ${(str.length - max).toLocaleString()} chars]`;
 }
 
+export function extractTruncationNotice(
+  content: string,
+  truncatedFields?: string[] | null,
+): { cleanLines: string[]; truncationNotice: string | null } {
+  const rawLines = content.split("\n");
+  const cleanLines: string[] = [];
+  let truncationNotice: string | null = null;
+  const TRUNC_RE = /<truncated\s+([^>]+)>/i;
+
+  for (const l of rawLines) {
+    const m = l.match(TRUNC_RE);
+    if (m) {
+      truncationNotice = `⚠️ [SOURCE TRUNCATED BY CLI — ${m[1]} omitted]`;
+      const stripped = l.replace(TRUNC_RE, "").trim();
+      if (stripped) cleanLines.push(stripped);
+    } else {
+      cleanLines.push(l);
+    }
+  }
+
+  if (!truncationNotice && Array.isArray(truncatedFields) && truncatedFields.includes("content")) {
+    truncationNotice = "⚠️ [SOURCE TRUNCATED BY CLI — content omitted]";
+  }
+
+  return { cleanLines, truncationNotice };
+}
+
 // ─── Session State & Database ─────────────────────────────────────────────────
 
 export type SessionState = "running" | "idle" | "stuck" | "killed" | "unknown";
@@ -372,6 +399,7 @@ export function createCardLineText(
     content: line.text,
     fg: line.fg,
     wrapMode: "word",
+    width: "100%",
     selectable: true,
     selectionBg: "#2563eb",
     selectionFg: "#ffffff",
@@ -453,18 +481,15 @@ export function buildBareLineBox(
     borderColor?: string;
   },
 ): BoxRenderable {
-  const borderColor = opts.borderColor || opts.fg || "#d1d5db";
   const bg = opts.bg !== undefined ? opts.bg : STYLE.CARD_BG;
   const box = new BoxRenderable(renderer, {
-    border: ["left"],
-    borderColor,
-    customBorderChars: STYLE.BORDER_CHARS,
-    paddingLeft: STYLE.CARD_PAD_LEFT,
+    paddingLeft: STYLE.CARD_PAD_LEFT + 1,
     width: "100%",
     flexShrink: 0,
     ...(bg ? { backgroundColor: bg } : {}),
   });
   (box as any).isBareLine = true;
+  (box as any).padLeft = STYLE.CARD_PAD_LEFT + 1;
 
   if (opts.lines) {
     for (const l of opts.lines) {
@@ -473,7 +498,7 @@ export function buildBareLineBox(
           new TextRenderable(renderer, {
             content: l || " ",
             fg: opts.fg || "#d1d5db",
-            wrapMode: "none",
+            wrapMode: "word",
             width: "100%",
             selectable: true,
             selectionBg: "#2563eb",
@@ -1064,15 +1089,17 @@ export function routeStep(
               accent: STYLE.ACCENT.tool,
               lines: cardLines,
             };
+            q.inBareOutput = false;
             q.pending.push(item);
             emit({ type: "open_card", item, accent: STYLE.ACCENT.tool });
             break;
           }
           case "run_command": {
+            q.inBareOutput = false;
             const cmd = unescapeCodeString(args.CommandLine || args.command || "").trim();
             const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
               { text: "💻 [BASH EXECUTION]", fg: "#38bdf8", isTitle: true },
-              { text: indentCardLine(1, `$ ${cmd}`), fg: "#fde047" },
+              { text: indentCardLine(1, `$ ${cmd}`), fg: "#e5e7eb" },
             ];
             const item: PageItem = {
               kind: "card",
@@ -1084,6 +1111,7 @@ export function routeStep(
             break;
           }
           case "call_mcp_tool": {
+            q.inBareOutput = false;
             const server = unescapeCodeString(args.ServerName || args.server_name || args.server || "").trim();
             const tool = unescapeCodeString(args.ToolName || args.tool_name || args.tool || "").trim();
             const title = `🔧 [MCP: ${server || "unknown"}/${tool || "unknown"}]`;
@@ -1194,20 +1222,31 @@ export function routeStep(
       step.status === "RUNNING" && q.pending.length > 0 ? q.pending[0] : q.pending.shift();
     const raw = unescapeCodeString(capText(step.content)).trim();
     if (raw) {
-      const lines = raw.split("\n");
+      const { cleanLines, truncationNotice } = extractTruncationNotice(
+        raw,
+        step.truncated_fields,
+      );
       if (target) {
-        for (const l of lines) {
+        q.inBareOutput = false;
+        for (const l of cleanLines) {
           emit({
             type: "append",
             item: target,
             line: { text: l.trimEnd(), fg: "#94a3b8" },
           });
         }
+        if (truncationNotice) {
+          emit({
+            type: "append",
+            item: target,
+            line: { text: truncationNotice, fg: "#f59e0b" },
+          });
+        }
       } else {
         const prefix = "↳ [Output] ";
         const indent = "           ";
-        for (let i = 0; i < lines.length; i++) {
-          const l = lines[i];
+        for (let i = 0; i < cleanLines.length; i++) {
+          const l = cleanLines[i];
           if (!l.trim()) {
             emit({ type: "bare", text: "", fg: "#94a3b8" });
             continue;
@@ -1218,6 +1257,9 @@ export function routeStep(
           } else {
             emit({ type: "bare", text: `${indent}${l.trimEnd()}`, fg: "#94a3b8" });
           }
+        }
+        if (truncationNotice) {
+          emit({ type: "bare", text: truncationNotice, fg: "#f59e0b" });
         }
         if (step.status !== "RUNNING") {
           q.inBareOutput = false;
@@ -1655,9 +1697,8 @@ export function runSelfTest(): void {
   const replayedBareLineBox = replayRoot.children[1];
   assertTest(
     replayedBareLineBox instanceof BoxRenderable &&
-      Array.isArray(replayedBareLineBox.border) &&
-      replayedBareLineBox.border.includes("left"),
-    "replayPageInto bare line renders as native BoxRenderable with left border",
+      (!replayedBareLineBox.border || replayedBareLineBox.border.length === 0),
+    "replayPageInto bare line renders as native BoxRenderable borderless (no left border) (M1/D2)",
   );
   const replayedBareLineTr =
     typeof (replayedBareLineBox as any).getChildren === "function"
@@ -2648,7 +2689,7 @@ export function runSelfTest(): void {
     accent: STYLE.ACCENT.thinking,
     lines: [
       { text: "🧠 [Thinking]", fg: STYLE.ACCENT.thinking, isTitle: true },
-      { text: indentCardLine(1, "Sample thinking"), fg: "#a855f7" },
+      { text: indentCardLine(1, "Sample thinking"), fg: "#e5e7eb" },
     ],
   });
 
@@ -2875,6 +2916,106 @@ export function runSelfTest(): void {
   );
   assertTest(bareQ.inBareOutput === false, "inBareOutput resets on step DONE completion (M4)");
 
+  // 46. Transcript readability & fidelity (D1-D6 / M1-M5)
+  // (a) Bare line borderless, paddingLeft 3, wrapMode word (D2/M1, D5/M3)
+  const rlBareBox = buildBareLineBox(stubRenderer, stubRoot, {
+    lines: ["bare text line"],
+  });
+  assertTest((rlBareBox as any).isBareLine === true, "buildBareLineBox sets isBareLine = true");
+  assertTest(!rlBareBox.border || rlBareBox.border.length === 0, "buildBareLineBox is borderless (no left border) (M1/D2)");
+  assertTest(
+    (rlBareBox as any).padLeft === 3 || rlBareBox.yogaNode?.getPadding(0)?.value === 3,
+    "buildBareLineBox paddingLeft is 3 (matches card col 3: 1 border + 2 pad) (M1/D2)",
+  );
+  const bareChild = (rlBareBox.getChildren?.() ?? [])[0] as any;
+  assertTest(bareChild?.wrapMode === "word", "buildBareLineBox TextRenderable wrapMode is word (M3/D5)");
+
+  // (b) Truncation marker extraction (M4/D1)
+  const trunc1 = extractTruncationNotice("Prompt header\n<truncated 11105 bytes>\nPrompt footer");
+  assertTest(
+    !trunc1.cleanLines.some((l) => l.includes("<truncated")),
+    "extractTruncationNotice strips inline <truncated N bytes> marker (M4/D1)",
+  );
+  assertTest(
+    trunc1.truncationNotice === "⚠️ [SOURCE TRUNCATED BY CLI — 11105 bytes omitted]",
+    "extractTruncationNotice returns formatted notice for <truncated 11105 bytes> (M4/D1)",
+  );
+  const trunc2 = extractTruncationNotice("Prompt content", ["content"]);
+  assertTest(
+    trunc2.truncationNotice === "⚠️ [SOURCE TRUNCATED BY CLI — content omitted]",
+    "extractTruncationNotice handles truncated_fields containing content (M4/D1)",
+  );
+
+  // (c) Palette: run_command card body and thinking body are white #e5e7eb (M2/D3/D4)
+  const bashQ: { pending: (PageItem | null)[] } = { pending: [] };
+  const bashActions: RouteAction[] = [];
+  routeStep(
+    {
+      type: "PLANNER_RESPONSE",
+      tool_calls: [
+        {
+          name: "run_command",
+          args: { CommandLine: "echo test" },
+        },
+      ],
+    },
+    bashQ,
+    (a) => bashActions.push(a),
+  );
+  const bashCard = (bashActions[0] as any).item as PageItem;
+  assertTest(
+    bashCard.lines.some((l) => l.isTitle && l.fg === "#38bdf8"),
+    "BASH EXECUTION card keeps accent title #38bdf8 (M2/D4)",
+  );
+  assertTest(
+    bashCard.lines.some((l) => !l.isTitle && l.text.includes("$ echo test") && l.fg === "#e5e7eb"),
+    "BASH EXECUTION command body is white #e5e7eb (M2/D4)",
+  );
+
+  // (d) inBareOutput resets on new card open (M5/D6)
+  const orphanQ: { pending: (PageItem | null)[]; inBareOutput?: boolean } = { pending: [null] };
+  const orphanActions: RouteAction[] = [];
+  routeStep(
+    {
+      type: "GENERIC",
+      status: "RUNNING",
+      content: "orphan line 1",
+    },
+    orphanQ,
+    (a) => orphanActions.push(a),
+  );
+  assertTest(orphanQ.inBareOutput === true, "orphanQ inBareOutput true during RUNNING");
+  routeStep(
+    {
+      type: "PLANNER_RESPONSE",
+      tool_calls: [{ name: "run_command", args: { CommandLine: "ls" } }],
+    },
+    orphanQ,
+    (a) => orphanActions.push(a),
+  );
+  assertTest(orphanQ.inBareOutput === false, "inBareOutput reset to false when new card opens (M5/D6)");
+
+  // (e) Tool output step with truncation marker
+  const outTruncQ: { pending: (PageItem | null)[]; inBareOutput?: boolean } = { pending: [null] };
+  const outTruncActions: RouteAction[] = [];
+  routeStep(
+    {
+      type: "GENERIC",
+      status: "DONE",
+      content: "output before\n<truncated 500 bytes>\noutput after",
+    },
+    outTruncQ,
+    (a) => outTruncActions.push(a),
+  );
+  assertTest(
+    !outTruncActions.some((a: any) => a.text?.includes("<truncated")),
+    "Tool output step does not emit inline <truncated> marker (M4/D1)",
+  );
+  assertTest(
+    outTruncActions.some((a: any) => a.text?.includes("⚠️ [SOURCE TRUNCATED BY CLI — 500 bytes omitted]")),
+    "Tool output step emits truncation notice (M4/D1)",
+  );
+
   console.log("✔ deriveSessionState self-tests passed (25 assertions).");
   console.log("✔ pushCard Box self-test passed (1 assertion).");
   console.log("✔ PageItem card replay & domBoxes self-tests passed (8 assertions).");
@@ -2891,6 +3032,9 @@ export function runSelfTest(): void {
   );
   console.log(
     "✔ bare-line polish (B1-B4: MCP card, uniform 1-row gap, default CARD_BG, single output label) self-tests passed (18 assertions).",
+  );
+  console.log(
+    "✔ transcript readability & fidelity (D1-D6 / M1-M5) self-tests passed (13 assertions).",
   );
 }
 
@@ -3294,8 +3438,9 @@ export async function runRenderCheck(): Promise<void> {
 
     const isBareLineBox = (c: any) =>
       c instanceof BoxRenderable &&
-      Array.isArray(c.border) &&
-      c.border.includes("left");
+      (c as any).isBareLine === true &&
+      (!c.border || c.border.length === 0) &&
+      (c as any).padLeft === 3;
 
     const transcriptChildren = transcriptBox.getChildren() as any[];
     const bareLineBoxes = pages[0]
@@ -3306,13 +3451,32 @@ export async function runRenderCheck(): Promise<void> {
     assertCheck(
       bareLineBoxes.length === lineItemCountA3 && bareLineBoxes.length === 5,
       "A3",
-      `Transcript tree has 5 native left-bordered bare line boxes (actual ${bareLineBoxes.length})`,
+      `Transcript tree has 5 native borderless bare line boxes (actual ${bareLineBoxes.length})`,
     );
 
     // Column histogram check on rendered frame120 (Round 2: collapsed to ONE column: col 3)
     const frameLines = frame120.split("\n");
     const frameColHist: Record<number, number> = {};
     for (const raw of frameLines) {
+      assertCheck(
+        raw.trimEnd().length <= 120,
+        "A3",
+        `Frame 120 row trimmed length exceeds 120 cols: "${raw.trimEnd()}"`,
+      );
+      if (cardTitles.some((t) => raw.includes(t))) {
+        assertCheck(
+          raw.startsWith("┃"),
+          "A3",
+          `Card title row must start with "┃": "${raw.slice(0, 20)}"`,
+        );
+      }
+      if (raw.includes("💬 [Assistant Response]") || raw.includes("🔍 [VIEW FILE]")) {
+        assertCheck(
+          !raw.startsWith("┃") && raw.startsWith("   "),
+          "A3",
+          `Bare line row must start with 3 spaces and no "┃": "${raw.slice(0, 20)}"`,
+        );
+      }
       if (raw.startsWith("┃")) {
         const rest = raw.slice(1);
         if (rest.trim().length > 0) {
@@ -3417,6 +3581,14 @@ export async function runRenderCheck(): Promise<void> {
     const frame70 = setup.captureCharFrame();
     currentFrame = frame70;
 
+    for (const raw of frame70.split("\n")) {
+      assertCheck(
+        raw.trimEnd().length <= 70,
+        "A4",
+        `Frame 70 row trimmed length exceeds 70 cols: "${raw.trimEnd()}"`,
+      );
+    }
+
     const liveCardBoxes70 = findCardBoxes(transcriptBox);
     assertCheck(
       liveCardBoxes70.length === liveCardBoxes120.length,
@@ -3513,20 +3685,34 @@ export async function runRenderCheck(): Promise<void> {
     const frameReplay = setup.captureCharFrame();
     currentFrame = frameReplay;
 
-    // Verify replayed frame has unbroken ┃ left edge and content at col 3
+    // Verify replayed frame has card lines starting with ┃, bare lines starting with 3 spaces, and content at col 3
     const replayLines = frameReplay.split("\n");
     const replayColHist: Record<number, number> = {};
     for (const raw of replayLines) {
       if (raw.trim().length === 0) continue;
-      assertCheck(
-        raw.startsWith("┃"),
-        "A5",
-        `Replayed frame line has broken left edge (missing "┃"): "${raw.slice(0, 20)}"`,
-      );
-      const rest = raw.slice(1);
-      if (rest.trim().length > 0) {
-        const spaces = rest.length - rest.trimStart().length;
-        const col = 1 + spaces;
+      if (cardTitles.some((t) => raw.includes(t))) {
+        assertCheck(
+          raw.startsWith("┃"),
+          "A5",
+          `Replayed card title row must start with "┃": "${raw.slice(0, 20)}"`,
+        );
+      }
+      if (raw.includes("💬 [Assistant Response]") || raw.includes("🔍 [VIEW FILE]")) {
+        assertCheck(
+          !raw.startsWith("┃") && raw.startsWith("   "),
+          "A5",
+          `Replayed bare line row must start with 3 spaces and no "┃": "${raw.slice(0, 20)}"`,
+        );
+      }
+      if (raw.startsWith("┃")) {
+        const rest = raw.slice(1);
+        if (rest.trim().length > 0) {
+          const spaces = rest.length - rest.trimStart().length;
+          const col = 1 + spaces;
+          replayColHist[col] = (replayColHist[col] || 0) + 1;
+        }
+      } else {
+        const col = raw.length - raw.trimStart().length;
         replayColHist[col] = (replayColHist[col] || 0) + 1;
       }
     }
@@ -3663,8 +3849,8 @@ export async function runRenderCheck(): Promise<void> {
     fs.writeFileSync(path.join(evidenceDir, "task-6-frame-70.txt"), frame70, "utf8");
     fs.writeFileSync(path.join(evidenceDir, "AFTER3-spacing-frame-120.txt"), frame120, "utf8");
 
-    // ─── Reproduce BEFORE Scene for AFTER-bareline-frame-120.txt ────────────────
-    const reproSetup = await createTestRenderer({ width: 120, height: 40 });
+    // ─── Reproduce BEFORE Scene for AFTER-readability-frame-120.txt ────────────────
+    const reproSetup = await createTestRenderer({ width: 120, height: 46 });
     const reproTranscript = new BoxRenderable(reproSetup.renderer, {
       flexDirection: "column",
       width: "100%",
@@ -3720,38 +3906,62 @@ export async function runRenderCheck(): Promise<void> {
     }
     const reproQ: { pending: (PageItem | null)[]; inBareOutput?: boolean } = { pending: [] };
 
-    // 1. User task card
-    reproPushCard(
-      [
-        { text: "👤 [USER TASK]", fg: STYLE.ACCENT.user, isTitle: true },
-        { text: indentCardLine(1, "<USER_REQUEST>"), fg: "#ffffff" },
-        { text: indentCardLine(1, "[DELEGATED AGENT ROLE: OMO_DEEP_ENGINEER]"), fg: "#ffffff" },
-      ],
-      "user",
+    // 1. User task card with truncation notice (D1/M4)
+    const userRaw = [
+      "<USER_REQUEST>",
+      "[DELEGATED AGENT ROLE: OMO_DEEP_ENGINEER]",
+      "Mission: You are the Deep Engineer. Goal-oriented autonomous problem-solving.",
+      "## 1. TASK / OBJECTIVE",
+      "Tangani baris harga placeholder Price = 1 (gift/bonus) di 4 kartu detail Metabase lokal.",
+      "<truncated 11105 bytes>",
+    ].join("\n");
+    const { cleanLines: userLines, truncationNotice: userTruncNotice } = extractTruncationNotice(
+      userRaw,
+      ["content"],
     );
+    const userCardLines = [
+      { text: "👤 [USER TASK]", fg: STYLE.ACCENT.user, isTitle: true },
+      ...userLines.map((l) => ({ text: indentCardLine(1, l), fg: "#ffffff" })),
+    ];
+    if (userTruncNotice) {
+      userCardLines.push({ text: indentCardLine(1, userTruncNotice), fg: "#f59e0b" });
+    }
+    reproPushCard(userCardLines, "user");
 
-    // 2. Thinking card
+    // 2. Thinking card with white body #e5e7eb (D3/M2)
+    const thinkingText =
+      "The data presents sales order (SO) values for both MATAHARI and SHOPEE, categorized as Tradisional and E-Commerce respectively. Initial analysis shows SHOPEE's SO value is significantly higher compared to MATAHARI.";
+    const thinkingLines = thinkingText.split("\n");
     reproPushCard(
       [
         { text: "🧠 [Thinking]", fg: STYLE.ACCENT.thinking, isTitle: true },
-        { text: indentCardLine(1, "I'm thinking through how to approach this."), fg: "#a855f7" },
+        ...thinkingLines.map((l) => ({ text: indentCardLine(1, l), fg: "#e5e7eb" })),
       ],
       "thinking",
     );
 
-    // 3. MCP tool call (call_mcp_tool)
+    // 3. Bash execution card with white body #e5e7eb (D4/M2)
+    const bashCmd = [
+      'python3 -c "',
+      'import requests, json, os',
+      '',
+      "sid = ''",
+      "if os.path.exists('/tmp/mb_sid.txt'):",
+      "    with open('/tmp/mb_sid.txt') as f:",
+      "        sid = f.read().strip()",
+      '',
+      "headers = {'X-Metabase-Session': sid}",
+      "res = requests.get('http://localhost:3000/api/user/current', headers=headers)",
+      "print('Current user status:', res.status_code)",
+      '"',
+    ].join("\n");
     routeStep(
       {
         type: "PLANNER_RESPONSE",
         tool_calls: [
           {
-            name: "call_mcp_tool",
-            args: {
-              ServerName: "agentmemory",
-              ToolName: "memory_recall",
-              toolSummary: "Memory recall",
-              Arguments: { query: "agy-live bare line polish" },
-            },
+            name: "run_command",
+            args: { CommandLine: bashCmd },
           },
         ],
       },
@@ -3759,13 +3969,20 @@ export async function runRenderCheck(): Promise<void> {
       (a) => applyRouteAction(a, reproCtx),
     );
 
-    // 4. Output into MCP tool card
+    // 4. Output into bash card (D6/M5)
+    const bashOutput = [
+      "Created At: 2026-09-20T00:40:45+07:00",
+      "The command exited with code 1.",
+      "Output:",
+      "Traceback (most recent call last):",
+      '  File "<string>", line 2, in <module>',
+      "ModuleNotFoundError: No module named 'requests'",
+    ].join("\n");
     routeStep(
       {
         type: "GENERIC",
         status: "DONE",
-        content:
-          "Created At: 2026-09-20T00:21:02+07:00\nThe output was large and was saved to:\nfile:///Users/ctp-itdev2/.gemini/.../steps/2/output.txt dan ini",
+        content: bashOutput,
       },
       reproQ,
       (a) => applyRouteAction(a, reproCtx),
@@ -3773,6 +3990,64 @@ export async function runRenderCheck(): Promise<void> {
 
     await reproSetup.renderOnce();
     const reproFrame120 = reproSetup.captureCharFrame();
+
+    // Assertions on reproduced AFTER frame
+    assertCheck(
+      !reproFrame120.includes("<truncated 11105 bytes>"),
+      "Repro",
+      "Inline truncation marker <truncated 11105 bytes> stripped from frame (M4/D1)",
+    );
+    assertCheck(
+      reproFrame120.includes("⚠️ [SOURCE TRUNCATED BY CLI — 11105 bytes omitted]"),
+      "Repro",
+      "Explicit truncation notice is displayed in user task card (M4/D1)",
+    );
+
+    const reproSpans = reproSetup.captureSpans();
+    const isWhiteFgSpan = (span: any) => {
+      if (!span?.fg?.buffer) return false;
+      const [r, g, b] = span.fg.buffer;
+      return r === 229 && g === 231 && b === 235; // #e5e7eb
+    };
+
+    const thinkingRow = reproSpans.lines.find((l) =>
+      l.spans.some((s) => s.text.includes("The data presents sales order")),
+    );
+    assertCheck(
+      Boolean(thinkingRow && thinkingRow.spans.some(isWhiteFgSpan)),
+      "Repro",
+      "Thinking card body span renders in white (#e5e7eb) (M2/D3)",
+    );
+
+    const bashCmdRow = reproSpans.lines.find((l) =>
+      l.spans.some((s) => s.text.includes('$ python3 -c "') || s.text.includes("python3 -c")),
+    );
+    assertCheck(
+      Boolean(bashCmdRow && bashCmdRow.spans.some(isWhiteFgSpan)),
+      "Repro",
+      "Bash command body span renders in white (#e5e7eb) (M2/D4)",
+    );
+
+    for (const raw of reproFrame120.split("\n")) {
+      assertCheck(
+        raw.trimEnd().length <= 120,
+        "Repro",
+        `Repro frame row trimmed length exceeds 120 cols: "${raw.trimEnd()}"`,
+      );
+      if (
+        raw.includes("👤 [USER TASK]") ||
+        raw.includes("🧠 [Thinking]") ||
+        raw.includes("💻 [BASH EXECUTION]")
+      ) {
+        assertCheck(
+          raw.startsWith("┃"),
+          "Repro",
+          `Card title row in repro starts with "┃": "${raw.slice(0, 20)}"`,
+        );
+      }
+    }
+
+    fs.writeFileSync(path.join(evidenceDir, "AFTER-readability-frame-120.txt"), reproFrame120, "utf8");
     fs.writeFileSync(path.join(evidenceDir, "AFTER-bareline-frame-120.txt"), reproFrame120, "utf8");
     destroyRenderable(reproTranscript);
     console.log(`Round-3 column histogram: ${JSON.stringify(frameColHist)}`);
@@ -4805,7 +5080,7 @@ async function main() {
         const opts: any = {
           content: l,
           fg,
-          wrapMode: "none",
+          wrapMode: "word",
           width: "100%",
           selectable: true,
           selectionBg: "#2563eb",
@@ -4815,7 +5090,7 @@ async function main() {
         box.add(new TextRenderable(renderer, opts));
       } else {
         const opts: any = {
-          wrapMode: "none",
+          wrapMode: "word",
           width: "100%",
           selectable: true,
           selectionBg: "#2563eb",
@@ -5147,11 +5422,17 @@ async function main() {
       activeBackgroundTask = null;
       q.pending.length = 0;
       const clean = unescapeCodeString(capText(step.content)).trim();
-      const lines = clean.split("\n");
+      const { cleanLines, truncationNotice } = extractTruncationNotice(
+        clean,
+        step.truncated_fields,
+      );
       const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
         { text: "👤 [USER TASK]", fg: "#60a5fa", isTitle: true },
-        ...lines.map((l) => ({ text: indentCardLine(1, l), fg: "#ffffff" })),
+        ...cleanLines.map((l) => ({ text: indentCardLine(1, l), fg: "#ffffff" })),
       ];
+      if (truncationNotice) {
+        cardLines.push({ text: indentCardLine(1, truncationNotice), fg: "#f59e0b" });
+      }
       pushCard(cardLines, "user");
       stopSpinner("✓ Task received");
       startSpinner("Agent thinking...");
@@ -5201,7 +5482,7 @@ async function main() {
         const lines = capText(step.thinking).trim().split("\n");
         const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
           { text: "🧠 [Thinking]", fg: "#c084fc", isTitle: true },
-          ...lines.map((l) => ({ text: indentCardLine(1, l), fg: "#a855f7" })),
+          ...lines.map((l) => ({ text: indentCardLine(1, l), fg: "#e5e7eb" })),
         ];
         pushCard(cardLines, "thinking");
       }
