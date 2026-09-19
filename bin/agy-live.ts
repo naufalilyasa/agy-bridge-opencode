@@ -4059,7 +4059,7 @@ export async function runRenderCheck(): Promise<void> {
       "$ bun ./bin/agy-live.ts --rendercheck",
       "✔ A1 PASS: tree walk found 4 BoxRenderables with left border and STYLE.CARD_BG (expected >= 3)",
       "✔ A2 PASS: card titles and tool output lines live inside owning cards (120 cols, 70 cols, replay)",
-      "✔ A3 PASS: clean recorded text (no border glyph), bare lines use left-border Box, card spans fill 100% width",
+      "✔ A3 PASS: clean recorded text (no border glyph), bare lines borderless and aligned at col 3, card spans fill 100% width",
       "✔ A4 PASS: resize to 70 cols preserves 4 cards, renders left border, fills width with no JS math",
       "✔ A5 PASS: replayPageInto rebuilds identical 4 cards and all content substrings without domBoxes leak",
       "✔ Flood PASS: 500-line output appends inside card without expanding root children",
@@ -4091,7 +4091,7 @@ export async function runRenderCheck(): Promise<void> {
       "- structure: A1 verifies native BoxRenderable left-accent SplitBorder and STYLE.CARD_BG background.",
       "- content: A2 proves anti-empty-box; all card titles and tool output lines verified present in captured frame.",
       "- hierarchy: A2 verifies tool output lines live inside owning tool card renderables, never escaping to root bare lines.",
-      "- padding: A3 asserts zero authored trailing whitespace, clean recorded text (no border glyph/gutter), bare lines rendered in left-border Box (col 3), card spans fill 100% width.",
+      "- padding: A3 asserts zero authored trailing whitespace, clean recorded text (no border glyph/gutter), bare lines rendered borderless and aligned at col 3, card spans fill 100% width.",
       "- frame-whitespace: A3 asserts using captureSpans() that card row background extends across 100% width with no trailing padding spans beyond the border.",
       "- resize: A4 proves responsive width without terminal math; card count preserved and border renders in both 120 and 70 cols.",
       "- replay: A5 proves page model rebuilds identical cards with full content fidelity and zero WeakMap domBoxes leak.",
@@ -4112,7 +4112,7 @@ export async function runRenderCheck(): Promise<void> {
       "✔ A2 PASS: card titles and tool output lines live inside owning cards (120 cols, 70 cols, replay)",
     );
     console.log(
-      "✔ A3 PASS: clean recorded text (no border glyph), bare lines use left-border Box, card spans fill 100% width",
+      "✔ A3 PASS: clean recorded text (no border glyph), bare lines borderless and aligned at col 3, card spans fill 100% width",
     );
     console.log(
       "✔ A4 PASS: resize to 70 cols preserves 4 cards, renders left border, fills width with no JS math",
