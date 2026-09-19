@@ -382,6 +382,10 @@ export function indentCardLine(_level: number, text: string): string {
   return text;
 }
 
+export function codeLinePrefix(text: string): string {
+  return text.length > 0 ? "▎ " + text : "▎";
+}
+
 export function buildCardBox(
   renderer: any,
   parent: any,
@@ -2484,9 +2488,11 @@ export function runSelfTest(): void {
 
   // 44. Spacing & layout unification: content column assertions
   assertTest(
-    STYLE.CARD_PAD_LEFT === 2 && 1 + STYLE.CARD_PAD_LEFT === 3,
+    STYLE.CARD_PAD_LEFT === 2,
     "Card content column invariant (border 1 + pad 2 = 3)",
   );
+  assertTest(codeLinePrefix("") === "▎", "Code block empty line has no trailing space");
+  assertTest(codeLinePrefix("x = 1") === "▎ x = 1", "Code block line keeps gutter prefix");
   assertTest(indentCardLine(0, "text") === "text", "indentCardLine level 0 returns unindented text");
   assertTest(indentCardLine(1, "text") === "text", "indentCardLine level 1 returns flush text (no added spaces)");
   assertTest(indentCardLine(2, "text") === "text", "indentCardLine level 2 returns flush text (no added spaces)");
@@ -3023,13 +3029,16 @@ export async function runRenderCheck(): Promise<void> {
       (typeof box.backgroundColor?.equals === "function" &&
         box.backgroundColor.equals(parseColor(STYLE.CARD_BG)));
 
-    const bareLineBoxes = (transcriptBox.getChildren() as any[]).filter(
-      (c: any) =>
-        c instanceof BoxRenderable &&
-        Array.isArray(c.border) &&
-        c.border.includes("left") &&
-        !isBoxCardBg(c),
-    );
+    const isBareLineBox = (c: any) =>
+      c instanceof BoxRenderable &&
+      Array.isArray(c.border) &&
+      c.border.includes("left");
+
+    const transcriptChildren = transcriptBox.getChildren() as any[];
+    const bareLineBoxes = pages[0]
+      .map((item, idx) => ({ item, box: transcriptChildren[idx] }))
+      .filter(({ item, box }) => item.kind === "line" && isBareLineBox(box))
+      .map(({ box }) => box);
     assertCheck(
       bareLineBoxes.length === 4,
       "A3",
@@ -3173,13 +3182,11 @@ export async function runRenderCheck(): Promise<void> {
     );
 
     const lineItemCount = pages[0].filter((item) => item.kind === "line").length;
-    const replayedBareLineBoxes = (replayBox.getChildren() as any[]).filter(
-      (c: any) =>
-        c instanceof BoxRenderable &&
-        Array.isArray(c.border) &&
-        c.border.includes("left") &&
-        !isBoxCardBg(c),
-    );
+    const replayedChildren = replayBox.getChildren() as any[];
+    const replayedBareLineBoxes = pages[0]
+      .map((item, idx) => ({ item, box: replayedChildren[idx] }))
+      .filter(({ item, box }) => item.kind === "line" && isBareLineBox(box))
+      .map(({ box }) => box);
     assertCheck(
       replayedBareLineBoxes.length === lineItemCount && lineItemCount > 0,
       "A5",
@@ -4652,7 +4659,7 @@ async function main() {
         const cardW = getCardWidth();
         const wrapped = wrapLine(raw, cardW - 4);
         for (const w of wrapped) {
-          pushLine("▎ " + w, "#ffffff", STYLE.CARD_BG);
+          pushLine(codeLinePrefix(w), "#ffffff", STYLE.CARD_BG);
         }
         continue;
       }
