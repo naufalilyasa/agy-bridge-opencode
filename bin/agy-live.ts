@@ -798,7 +798,7 @@ export function buildLeftPaneHeader(renderer: any, opts: LeftPaneHeaderOpts): Bo
   const hdr = new BoxRenderable(renderer, {
     width: "100%",
     height: 1,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: "#0f172a",
     flexDirection: "row",
     alignItems: "center",
     paddingX: 1,
@@ -3457,7 +3457,7 @@ async function main() {
   const footerBar = new BoxRenderable(renderer, {
     width: "100%",
     height: 1,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: "#0f172a",
     flexDirection: "row",
     alignItems: "center",
     paddingX: 1,
@@ -3492,12 +3492,12 @@ async function main() {
   const sbHdr = new BoxRenderable(renderer, {
     width: "100%",
     height: 1,
-    backgroundColor: "#0e7490",
+    backgroundColor: "#1e293b",
   });
   sbHdr.add(
     new TextRenderable(renderer, {
-      content: " ℹ️  MONITOR & STATS",
-      fg: "#000000",
+      content: " ⚡ AGY MONITOR",
+      fg: "#38bdf8",
       attributes: BOLD_ATTR,
     }),
   );
@@ -3505,17 +3505,17 @@ async function main() {
 
   function addDiv() {
     const d = new BoxRenderable(renderer, { width: "100%", height: 1 });
-    d.add(new TextRenderable(renderer, { content: "─".repeat(SIDEBAR_W - 2), fg: "#374151" }));
+    d.add(new TextRenderable(renderer, { content: "─".repeat(SIDEBAR_W - 2), fg: "#1e293b" }));
     sidebar.add(d);
   }
   function addSbLabel(txt: string) {
-    const r = new BoxRenderable(renderer, { width: "100%", height: 1 });
-    r.add(new TextRenderable(renderer, { content: txt, fg: "#fbbf24", attributes: BOLD_ATTR }));
+    const r = new BoxRenderable(renderer, { width: "100%", height: 1, backgroundColor: "#0f172a" });
+    r.add(new TextRenderable(renderer, { content: ` ${txt}`, fg: "#94a3b8", attributes: BOLD_ATTR }));
     sidebar.add(r);
   }
   function addSbRow(label: string, valFg = "#e2e8f0"): TextRenderable {
     const row = new BoxRenderable(renderer, { width: "100%", height: 1, flexDirection: "row" });
-    row.add(new TextRenderable(renderer, { content: label, fg: "#94a3b8", width: 12 }));
+    row.add(new TextRenderable(renderer, { content: label, fg: "#64748b", width: 11 }));
     const val = new TextRenderable(renderer, { content: "—", fg: valFg, flexGrow: 1 });
     row.add(val);
     sidebar.add(row);
@@ -3528,29 +3528,29 @@ async function main() {
       flexDirection: "row",
       gap: 1,
     });
-    row.add(new TextRenderable(renderer, { content: `[${key}]`, fg: "#fbbf24", width: 8 }));
-    row.add(new TextRenderable(renderer, { content: desc, fg: "#94a3b8" }));
+    row.add(new TextRenderable(renderer, { content: ` ${key}`, fg: "#60a5fa", width: 12 }));
+    row.add(new TextRenderable(renderer, { content: desc, fg: "#64748b" }));
     sidebar.add(row);
   }
 
   addDiv();
   const vTitleBox = new BoxRenderable(renderer, { width: "100%", flexDirection: "column" });
-  vTitleBox.add(new TextRenderable(renderer, { content: "📌 Title:", fg: "#94a3b8" }));
-  const vTitleVal1 = new TextRenderable(renderer, { content: "  —", fg: "#f472b6" });
+  vTitleBox.add(new TextRenderable(renderer, { content: " Title", fg: "#64748b" }));
+  const vTitleVal1 = new TextRenderable(renderer, { content: "  —", fg: "#e2e8f0" });
   vTitleBox.add(vTitleVal1);
   sidebar.add(vTitleBox);
 
-  const vState = addSbRow("⚡ State:", "#4ade80");
-  const vFollow = addSbRow("👁 Follow:", "#38bdf8");
-  const vProj = addSbRow("📁 Project:", "#4ade80");
-  const vSess = addSbRow("🆔 Session:", "#67e8f9");
-  const vModel = addSbRow("🤖 Model:", "#fbbf24");
-  const vSteps = addSbRow("🔢 Steps:", "#e2e8f0");
-  const vSize = addSbRow("📄 Size:", "#e2e8f0");
-  const vAge = addSbRow("🕒 Updated:", "#e2e8f0");
+  const vState = addSbRow("  State:", "#4ade80");
+  const vFollow = addSbRow("  Follow:", "#38bdf8");
+  const vProj = addSbRow("  Project:", "#4ade80");
+  const vSess = addSbRow("  Session:", "#67e8f9");
+  const vModel = addSbRow("  Model:", "#fbbf24");
+  const vSteps = addSbRow("  Steps:", "#e2e8f0");
+  const vSize = addSbRow("  Size:", "#e2e8f0");
+  const vAge = addSbRow("  Updated:", "#e2e8f0");
 
   addDiv();
-  addSbLabel("🧠 CONTEXT & QUOTA");
+  addSbLabel("CONTEXT & QUOTA");
   const vCtxLoad = addSbRow("• Context:", "#38bdf8");
   const vCtxBar = new BoxRenderable(renderer, { width: "100%", height: 1 });
   const vCtxBarTxt = new TextRenderable(renderer, {
@@ -3597,14 +3597,14 @@ async function main() {
   sidebar.add(vQuotaCWkBar);
 
   addDiv();
-  addSbLabel("⌨️  KEYBINDINGS");
-  addSbKey("↑/↓/k/j", "Scroll log");
-  addSbKey("PgUp/Dn", "Fast scroll");
-  addSbKey("g", "Scroll to top");
-  addSbKey("G", "Live tail (exit page)");
-  addSbKey("s", "Switch session");
-  addSbKey("c", "Full context");
-  addSbKey("Drag/Select", "Copy on release");
+  addSbLabel("KEYBINDINGS");
+  addSbKey("↑/↓ k/j", "Scroll");
+  addSbKey("PgUp/Dn", "Page scroll");
+  addSbKey("g", "Jump to top");
+  addSbKey("G", "Live tail");
+  addSbKey("← →", "Prev/Next page");
+  addSbKey("s", "Sessions");
+  addSbKey("c", "Context view");
   addSbKey("q/Esc", "Quit");
 
   renderer.root.add(leftPane);
@@ -4848,8 +4848,11 @@ async function main() {
       const itemBox = new BoxRenderable(renderer, {
         width: "100%",
         flexDirection: "column",
-        backgroundColor: sel ? "#1e3a8a" : i % 2 === 0 ? "#0d1117" : "#111827",
+        backgroundColor: sel ? "#1e293b" : i % 2 === 0 ? "#0d1117" : "#0f1319",
         paddingX: 1,
+        border: sel ? ["left"] : [],
+        borderColor: sel ? "#38bdf8" : undefined,
+        customBorderChars: sel ? STYLE.BORDER_CHARS : undefined,
       });
 
       const topRow = new BoxRenderable(renderer, {
@@ -4859,7 +4862,7 @@ async function main() {
         gap: 1,
       });
       topRow.add(
-        new TextRenderable(renderer, { content: sel ? "▶" : " ", fg: "#fbbf24", width: 2 }),
+        new TextRenderable(renderer, { content: sel ? "▸" : " ", fg: "#38bdf8", width: 2 }),
       );
       topRow.add(
         new TextRenderable(renderer, {
@@ -4875,8 +4878,8 @@ async function main() {
       const isPinnedItem = userPinned && s.id === rootWatchedSession.id;
       const pinMark = isPinnedItem ? "📌 " : "";
       const titleDisplay = s.title
-        ? `📁 ${pinMark}${folder} — ${s.title}`
-        : `📁 ${pinMark}${folder}`;
+        ? `${pinMark}${folder} — ${s.title}`
+        : `${pinMark}${folder}`;
       topRow.add(
         new TextRenderable(renderer, {
           content: titleDisplay,
@@ -4913,14 +4916,14 @@ async function main() {
       });
       botRow.add(
         new TextRenderable(renderer, {
-          content: `🆔 ${s.id}`,
-          fg: sel ? "#93c5fd" : "#64748b",
+          content: `${s.id.slice(0, 12)}…`,
+          fg: sel ? "#93c5fd" : "#475569",
         }),
       );
       botRow.add(
         new TextRenderable(renderer, {
-          content: `🤖 ${s.model}`,
-          fg: sel ? "#fde047" : "#a78bfa",
+          content: `· ${s.model}`,
+          fg: sel ? "#fde047" : "#475569",
         }),
       );
       itemBox.add(botRow);
