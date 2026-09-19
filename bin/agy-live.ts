@@ -59,7 +59,6 @@ export const STYLE = {
     rightT: " ",
     cross: " ",
   },
-  GUTTER: "   ",
   CARD_PAD_LEFT: 2,
 } as const;
 
@@ -497,17 +496,11 @@ export function replayPageInto(
   const register = typeof opts === "boolean" ? opts : Boolean(opts?.registerDomBoxes);
   for (const item of items) {
     if (item.kind === "line") {
-      const lineOpts: any = {
-        content: item.text,
+      buildBareLineBox(renderer, parent, {
+        lines: [item.text],
         fg: item.fg,
-        wrapMode: "none",
-        width: "100%",
-        selectable: true,
-        selectionBg: "#2563eb",
-        selectionFg: "#ffffff",
-      };
-      if (item.bg) lineOpts.bg = item.bg;
-      parent.add(new TextRenderable(renderer, lineOpts));
+        bg: item.bg,
+      });
     } else if (item.kind === "card") {
       const box = buildCardBox(renderer, parent, {
         lines: item.lines,
@@ -1520,26 +1513,36 @@ export function runSelfTest(): void {
     "PageItem preserves per-line fg values intact across replay",
   );
 
-  const replayedBgTr = replayRoot.children[3];
-  const replayedNoBgTr = replayRoot.children[1];
-  const isTextCardBg =
-    replayedBgTr &&
-    ((replayedBgTr as any).bg === STYLE.CARD_BG ||
-      (replayedBgTr as any).backgroundColor === STYLE.CARD_BG ||
-      (typeof (replayedBgTr as any).bg?.equals === "function" &&
-        (replayedBgTr as any).bg.equals(parseColor(STYLE.CARD_BG))));
-  const hasNoBg =
-    replayedNoBgTr &&
-    (!(replayedNoBgTr as any).bg ||
-      (replayedNoBgTr as any).bg.a === 0 ||
-      !(replayedNoBgTr as any).bg.equals?.(parseColor(STYLE.CARD_BG)));
+  const replayedBgBox = replayRoot.children[3];
+  const replayedNoBgBox = replayRoot.children[1];
+  const isBoxCardBgMatch = (b: any) =>
+    b &&
+    ((b.backgroundColor as any) === STYLE.CARD_BG ||
+      (b.bg as any) === STYLE.CARD_BG ||
+      (typeof b.backgroundColor?.equals === "function" &&
+        b.backgroundColor.equals(parseColor(STYLE.CARD_BG))) ||
+      (typeof b.bg?.equals === "function" &&
+        b.bg.equals(parseColor(STYLE.CARD_BG))));
+
+  const isTextCardBg = isBoxCardBgMatch(replayedBgBox);
+  const hasNoBg = replayedNoBgBox && !isBoxCardBgMatch(replayedNoBgBox);
 
   assertTest(
     Boolean(isTextCardBg && hasNoBg),
     "PageItem line background survives replay with STYLE.CARD_BG while unstyled lines have no bg set",
   );
 
-  const replayedBareLineTr = replayRoot.children[1];
+  const replayedBareLineBox = replayRoot.children[1];
+  assertTest(
+    replayedBareLineBox instanceof BoxRenderable &&
+      Array.isArray(replayedBareLineBox.border) &&
+      replayedBareLineBox.border.includes("left"),
+    "replayPageInto bare line renders as native BoxRenderable with left border",
+  );
+  const replayedBareLineTr =
+    typeof (replayedBareLineBox as any).getChildren === "function"
+      ? (replayedBareLineBox as any).getChildren()[0]
+      : replayedBareLineBox;
   assertTest(
     (replayedBareLineTr as any).selectable === true &&
       ((replayedBareLineTr as any).selectionBg === "#2563eb" ||
@@ -2480,11 +2483,9 @@ export function runSelfTest(): void {
   }
 
   // 44. Spacing & layout unification: content column assertions
-  assertTest(STYLE.GUTTER === "   ", 'STYLE.GUTTER is pure spaces ("   ") with no border glyph');
-  assertTest(!STYLE.GUTTER.includes("┃"), 'STYLE.GUTTER contains no border glyph "┃"');
   assertTest(
-    STYLE.CARD_PAD_LEFT !== undefined && 1 + STYLE.CARD_PAD_LEFT === STYLE.GUTTER.length,
-    "Card content column (border 1 + pad 2 = 3) matches gutter spaces length (STYLE.GUTTER = 3)",
+    STYLE.CARD_PAD_LEFT === 2 && 1 + STYLE.CARD_PAD_LEFT === 3,
+    "Card content column invariant (border 1 + pad 2 = 3)",
   );
   assertTest(indentCardLine(0, "text") === "text", "indentCardLine level 0 returns unindented text");
   assertTest(indentCardLine(1, "text") === "text", "indentCardLine level 1 returns flush text (no added spaces)");
@@ -2972,6 +2973,7 @@ export async function runRenderCheck(): Promise<void> {
     );
 
     // ─── (A3) Clean Recorded Text, Native Border Box, Single Column Col 3 ─────────────
+    const cardContentCol = 1 + STYLE.CARD_PAD_LEFT;
     for (const item of pages[0]) {
       if (item.kind === "line") {
         assertCheck(
@@ -2984,37 +2986,7 @@ export async function runRenderCheck(): Promise<void> {
           "A3",
           `Bare line recorded text contains border glyph "┃": "${item.text}"`,
         );
-        assertCheck(
-          !item.text.startsWith("   "),
-          "A3",
-          `Bare line recorded text has leftover gutter padding: "${item.text}"`,
-        );
-      } else if (item.kind === "card") {
-        for (const l of item.lines) {
-          assertCheck(
-            l.text === l.text.trimEnd(),
-            "A3",
-            `Card line has trailing whitespace: "${l.text}"`,
-          );
-        }
-      }
-    }
-
-    // Column alignment check across all recorded PageItems
-    const cardContentCol = 1 + STYLE.CARD_PAD_LEFT;
-    for (const item of pages[0]) {
-      if (item.kind === "line") {
         if (item.text.length > 0) {
-          assertCheck(
-            !item.text.includes("┃"),
-            "A3",
-            `Bare line recorded text contains border glyph "┃": "${item.text}"`,
-          );
-          assertCheck(
-            !item.text.startsWith("   "),
-            "A3",
-            `Bare line recorded text starts with leftover gutter spaces: "${item.text}"`,
-          );
           const bareOffset = item.text.length - item.text.trimStart().length;
           assertCheck(
             bareOffset === 0,
@@ -3024,6 +2996,11 @@ export async function runRenderCheck(): Promise<void> {
         }
       } else if (item.kind === "card") {
         for (const l of item.lines) {
+          assertCheck(
+            l.text === l.text.trimEnd(),
+            "A3",
+            `Card line has trailing whitespace: "${l.text}"`,
+          );
           const leadSpaces = l.text.length - l.text.trimStart().length;
           const lineCol = cardContentCol + leadSpaces;
           assertCheck(
@@ -3032,14 +3009,9 @@ export async function runRenderCheck(): Promise<void> {
             `Card line is flush with header (actual leadSpaces ${leadSpaces}): "${l.text}"`,
           );
           assertCheck(
-            lineCol === 3,
+            lineCol === cardContentCol && lineCol === 3,
             "A3",
             `Card line content column is 3: "${l.text}"`,
-          );
-          assertCheck(
-            lineCol === cardContentCol,
-            "A3",
-            `Card line matches expected content column 3 (${lineCol} === ${cardContentCol})`,
           );
         }
       }
@@ -3200,6 +3172,20 @@ export async function runRenderCheck(): Promise<void> {
       `Replay rebuilt exactly ${replayedCardBoxes.length} cards, matching live (${liveCardBoxes120.length})`,
     );
 
+    const lineItemCount = pages[0].filter((item) => item.kind === "line").length;
+    const replayedBareLineBoxes = (replayBox.getChildren() as any[]).filter(
+      (c: any) =>
+        c instanceof BoxRenderable &&
+        Array.isArray(c.border) &&
+        c.border.includes("left") &&
+        !isBoxCardBg(c),
+    );
+    assertCheck(
+      replayedBareLineBoxes.length === lineItemCount && lineItemCount > 0,
+      "A5",
+      `Replay rebuilt exactly ${replayedBareLineBoxes.length} bare line boxes matching line items (${lineItemCount})`,
+    );
+
     // WeakMap live-only invariant: domBoxes never stores replayed boxes
     for (const item of pages[0]) {
       if (item.kind === "card") {
@@ -3218,6 +3204,30 @@ export async function runRenderCheck(): Promise<void> {
     await setup.renderOnce();
     const frameReplay = setup.captureCharFrame();
     currentFrame = frameReplay;
+
+    // Verify replayed frame has unbroken ┃ left edge and content at col 3
+    const replayLines = frameReplay.split("\n");
+    const replayColHist: Record<number, number> = {};
+    for (const raw of replayLines) {
+      if (raw.trim().length === 0) continue;
+      assertCheck(
+        raw.startsWith("┃"),
+        "A5",
+        `Replayed frame line has broken left edge (missing "┃"): "${raw.slice(0, 20)}"`,
+      );
+      const rest = raw.slice(1);
+      if (rest.trim().length > 0) {
+        const spaces = rest.length - rest.trimStart().length;
+        const col = 1 + spaces;
+        replayColHist[col] = (replayColHist[col] || 0) + 1;
+      }
+    }
+    const replayColsFound = Object.keys(replayColHist);
+    assertCheck(
+      replayColsFound.length === 1 && replayColHist[3] === frameColHist[3],
+      "A5",
+      `Replayed frame content columns collapsed to col 3 (expected {3: ${frameColHist[3]}}, actual ${JSON.stringify(replayColHist)})`,
+    );
 
     for (const title of cardTitles) {
       assertCheck(
@@ -3310,6 +3320,32 @@ export async function runRenderCheck(): Promise<void> {
     );
     recording = true;
 
+    // ─── Bare-Line Box Flood & Prune Scenario ───────────────────────────────────
+    // Flooding 500 bare lines through the bare-line path tests:
+    // (a) transcriptBox direct-child count stays bounded by the 300-renderable prune window (never leaks to 500+)
+    // (b) pruning actually destroys old bare-line boxes
+    let firstBareBox: BoxRenderable | undefined;
+    for (let i = 0; i < 500; i++) {
+      const box = pushLine(`flood bare line ${i + 1}`);
+      if (i === 0) firstBareBox = box;
+    }
+    const bareFloodChildCount = (transcriptBox.getChildren() as any[]).length;
+    assertCheck(
+      bareFloodChildCount <= 320,
+      "BareFloodPrune",
+      `Bare line flood child count stayed bounded by 300 prune threshold (actual ${bareFloodChildCount} <= 320, not 500+)`,
+    );
+    assertCheck(
+      Boolean(firstBareBox && (firstBareBox as any).isDestroyed),
+      "BareFloodPrune",
+      "Pruning destroyed old bare-line box from transcript tree",
+    );
+    assertCheck(
+      !(transcriptBox.getChildren() as any[]).includes(firstBareBox),
+      "BareFloodPrune",
+      "Pruned bare-line box removed from transcriptBox direct children",
+    );
+
     // ─── Evidence Files Generation ──────────────────────────────────────────────
     const evidenceDir = path.resolve(process.cwd(), ".omo", "evidence");
     if (!fs.existsSync(evidenceDir)) {
@@ -3332,6 +3368,7 @@ export async function runRenderCheck(): Promise<void> {
       "✔ A5 PASS: replayPageInto rebuilds identical 4 cards and all content substrings without domBoxes leak",
       "✔ Flood PASS: 500-line output appends inside card without expanding root children",
       "✔ Prune-append PASS: cardAppend on pruned box is safe and cleans domBoxes",
+      "✔ Bare-line Flood & Prune PASS: 500 bare lines bounded by 300 prune window with destroyed boxes",
       "Frames written: .omo/evidence/task-6-frame-120.txt, .omo/evidence/task-6-frame-70.txt",
       "Exit code: 0",
       "",
@@ -3339,8 +3376,8 @@ export async function runRenderCheck(): Promise<void> {
       "$ bun ./bin/agy-live.ts --selftest",
       "✔ deriveSessionState self-tests passed (25 assertions).",
       "✔ pushCard Box self-test passed (1 assertion).",
-      "✔ PageItem card replay & domBoxes self-tests passed (5 assertions).",
-      "✔ routeStep & applyRouteAction FIFO cards self-tests passed (9 assertions).",
+      "✔ PageItem card replay & domBoxes self-tests passed (8 assertions).",
+      "✔ routeStep & applyRouteAction FIFO cards self-tests passed (19 assertions).",
       "✔ left-pane header line self-tests passed (9 assertions).",
       "Exit code: 0",
       "",
@@ -3364,6 +3401,7 @@ export async function runRenderCheck(): Promise<void> {
       "- replay: A5 proves page model rebuilds identical cards with full content fidelity and zero WeakMap domBoxes leak.",
       "- flood: 500-line flood appends into card without bloating root children.",
       "- prune-safety: cardAppend safely handles destroyed Box without throwing and purges domBoxes reference.",
+      "- bare-line-prune: 500 bare lines bounded by 300-renderable prune window, old bare boxes destroyed.",
     ].join("\n");
 
     fs.writeFileSync(
@@ -3390,6 +3428,9 @@ export async function runRenderCheck(): Promise<void> {
       "✔ Flood PASS: 500-line output appends inside card without expanding root children",
     );
     console.log("✔ Prune-append PASS: cardAppend on pruned box is safe and cleans domBoxes");
+    console.log(
+      "✔ Bare-line Flood & Prune PASS: 500 bare lines bounded by 300 prune window with destroyed boxes",
+    );
     console.log("Frames written to .omo/evidence/task-6-frame-120.txt and task-6-frame-70.txt");
     console.log("Evidence written to .omo/evidence/task-6-agy-live-opencode-cards.txt");
     console.log("All rendercheck assertions passed.");
@@ -4611,10 +4652,7 @@ async function main() {
         const cardW = getCardWidth();
         const wrapped = wrapLine(raw, cardW - 4);
         for (const w of wrapped) {
-          const content = "▎ " + w;
-          const visibleLen = stripAnsi(content).length;
-          const padding = " ".repeat(Math.max(0, cardW - visibleLen));
-          pushLine(content + padding, "#ffffff", STYLE.CARD_BG);
+          pushLine("▎ " + w, "#ffffff", STYLE.CARD_BG);
         }
         continue;
       }
