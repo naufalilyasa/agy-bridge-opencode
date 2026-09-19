@@ -85,13 +85,13 @@ export function extractTruncationNotice(
 ): { cleanLines: string[]; truncationNotice: string | null } {
   const rawLines = content.split("\n");
   const cleanLines: string[] = [];
-  let truncationNotice: string | null = null;
-  const TRUNC_RE = /<truncated\s+([^>]+)>/i;
+  const notices: string[] = [];
+  const TRUNC_RE = /<truncated\s+(\d[\d,]*\s+(?:bytes|lines|chars))>/gi;
 
   for (const l of rawLines) {
-    const m = l.match(TRUNC_RE);
-    if (m) {
-      truncationNotice = `⚠️ [SOURCE TRUNCATED BY CLI — ${m[1]} omitted]`;
+    const matches = [...l.matchAll(TRUNC_RE)];
+    if (matches.length > 0) {
+      for (const m of matches) notices.push(m[1]);
       const stripped = l.replace(TRUNC_RE, "").trim();
       if (stripped) cleanLines.push(stripped);
     } else {
@@ -99,8 +99,12 @@ export function extractTruncationNotice(
     }
   }
 
-  if (!truncationNotice && Array.isArray(truncatedFields) && truncatedFields.includes("content")) {
-    truncationNotice = "⚠️ [SOURCE TRUNCATED BY CLI — content omitted]";
+  let truncationNotice: string | null = null;
+  if (notices.length > 0) {
+    const unique = [...new Set(notices)];
+    truncationNotice = `⚠️ [SOURCE TRUNCATED BY CLI — ${unique.join(", ")} omitted]`;
+  } else if (Array.isArray(truncatedFields) && truncatedFields.length > 0) {
+    truncationNotice = `⚠️ [SOURCE TRUNCATED BY CLI — ${truncatedFields.join(", ")} truncated upstream]`;
   }
 
   return { cleanLines, truncationNotice };
@@ -1243,24 +1247,28 @@ export function routeStep(
           });
         }
       } else {
-        const prefix = "↳ [Output] ";
         const indent = "           ";
-        for (let i = 0; i < cleanLines.length; i++) {
-          const l = cleanLines[i];
+        let headerEmitted = q.inBareOutput === true;
+        for (const l of cleanLines) {
           if (!l.trim()) {
             emit({ type: "bare", text: "", fg: "#94a3b8" });
             continue;
           }
-          if (!q.inBareOutput) {
-            emit({ type: "bare", text: `${prefix}${l.trimEnd()}`, fg: "#94a3b8" });
-            q.inBareOutput = true;
+          if (!headerEmitted) {
+            emit({ type: "bare", text: `↳ [Output] ${l.trimEnd()}`, fg: "#94a3b8" });
+            headerEmitted = true;
           } else {
             emit({ type: "bare", text: `${indent}${l.trimEnd()}`, fg: "#94a3b8" });
           }
         }
         if (truncationNotice) {
-          emit({ type: "bare", text: truncationNotice, fg: "#f59e0b" });
+          emit({
+            type: "bare",
+            text: headerEmitted ? `${indent}${truncationNotice}` : truncationNotice,
+            fg: "#f59e0b",
+          });
         }
+        q.inBareOutput = true;
         if (step.status !== "RUNNING") {
           q.inBareOutput = false;
         }
@@ -2111,8 +2119,8 @@ export function runSelfTest(): void {
   const targetWidthFn = ["getCard", "Width"].join("");
   const cardWidthMatches = selfSource.match(new RegExp(targetWidthFn, "g")) || [];
   assertTest(
-    cardWidthMatches.length === 3,
-    `T4 (h): ${targetWidthFn} matches ONLY definition + pushLine + renderMarkdown (found ${cardWidthMatches.length})`,
+    cardWidthMatches.length === 2,
+    `T4 (h): ${targetWidthFn} matches ONLY definition + renderMarkdown (found ${cardWidthMatches.length})`,
   );
 
   // 37. T4 QA flood test: 500-line output action-set into one card item
@@ -2942,7 +2950,7 @@ export function runSelfTest(): void {
   );
   const trunc2 = extractTruncationNotice("Prompt content", ["content"]);
   assertTest(
-    trunc2.truncationNotice === "⚠️ [SOURCE TRUNCATED BY CLI — content omitted]",
+    trunc2.truncationNotice === "⚠️ [SOURCE TRUNCATED BY CLI — content truncated upstream]",
     "extractTruncationNotice handles truncated_fields containing content (M4/D1)",
   );
 
@@ -3016,6 +3024,35 @@ export function runSelfTest(): void {
     "Tool output step emits truncation notice (M4/D1)",
   );
 
+  // (f) Multiple truncation markers are joined, not overwritten
+  const multiTrunc = extractTruncationNotice("a\n<truncated 100 bytes>\nb\n<truncated 200 bytes>");
+  assertTest(
+    multiTrunc.truncationNotice ===
+      "⚠️ [SOURCE TRUNCATED BY CLI — 100 bytes, 200 bytes omitted]",
+    "multiple truncation markers are joined in one notice (F4)",
+  );
+  assertTest(
+    multiTrunc.cleanLines.join("\n") === "a\nb" &&
+      !multiTrunc.cleanLines.some((l) => l.includes("<truncated")),
+    "all truncation markers are stripped from clean lines (F4)",
+  );
+
+  // (g) Non-numeric / non-byte markers must NOT be treated as CLI truncation (regex over-broad guard)
+  const falsePos = extractTruncationNotice("use the <truncated foo> helper in your code");
+  assertTest(
+    falsePos.truncationNotice === null &&
+      falsePos.cleanLines.join("\n") === "use the <truncated foo> helper in your code",
+    "non-numeric <truncated ...> text is not stripped nor flagged (F4 regex guard)",
+  );
+
+  // (h) truncated_fields fallback with no inline marker still yields a notice
+  const fieldTrunc = extractTruncationNotice("clean text", ["content", "thinking"]);
+  assertTest(
+    fieldTrunc.truncationNotice ===
+      "⚠️ [SOURCE TRUNCATED BY CLI — content, thinking truncated upstream]",
+    "truncated_fields fallback emits a notice naming the truncated fields (F4)",
+  );
+
   console.log("✔ deriveSessionState self-tests passed (25 assertions).");
   console.log("✔ pushCard Box self-test passed (1 assertion).");
   console.log("✔ PageItem card replay & domBoxes self-tests passed (8 assertions).");
@@ -3034,7 +3071,7 @@ export function runSelfTest(): void {
     "✔ bare-line polish (B1-B4: MCP card, uniform 1-row gap, default CARD_BG, single output label) self-tests passed (18 assertions).",
   );
   console.log(
-    "✔ transcript readability & fidelity (D1-D6 / M1-M5) self-tests passed (13 assertions).",
+    "✔ transcript readability & fidelity (D1-D6 / M1-M5) self-tests passed (17 assertions).",
   );
 }
 
@@ -3539,14 +3576,16 @@ export async function runRenderCheck(): Promise<void> {
     }
 
     // ─── (B2) Uniform 1-blank-row spacing invariant ─────────────────────────────
-    const borderLines = frame120.split("\n").filter((l) => l.startsWith("┃"));
-    for (let i = 0; i < borderLines.length - 1; i++) {
-      const isBlank1 = borderLines[i].replace(/^┃\s*$/, "") === "";
-      const isBlank2 = borderLines[i + 1].replace(/^┃\s*$/, "") === "";
+    const blockRows = frame120
+      .split("\n")
+      .filter((l) => l.startsWith("┃") || l.trim().length > 0);
+    for (let i = 0; i < blockRows.length - 1; i++) {
+      const isBlank1 = blockRows[i].replace(/^┃\s*$/, "") === "";
+      const isBlank2 = blockRows[i + 1].replace(/^┃\s*$/, "") === "";
       assertCheck(
         !(isBlank1 && isBlank2),
         "B2",
-        `Frame has consecutive blank border lines at rows ${i} and ${i + 1} (expected exactly 1 blank row between blocks)`,
+        `Frame has consecutive blank rows at blocks ${i} and ${i + 1} (expected exactly 1 blank row between blocks)`,
       );
     }
 
@@ -3636,9 +3675,9 @@ export async function runRenderCheck(): Promise<void> {
     const targetWidthFn = ["getCard", "Width"].join("");
     const cardWidthMatches = selfSource.match(new RegExp(targetWidthFn, "g")) || [];
     assertCheck(
-      cardWidthMatches.length === 3,
+      cardWidthMatches.length === 2,
       "A4",
-      `${targetWidthFn} referenced ONLY by definition + pushLine + renderMarkdown (found ${cardWidthMatches.length})`,
+      `${targetWidthFn} referenced ONLY by definition + renderMarkdown (found ${cardWidthMatches.length})`,
     );
 
     // ─── (A5) Page-Jump Replay Rebuilds Same Card Count ─────────────────────────
@@ -4046,6 +4085,30 @@ export async function runRenderCheck(): Promise<void> {
         );
       }
     }
+
+    const longToken = "A".repeat(300);
+    const longTokenLine = `${longToken} tail-after-token`;
+    const wrapSetup = await createTestRenderer({ width: 70, height: 30 });
+    const wrapRoot = new BoxRenderable(wrapSetup.renderer, { flexDirection: "column", width: "100%" });
+    wrapSetup.renderer.root.add(wrapRoot);
+    buildBareLineBox(wrapSetup.renderer, wrapRoot, {
+      lines: [longTokenLine],
+      fg: "#ffffff",
+    });
+    await wrapSetup.renderOnce();
+    const wrapFrame = wrapSetup.captureCharFrame();
+    const wrapRows = wrapFrame.split("\n").filter((l) => l.trim().length > 0);
+    assertCheck(
+      wrapRows.every((l) => l.trimEnd().length <= 70),
+      "Wrap",
+      `300-char unbreakable token wraps without exceeding 70 cols (max row ${Math.max(...wrapRows.map((l) => l.trimEnd().length), 0)})`,
+    );
+    assertCheck(
+      wrapRows.length > 1,
+      "Wrap",
+      `300-char token occupies multiple wrapped rows rather than one overflow row (rows ${wrapRows.length})`,
+    );
+    destroyRenderable(wrapRoot);
 
     fs.writeFileSync(path.join(evidenceDir, "AFTER-readability-frame-120.txt"), reproFrame120, "utf8");
     fs.writeFileSync(path.join(evidenceDir, "AFTER-bareline-frame-120.txt"), reproFrame120, "utf8");
@@ -5066,8 +5129,7 @@ async function main() {
     if (pageMode) return; // viewing an old page — record only, DOM untouched
     const formatted = formatMarkdownLinks(txt);
     const clean = stripAnsi(formatted) || " ";
-    const cardW = getCardWidth();
-    const lines = clean.length > cardW && !bg ? wrapLine(clean, cardW) : [clean];
+    const lines = [clean];
 
     const box = buildBareLineBox(renderer, scrollBox, {
       fg,
@@ -5479,11 +5541,17 @@ async function main() {
     if (step.type === "PLANNER_RESPONSE") {
       // Model Thinking
       if (step.thinking && typeof step.thinking === "string") {
-        const lines = capText(step.thinking).trim().split("\n");
+        const { cleanLines: thinkLines, truncationNotice: thinkTrunc } = extractTruncationNotice(
+          capText(step.thinking).trim(),
+          step.truncated_fields,
+        );
         const cardLines: { text: string; fg?: string; isTitle?: boolean }[] = [
           { text: "🧠 [Thinking]", fg: "#c084fc", isTitle: true },
-          ...lines.map((l) => ({ text: indentCardLine(1, l), fg: "#e5e7eb" })),
+          ...thinkLines.map((l) => ({ text: indentCardLine(1, l), fg: "#e5e7eb" })),
         ];
+        if (thinkTrunc) {
+          cardLines.push({ text: indentCardLine(1, thinkTrunc), fg: "#f59e0b" });
+        }
         pushCard(cardLines, "thinking");
       }
 
