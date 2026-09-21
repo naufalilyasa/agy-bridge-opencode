@@ -30,6 +30,7 @@ import {
   type WakeOptions,
   type WakeResult,
 } from "./team/runtime.js";
+import { deriveTranscriptState, resolveTranscriptPath } from "./session-state.js";
 
 export class AllModelsExhaustedError extends Error {
   readonly code = "ALL_MODELS_EXHAUSTED";
@@ -158,8 +159,9 @@ export function createToolHandler(
       if (tool.name === "get_session_status") {
         let sessionId: string | undefined;
         try {
-          const map = JSON.parse(await deps.readSessionsFile()) as Record<string, string>;
-          sessionId = map[path.resolve(cwd)] ?? map[cwd];
+          const map = JSON.parse(await deps.readSessionsFile()) as Record<string, any>;
+          const entry = map[path.resolve(cwd)] ?? map[cwd];
+          sessionId = typeof entry === "string" ? entry : entry?.sessionId;
         } catch {}
         if (!sessionId) {
           return {
@@ -171,24 +173,47 @@ export function createToolHandler(
             ],
           };
         }
+
+        const brainDir = path.join(os.homedir(), ".gemini", "antigravity-cli", "brain");
+        const logDir = path.join(brainDir, sessionId, ".system_generated", "logs");
+        const derived = deriveTranscriptState(logDir);
+
+        const directive =
+          derived.state === "running"
+            ? "→ AGY STILL RUNNING — WAIT"
+            : "→ AGY IS IDLE — SAFE TO FOLLOW UP";
+
+        let text =
+          `[agy-bridge] Active Session for ${cwd}:\n` +
+          `- session_id: ${sessionId}\n` +
+          `- State: ${derived.state} (age: ${derived.ageSec}s)\n` +
+          `- Last Step: ${derived.lastType ?? "unknown"} / ${derived.lastStatus ?? "unknown"}`;
+
+        if (derived.excerpt) {
+          text += ` — "${derived.excerpt}"`;
+        }
+        text += "\n";
+        if (derived.unfinished > 0) {
+          text += `- Unfinished Work: ${derived.unfinished} step(s)\n`;
+        }
+        text +=
+          `${directive}\n` +
+          `- Tip: Call 'follow_up' (session_id is optional) to continue this conversation without resending context.`;
+
         return {
           content: [
             {
               type: "text",
-              text:
-                `[agy-bridge] Active Session for ${cwd}:\n` +
-                `- session_id: ${sessionId}\n` +
-                `- Status: Ready for follow_up\n` +
-                `- Tip: Call 'follow_up' (session_id is optional) to continue this conversation without resending context.`,
+              text,
             },
           ],
         };
       }
 
       if (tool.name === "list_sessions") {
-        let map: Record<string, string> = {};
+        let map: Record<string, any> = {};
         try {
-          map = JSON.parse(await deps.readSessionsFile()) as Record<string, string>;
+          map = JSON.parse(await deps.readSessionsFile()) as Record<string, any>;
         } catch {}
 
         const entries = Object.entries(map);
@@ -203,30 +228,30 @@ export function createToolHandler(
         const lines: string[] = ["### 📋 Antigravity Sessions List\n"];
         const brainDir = path.join(os.homedir(), ".gemini", "antigravity-cli", "brain");
 
-        for (const [projPath, sessionId] of entries) {
+        for (const [projPath, val] of entries) {
+          const sessionId = typeof val === "string" ? val : val?.sessionId;
+          if (!sessionId) continue;
           const isCurrent = path.resolve(cwd) === path.resolve(projPath);
-          const transcriptPath = path.join(
-            brainDir,
-            sessionId,
-            ".system_generated",
-            "logs",
-            "transcript.jsonl",
-          );
+          const logDir = path.join(brainDir, sessionId, ".system_generated", "logs");
+          const derived = deriveTranscriptState(logDir);
+
           let lastActive = "Unknown";
           let totalSteps = "N/A";
 
+          const transcriptPath = resolveTranscriptPath(logDir);
           if (fs.existsSync(transcriptPath)) {
             try {
               const stat = fs.statSync(transcriptPath);
               lastActive = new Date(stat.mtimeMs).toLocaleString();
-              const buf = fs.readFileSync(transcriptPath, "utf8");
-              const stepCount = buf.trim().split("\n").length;
-              totalSteps = `${stepCount} steps`;
+              if (derived.stepCount !== undefined) {
+                totalSteps = `${derived.stepCount} steps`;
+              }
             } catch {}
           }
 
           lines.push(`- **${sessionId}** ${isCurrent ? "👉 *(CURRENT PROJECT)*" : ""}`);
           lines.push(`  - **Project Directory**: \`${projPath}\``);
+          lines.push(`  - **State**: \`${derived.state}\``);
           lines.push(`  - **Last Active**: ${lastActive} (${totalSteps})`);
           lines.push(
             `  - **Resume Command**: \`follow_up(session_id: "${sessionId}", question: "...")\``,
@@ -242,14 +267,25 @@ export function createToolHandler(
       let conversationId = args.session_id as string | undefined;
       if ((!conversationId || conversationId === "latest") && tool.name === "follow_up") {
         try {
-          const map = JSON.parse(await deps.readSessionsFile()) as Record<string, string>;
-          conversationId = map[path.resolve(cwd)] ?? map[cwd];
+          const map = JSON.parse(await deps.readSessionsFile()) as Record<string, any>;
+          const entry = map[path.resolve(cwd)] ?? map[cwd];
+          conversationId = typeof entry === "string" ? entry : entry?.sessionId;
         } catch {}
         if (!conversationId) {
           throw new Error(
             `No prior agy session found for directory "${cwd}". Use 'delegate' to start a new task first.`,
           );
         }
+      }
+
+      let resolvedStateNote: string | undefined;
+      if (tool.name === "follow_up" && conversationId) {
+        try {
+          const brainDir = path.join(os.homedir(), ".gemini", "antigravity-cli", "brain");
+          const logDir = path.join(brainDir, conversationId, ".system_generated", "logs");
+          const derived = deriveTranscriptState(logDir);
+          resolvedStateNote = `[agy-bridge session state: ${derived.state} (age: ${derived.ageSec}s)]`;
+        } catch {}
       }
 
       let roleKey = canonicalRoleKey((args.role as string) || "");
@@ -304,7 +340,8 @@ export function createToolHandler(
           `- If agentmemory tools are unavailable or return zero results, state it explicitly in your final answer ("MEMORY RECALL: 0 results" / "MEMORY SAVE: unavailable"). Silently skipping this step is a protocol violation.`;
       }
       const timeoutSec =
-        activeCfg.perToolTimeouts[tool.name] ?? (activeCfg.timeoutExplicit ? activeCfg.timeoutSec : tool.timeoutSec);
+        activeCfg.perToolTimeouts[tool.name] ??
+        (activeCfg.timeoutExplicit ? activeCfg.timeoutSec : tool.timeoutSec);
 
       const attempts: string[] = [];
       let result: RunResult | undefined;
@@ -363,10 +400,11 @@ export function createToolHandler(
       }
 
       const isTerminatedOrError = detectExecutionEcho(result.output);
+      const prefix = resolvedStateNote ? `${resolvedStateNote}\n\n` : "";
 
       if (isTerminatedOrError) {
         const errorText =
-          `${result.output}\n\n---\n` +
+          `${prefix}${result.output}\n\n---\n` +
           `[agy-bridge execution error detected]\n` +
           (result.sessionId ? `- Active session ID: "${result.sessionId}"\n` : "") +
           `- AUTONOMOUS RECOVERY REQUIRED: The previous agy process terminated with an error. Do NOT perform this work yourself and do NOT halt. You MUST immediately invoke 'follow_up' (session_id: "${result.sessionId || "latest"}") with your instructions to resume and complete the task automatically.`;
@@ -380,7 +418,11 @@ export function createToolHandler(
       const meta: string[] = [`model: ${used ?? "agy default"}`];
       const chainDisplay = resolution.models.filter(Boolean).join(" → ");
       if (chainDisplay) meta.push(`chain: ${chainDisplay}`);
-      if (used !== undefined && resolution.models[0] !== undefined && used !== resolution.models[0]) {
+      if (
+        used !== undefined &&
+        resolution.models[0] !== undefined &&
+        used !== resolution.models[0]
+      ) {
         meta.push(`⚠ downgraded from ${resolution.models[0]}`);
       }
       if (resolution.note) meta.push(`note: ${resolution.note}`);
@@ -401,15 +443,19 @@ export function createToolHandler(
 
       return {
         content: [
-          { type: "text", text: `${result.output}\n\n---\n[agy-bridge] ${meta.join(" | ")}` },
+          {
+            type: "text",
+            text: `${prefix}${result.output}\n\n---\n[agy-bridge] ${meta.join(" | ")}`,
+          },
         ],
       };
     } catch (err) {
       let sessionId: string | undefined;
       const reqCwd = (args.cwd as string | undefined) ?? process.cwd();
       try {
-        const map = JSON.parse(await deps.readSessionsFile()) as Record<string, string>;
-        sessionId = map[path.resolve(reqCwd)] ?? map[reqCwd];
+        const map = JSON.parse(await deps.readSessionsFile()) as Record<string, any>;
+        const entry = map[path.resolve(reqCwd)] ?? map[reqCwd];
+        sessionId = typeof entry === "string" ? entry : entry?.sessionId;
       } catch {}
 
       if (err instanceof IdleStallError) {

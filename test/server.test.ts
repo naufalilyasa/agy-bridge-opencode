@@ -24,7 +24,8 @@ const cfg: Config = {
   onFailure: "fallback",
 };
 
-const LISTING = "gemini-3.7-flash-high\tGemini 3.7 Flash (High)\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\ngemini-3.8-flash-high\n";
+const LISTING =
+  "gemini-3.7-flash-high\tGemini 3.7 Flash (High)\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\ngemini-3.8-flash-high\n";
 
 const LOG_429 =
   "E0613 log.go:398] agent executor error: RESOURCE_EXHAUSTED (code 429): " +
@@ -366,9 +367,7 @@ describe("createToolHandler", () => {
     expect(res.isError).toBe(true);
     const text = (res.content[0] as { text: string }).text;
     expect(text).toContain("ALL_MODELS_EXHAUSTED");
-    expect(text).toContain(
-      "Candidate models (gemini-3.7-flash-high, claude-sonnet-4-6)",
-    );
+    expect(text).toContain("Candidate models (gemini-3.7-flash-high, claude-sonnet-4-6)");
     expect(text).toMatch(/Retry after the quota resets, or pass an explicit `model`/i);
   });
 
@@ -442,7 +441,8 @@ describe("createToolHandler", () => {
     const text = (res.content[0] as { text: string }).text;
     expect(text).toContain("Active Session");
     expect(text).toContain("sess-1");
-    expect(text).toContain("Ready for follow_up");
+    expect(text).toContain("State: unknown");
+    expect(text).toContain("→ AGY IS IDLE — SAFE TO FOLLOW UP");
   });
 
   it("get_session_status returns no prior session message when cwd is not in session map", async () => {
@@ -490,8 +490,16 @@ describe("createToolHandler", () => {
     expect(text).toContain("### 📋 Antigravity Sessions List");
     expect(text).toContain("sess-current");
     expect(text).toContain("(CURRENT PROJECT)");
+    expect(text).toContain("- **State**: `unknown`");
     expect(text).toContain("sess-other");
     expect(text).toContain('follow_up(session_id: "sess-current"');
+  });
+
+  it("follow_up prepends derived-state note to output", async () => {
+    const f = fakeDeps();
+    const res = await handlerFor("follow_up", f)({ session_id: "abc", question: "more?" });
+    const text = (res.content[0] as { text: string }).text;
+    expect(text).toContain("[agy-bridge session state: unknown (age: 0s)]");
   });
 
   it("list_sessions handles corrupted sessions file gracefully", async () => {
@@ -614,7 +622,9 @@ describe("createToolHandler", () => {
       const res = await handler({ task: "do something", role: "totally-bogus" });
       expect(res.isError).toBe(true);
       const text = (res.content[0] as { text: string }).text;
-      expect(text).toContain("Unknown delegate role 'totally-bogus' (resolved: 'totally-bogus'). Valid canonical roles: ");
+      expect(text).toContain(
+        "Unknown delegate role 'totally-bogus' (resolved: 'totally-bogus'). Valid canonical roles: ",
+      );
       expect(text).toContain("git-master");
       expect(text).toContain("oracle");
     });
