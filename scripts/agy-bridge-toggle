@@ -1,90 +1,280 @@
 #!/usr/bin/env node
 // agy-bridge-toggle: switch OpenCode+OMO between agy-bridge mode (ON) and pure mode (OFF).
 // OFF = disable agy MCP, empty prompt_append gating rules, re-enable native agents,
-//       drop sisyphus tool whitelist. ON = restore from snapshot.
-// Usage: agy-bridge-toggle <on|off|status>
+//       drop agy-bridge tool whitelists from every agent. ON = restore from snapshot.
+// Usage: agy-bridge-toggle <on|off|status> [--force]
 // Shortcut wrappers: agy-bridge-on, agy-bridge-off, agy-bridge-status
+//
+// Config locations honour OPENCODE_CONFIG_DIR / OMO_CONFIG_DIR (same as install.sh).
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const OC = path.join(os.homedir(), ".config/opencode/opencode.jsonc");
-const OMO = path.join(os.homedir(), ".omo/omo.jsonc");
-const SNAP_DIR = path.join(os.homedir(), ".omo/.agy-toggle");
+const OPENCODE_CONFIG_DIR =
+  process.env.OPENCODE_CONFIG_DIR || path.join(os.homedir(), ".config/opencode");
+const OMO_CONFIG_DIR = process.env.OMO_CONFIG_DIR || path.join(os.homedir(), ".omo");
+const OC = path.join(OPENCODE_CONFIG_DIR, "opencode.jsonc");
+const OMO = path.join(OMO_CONFIG_DIR, "omo.jsonc");
+const SNAP_DIR = path.join(OMO_CONFIG_DIR, ".agy-toggle");
 const SNAP = path.join(SNAP_DIR, "omo.jsonc.on-snapshot");
+const OFF_SNAP = path.join(SNAP_DIR, "omo.jsonc.off-snapshot");
+const BACKUP_KEEP = 20;
+
+const AGY_TOOLS = new Set([
+  "analyze_files",
+  "deep_search",
+  "web_lookup",
+  "adversarial_review",
+  "delegate",
+  "follow_up",
+  "get_session_status",
+  "list_sessions",
+]);
 
 const read = (p) => fs.readFileSync(p, "utf8");
-const writeBak = (p) => {
-  fs.mkdirSync(SNAP_DIR, { recursive: true });
-  const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  fs.copyFileSync(p, path.join(SNAP_DIR, `${path.basename(p)}.pre-${ts}`));
-};
+
+// ── Comment/string-aware brace matcher (ported from merge-opencode-config.mjs) ──
+function findBlockEnd(text, openIdx) {
+  const open = text[openIdx];
+  if (open !== "{" && open !== "[") return -1;
+  const close = open === "{" ? "}" : "]";
+  let depth = 0,
+    inStr = false,
+    inLine = false,
+    inBlock = false;
+  for (let k = openIdx; k < text.length; k++) {
+    const c = text[k],
+      n = text[k + 1];
+    if (inLine) {
+      if (c === "\n") inLine = false;
+      continue;
+    }
+    if (inBlock) {
+      if (c === "*" && n === "/") {
+        inBlock = false;
+        k++;
+      }
+      continue;
+    }
+    if (inStr) {
+      if (c === "\\") k++;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "/" && n === "/") inLine = true;
+    else if (c === "/" && n === "*") inBlock = true;
+    else if (c === open) depth++;
+    else if (c === close) {
+      depth--;
+      if (depth === 0) return k;
+    }
+  }
+  return -1;
+}
+
+// Locate a `"key": { ... }` or `"key": [ ... ]` member at/after `from`.
+function findKeyBlock(text, key, from = 0) {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`"${escaped}"\\s*:`, "g");
+  re.lastIndex = from;
+  const m = re.exec(text);
+  if (!m) return null;
+  let i = m.index + m[0].length;
+  while (i < text.length && /\s/.test(text[i])) i++;
+  if (text[i] !== "{" && text[i] !== "[") return null;
+  const end = findBlockEnd(text, i);
+  if (end === -1) return null;
+  return { keyStart: m.index, open: i, end };
+}
+
+// The `"agy-bridge": { ... }` member inside the top-level `mcp` object.
+function agyBridgeBlock(text) {
+  const mcp = findKeyBlock(text, "mcp");
+  if (!mcp) return null;
+  const bridge = findKeyBlock(text, "agy-bridge", mcp.open);
+  if (!bridge || bridge.end > mcp.end) return null;
+  return bridge;
+}
 
 function ocEnabled(s) {
-  const i = s.indexOf('"agy-bridge"');
-  if (i === -1) return null;
-  const seg = s.slice(i, i + 600);
-  const m = seg.match(/"enabled":\s*(true|false)/);
+  const b = agyBridgeBlock(s);
+  if (!b) return "absent";
+  const seg = s.slice(b.open, b.end + 1);
+  const m = seg.match(/"enabled"\s*:\s*(true|false)/);
   return m ? m[1] === "true" : null;
 }
 
+// Set `enabled` inside the agy-bridge block only (never a sibling server).
+// Returns null when there is no agy-bridge block (caller must skip, not crash).
 function setOc(s, on) {
-  const i = s.indexOf('"agy-bridge"');
-  if (i === -1) throw new Error("agy-bridge block not found in opencode.jsonc");
-  const head = s.slice(0, i);
-  let seg = s.slice(i);
-  const before = seg;
-  seg = seg.replace(/("enabled":\s*)(true|false)/, `$1${on}`);
-  if (seg === before) throw new Error("enabled flag not found near agy-bridge");
-  return head + seg;
+  const b = agyBridgeBlock(s);
+  if (!b) return null;
+  const block = s.slice(b.open, b.end + 1);
+  let next;
+  if (/"enabled"\s*:\s*(true|false)/.test(block)) {
+    next = block.replace(/"enabled"\s*:\s*(true|false)/, `"enabled": ${on}`);
+  } else {
+    next = `{\n      "enabled": ${on},${block.slice(1)}`;
+  }
+  return s.slice(0, b.open) + next + s.slice(b.end + 1);
 }
 
 function omoLooksOn(s) {
-  return (
-    /"prompt_append": "(?!.")[^"]{10,}/.test(s) &&
-    !/"disabled_agents": \[\s*\]/.test(s.slice(0, s.indexOf("_migrations")))
-  );
+  const hasPromptAppend = /"prompt_append"\s*:\s*"[^"]{10,}"/.test(s);
+  const hasDisabledAgents = /"disabled_agents"\s*:\s*\[[^\]]+\]/.test(s);
+  const hasToolWhitelist = /"tools"\s*:\s*\{/.test(s);
+  return hasPromptAppend || hasDisabledAgents || hasToolWhitelist;
+}
+
+// Remove member [keyStart..end] plus one adjacent comma, cleanly.
+function removeMember(text, keyStart, end) {
+  let a = end + 1;
+  while (a < text.length && /\s/.test(text[a])) a++;
+  if (text[a] === ",") {
+    let s = keyStart;
+    while (s > 0 && /[ \t]/.test(text[s - 1])) s--;
+    if (s > 0 && text[s - 1] === "\n") s--;
+    return text.slice(0, s) + text.slice(a + 1);
+  }
+  let b = keyStart - 1;
+  while (b >= 0 && /\s/.test(text[b])) b--;
+  if (text[b] === ",") {
+    let s = b;
+    while (s > 0 && /[ \t]/.test(text[s - 1])) s--;
+    if (s > 0 && text[s - 1] === "\n") s--;
+    return text.slice(0, s) + text.slice(end + 1);
+  }
+  return text.slice(0, keyStart) + text.slice(end + 1);
+}
+
+// Remove specific `"key": bool` entries from inside a `{ ... }` block body.
+// JSONC tolerates trailing commas, so dropping whole entry lines stays valid.
+function removeInnerKeys(block, keys) {
+  let out = block;
+  for (const key of keys) {
+    const re = new RegExp(`[ \\t]*"${key}"\\s*:\\s*(?:true|false)\\s*,?[ \\t]*\\r?\\n`, "g");
+    if (re.test(out)) {
+      out = out.replace(re, "");
+      continue;
+    }
+    out = out.replace(new RegExp(`\\s*"${key}"\\s*:\\s*(?:true|false)\\s*,?`, "g"), "");
+  }
+  return out;
+}
+
+// Strip agy-bridge tool entries from every agent `"tools": { ... }` block.
+// An agy-only whitelist is removed entirely; a mixed whitelist keeps native tools.
+function stripAgyToolWhitelists(s) {
+  let searchFrom = 0;
+  for (;;) {
+    const re = /"tools"\s*:\s*\{/g;
+    re.lastIndex = searchFrom;
+    const m = re.exec(s);
+    if (!m) break;
+    const open = s.indexOf("{", m.index);
+    const end = findBlockEnd(s, open);
+    if (end === -1) break;
+    const block = s.slice(open, end + 1);
+    const keys = [...block.matchAll(/"([A-Za-z_][\w-]*)"\s*:/g)].map((x) => x[1]);
+    const agyKeys = keys.filter((k) => AGY_TOOLS.has(k));
+    if (agyKeys.length === 0) {
+      searchFrom = end + 1;
+      continue;
+    }
+    if (agyKeys.length === keys.length) {
+      s = removeMember(s, m.index, end);
+      searchFrom = m.index;
+      continue;
+    }
+    const newBlock = removeInnerKeys(block, agyKeys);
+    s = s.slice(0, open) + newBlock + s.slice(end + 1);
+    searchFrom = open + newBlock.length;
+  }
+  return s;
 }
 
 function toOffOmo(s) {
   // 1. Empty every prompt_append value (format-preserving, idempotent)
   s = s.replace(/^(\s*"prompt_append": ").*(",?)$/gm, "$1$2");
   // 2. disabled_agents -> []
-  s = s.replace(/("disabled_agents":\s*)\[[^\]]*\]/, "$1[]");
-  // 3. Remove sisyphus tools whitelist block ("tools": { ... }) after "sisyphus": {
-  const si = s.indexOf('"sisyphus"');
-  if (si !== -1) {
-    const ti = s.indexOf('"tools"', si);
-    const agentEnd = (() => {
-      let d = 0;
-      for (let k = si; k < s.length; k++) {
-        if (s[k] === "{") d++;
-        else if (s[k] === "}") {
-          d--;
-          if (d === 0) return k;
-        }
-      }
-      return -1;
-    })();
-    if (ti !== -1 && ti < agentEnd) {
-      let d = 0,
-        end = -1;
-      for (let k = s.indexOf("{", ti); k < s.length; k++) {
-        if (s[k] === "{") d++;
-        else if (s[k] === "}") {
-          d--;
-          if (d === 0) {
-            end = k;
-            break;
-          }
-        }
-      }
-      if (end !== -1) {
-        s = s.slice(0, ti).replace(/[ \t]+$/, "") + s.slice(end + 1).replace(/^\s*,/, "");
-      }
+  s = s.replace(/("disabled_agents"\s*:\s*)\[[^\]]*\]/, "$1[]");
+  // 3. Drop agy-bridge tool whitelists from every agent
+  s = stripAgyToolWhitelists(s);
+  return s;
+}
+
+// ── Safe IO: atomic writes, mode preservation, bounded backups ─────────────────
+function atomicWrite(p, data, mode) {
+  let m = mode;
+  if (m === undefined) {
+    try {
+      m = fs.statSync(p).mode & 0o777;
+    } catch {
+      m = 0o600;
     }
   }
-  return s;
+  const tmp = path.join(path.dirname(p), `.${path.basename(p)}.tmp-${process.pid}-${Date.now()}`);
+  fs.writeFileSync(tmp, data, { mode: m });
+  fs.renameSync(tmp, p);
+}
+
+function mkdirSecure(dir) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+}
+
+function pruneBackups(base) {
+  let entries;
+  try {
+    entries = fs.readdirSync(SNAP_DIR);
+  } catch {
+    return;
+  }
+  const mine = entries
+    .filter((e) => e.startsWith(`${base}.pre-`))
+    .sort()
+    .reverse();
+  for (const old of mine.slice(BACKUP_KEEP)) {
+    try {
+      fs.unlinkSync(path.join(SNAP_DIR, old));
+    } catch {}
+  }
+}
+
+function writeBak(p) {
+  mkdirSecure(SNAP_DIR);
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const base = path.basename(p);
+  const dst = path.join(SNAP_DIR, `${base}.pre-${ts}`);
+  fs.copyFileSync(p, dst);
+  try {
+    fs.chmodSync(dst, 0o600);
+  } catch {}
+  pruneBackups(base);
+}
+
+const force = process.argv.includes("--force");
+
+function setOcIfPossible(p, on, label) {
+  if (!fs.existsSync(p)) return;
+  const cur = read(p);
+  const st = ocEnabled(cur);
+  if (st === "absent") {
+    console.log("opencode.jsonc: no agy-bridge MCP block found — skipping");
+    return;
+  }
+  if (st === on) {
+    console.log(`opencode.jsonc: already ${on ? "on" : "off"}`);
+    return;
+  }
+  const next = setOc(cur, on);
+  if (next === null) {
+    console.log("opencode.jsonc: no agy-bridge MCP block found — skipping");
+    return;
+  }
+  writeBak(p);
+  atomicWrite(p, next);
+  console.log(`opencode.jsonc: agy-bridge MCP ${label}`);
 }
 
 const cmd = process.argv[2];
@@ -109,47 +299,62 @@ if (cmd === "status") {
         : "STATE: MIXED — run 'on' or 'off' to normalize",
   );
 } else if (cmd === "off") {
-  if (fs.existsSync(OC) && ocEnabled(read(OC)) !== false) {
-    writeBak(OC);
-    fs.writeFileSync(OC, setOc(read(OC), "false"));
-    console.log("opencode.jsonc: agy-bridge MCP disabled");
-  } else console.log("opencode.jsonc: already off");
-  if (!fs.existsSync(SNAP) && fs.existsSync(OMO)) {
-    fs.mkdirSync(SNAP_DIR, { recursive: true });
-    fs.writeFileSync(SNAP, read(OMO));
-    console.log("ON-state snapshot saved");
-  } else console.log("ON snapshot kept (already exists)");
+  setOcIfPossible(OC, false, "disabled");
   if (fs.existsSync(OMO)) {
+    if (!fs.existsSync(SNAP) && omoLooksOn(read(OMO))) {
+      mkdirSecure(SNAP_DIR);
+      atomicWrite(SNAP, read(OMO), 0o600);
+      console.log("ON-state snapshot saved");
+    } else if (fs.existsSync(SNAP)) {
+      console.log("ON snapshot kept (already exists)");
+    } else {
+      console.log("ON snapshot NOT saved (omo.jsonc is not in ON state) — skipping");
+    }
     writeBak(OMO);
-    fs.writeFileSync(OMO, toOffOmo(read(OMO)));
-    console.log("omo.jsonc: gating rules stripped, native agents re-enabled, whitelist dropped");
+    const offContent = toOffOmo(read(OMO));
+    atomicWrite(OMO, offContent);
+    atomicWrite(OFF_SNAP, offContent, 0o600);
+    console.log("omo.jsonc: gating rules stripped, native agents re-enabled, whitelists dropped");
   }
   console.log("\nRestart OpenCode sessions to apply.");
 } else if (cmd === "on") {
   if (!fs.existsSync(SNAP)) {
     if (fs.existsSync(OMO) && omoLooksOn(read(OMO))) {
-      fs.mkdirSync(SNAP_DIR, { recursive: true });
-      fs.writeFileSync(SNAP, read(OMO));
+      mkdirSecure(SNAP_DIR);
+      atomicWrite(SNAP, read(OMO), 0o600);
       console.log("Seeded ON-state snapshot from current omo.jsonc");
     } else {
-      throw new Error(
-        `No ON snapshot at ${SNAP}. Please run installer or configure omo.jsonc first.`,
+      console.error(
+        `Error: No ON snapshot at ${SNAP}. Please run installer or configure omo.jsonc first.`,
       );
+      process.exit(1);
     }
   }
-  if (fs.existsSync(OC) && ocEnabled(read(OC)) !== true) {
-    writeBak(OC);
-    fs.writeFileSync(OC, setOc(read(OC), "true"));
-    console.log("opencode.jsonc: agy-bridge MCP enabled");
-  } else console.log("opencode.jsonc: already on");
+  setOcIfPossible(OC, true, "enabled");
   if (fs.existsSync(OMO)) {
-    writeBak(OMO);
-    fs.copyFileSync(SNAP, OMO);
-    console.log("omo.jsonc: restored ON state from snapshot");
+    const snapContent = read(SNAP);
+    const cur = read(OMO);
+    if (cur === snapContent) {
+      console.log("omo.jsonc: already restored to ON state");
+    } else {
+      const offSnap = fs.existsSync(OFF_SNAP) ? read(OFF_SNAP) : null;
+      if (offSnap && cur !== offSnap && !force) {
+        console.error("Error: omo.jsonc has changed since 'off' (manual edits detected).");
+        console.error(`  current  : ${OMO}`);
+        console.error(`  off-snap : ${OFF_SNAP}`);
+        console.error(
+          "Refusing to overwrite. Re-run with --force to discard those edits, or reconcile manually.",
+        );
+        process.exit(1);
+      }
+      writeBak(OMO);
+      atomicWrite(OMO, snapContent);
+      console.log("omo.jsonc: restored ON state from snapshot");
+    }
   }
   console.log("\nRestart OpenCode sessions to apply.");
 } else {
-  console.log("usage: agy-bridge-toggle <on|off|status>");
+  console.log("usage: agy-bridge-toggle <on|off|status> [--force]");
   console.log("  or:  agy-bridge-on, agy-bridge-off, agy-bridge-status");
   process.exit(1);
 }
