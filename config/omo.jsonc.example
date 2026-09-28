@@ -2,7 +2,10 @@
 {
   "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/omo.schema.json",
   "[opencode]": {
-    // Nonaktifkan semua sub-agent internal OMO — alihkan 100% ke agy-bridge
+    // Nonaktifkan semua sub-agent internal OMO — alihkan 100% ke agy-bridge.
+    // Disabling sisyphus-junior is deliberate: tool-execute-before.ts:109-115 force-rewrites
+    // task(category=...) to sisyphus-junior, so category-based task delegation and team
+    // category members will not work. This consequence is accepted under agy-bridge-only routing.
     "disabled_agents": [
       "oracle",
       "librarian",
@@ -10,6 +13,7 @@
       "multimodal-looker",
       "metis",
       "momus",
+      "sisyphus-junior",
     ],
     "agents": {
       // --- CORE ORCHESTRATION & PLANNING AGENTS (100% AGY-BRIDGE POWERED) ---

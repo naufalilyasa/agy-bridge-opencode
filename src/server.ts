@@ -333,10 +333,15 @@ export function createToolHandler(
 
       const MEMORY_EXEMPT_TOOLS = new Set(["get_session_status", "list_sessions"]);
       if (!MEMORY_EXEMPT_TOOLS.has(tool.name) && !prompt.includes("RECALL MEMORY DIRECTIVE")) {
+        // Derive project from cwd. Note: path.resolve does not follow symlinks.
+        const derivedProject = cwd ? path.basename(path.resolve(cwd)) : "";
+        const projectDirective = derivedProject
+          ? ` (always include the project field: Project: ${derivedProject})`
+          : ` (always include the project field)`;
         prompt +=
           `\n\n## MEMORY PROTOCOL - MANDATORY, NEVER SKIP\n` +
           `- BEFORE starting work: query \`agentmemory\` via \`memory_recall\` and/or \`memory_smart_search\` for concepts relevant to this task.\n` +
-          `- BEFORE your final answer: persist key learnings via \`memory_save\` (always include the project field).\n` +
+          `- BEFORE your final answer: persist key learnings via \`memory_save\`${projectDirective}.\n` +
           `- If agentmemory tools are unavailable or return zero results, state it explicitly in your final answer ("MEMORY RECALL: 0 results" / "MEMORY SAVE: unavailable"). Silently skipping this step is a protocol violation.`;
       }
       const timeoutSec =
@@ -427,6 +432,8 @@ export function createToolHandler(
       }
       if (resolution.note) meta.push(`note: ${resolution.note}`);
       if (attempts.length) meta.push(`failover: ${attempts.join("; ")}`);
+      const len = result.output.length;
+      meta.push(`out: ${len >= 1000 ? (len / 1000).toFixed(1) + "k" : len} chars`);
       if (result.sessionId) meta.push(`session: ${result.sessionId} (use follow_up to continue)`);
 
       // ponytail: sessions file is last-writer-wins per cwd; role inheritance is best-effort (latest delegate wins); explicit follow_up session_id+role always wins.

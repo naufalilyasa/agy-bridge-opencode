@@ -16,6 +16,14 @@ come back. Prefer delegating over doing it yourself when:
 Do NOT delegate: small single-file edits, questions you can answer from
 context already loaded, or tasks needing tools only you have.
 
+## Routing Policy: agy-bridge Only (No Local OMO Sub-Agents)
+
+**ALL internal OMO sub-agents are disabled — all 7 subagent-mode agents**: `oracle`, `librarian`, `explore`, `multimodal-looker`, `metis`, `momus`, `sisyphus-junior`. Route ALL delegation — heavy AND light — through agy-bridge MCP tools. Do NOT tell agents to use local OMO sub-agents (they are off).
+
+- **4 Primary Agents stay ENABLED**: `sisyphus`, `hephaestus`, `prometheus`, and `atlas` stay enabled because OpenCode needs them to run.
+- **Six colliding names (agy-bridge role always wins)**: `explore`, `oracle`, `librarian`, `metis`, `momus`, and `multimodal-looker` exist in both the OMO sub-agent catalog and agy-bridge `OMO_ROLES`. Under this policy, the **agy-bridge role always wins** — there is no local OMO lane.
+- **`sisyphus-junior` trade-off (ACCEPTED consequence)**: `sisyphus-junior` is deliberately disabled. Because OMO (`tool-execute-before.ts:109-115`) force-rewrites every `task(category=...)` call to `subagent_type: "sisyphus-junior"`, and team-mode lists `sisyphus-junior` as eligible, disabling it means **category-based task delegation (`task(category=...)`) and team category members will NOT work**. This consequence is intentional and accepted under the agy-bridge-only policy. Do NOT re-enable `sisyphus-junior`.
+
 ## Routing: tools vs delegate (different lanes)
 
 Tools and delegate are different lanes, not alternatives. Default reflex

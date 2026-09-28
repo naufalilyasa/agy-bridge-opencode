@@ -655,7 +655,7 @@ export const TOOLS: ToolDef[] = [
     },
     chain: ["gemini-3.7-flash-high", "claude-sonnet-4-6"],
     timeoutSec: 600,
-    buildPrompt(args) {
+    buildPrompt(args, cwd = "") {
       const q = (args.instruction as string) || (args.question as string);
       if (!q) {
         throw new Error("follow_up requires either `question` or `instruction`.");
@@ -676,6 +676,28 @@ export const TOOLS: ToolDef[] = [
 
       if (args.save_memory) {
         prompt += `\n\n## SAVE MEMORY DIRECTIVE — MANDATORY\nBefore your final answer, you MUST persist key findings via \`memory_save\` (always include the project field). Skipping counts as an incomplete task; if tools are unavailable, state "MEMORY SAVE: unavailable" explicitly.`;
+        if (
+          typeof args.save_memory === "object" &&
+          args.save_memory !== null &&
+          !Array.isArray(args.save_memory)
+        ) {
+          prompt += "\n";
+          const sm = args.save_memory as Record<string, any>;
+          if (sm.type) prompt += `- Type: ${sm.type}\n`;
+          if (sm.concepts && Array.isArray(sm.concepts) && sm.concepts.length > 0) {
+            prompt += `- Concepts: ${sm.concepts.join(", ")}\n`;
+          }
+          // Derive project from cwd if absent. Note: path.resolve does not follow symlinks.
+          const derivedProject = cwd ? path.basename(path.resolve(cwd)) : "";
+          const project =
+            sm.project !== undefined && sm.project !== ""
+              ? sm.project
+              : (derivedProject || undefined);
+          if (project) prompt += `- Project: ${project}\n`;
+          if (sm.summary) prompt += `- Summary: ${sm.summary}\n`;
+        } else if (typeof args.save_memory === "string") {
+          prompt += `\n- Guidance: ${args.save_memory}\n`;
+        }
       }
 
       return prompt;
@@ -962,7 +984,13 @@ export const TOOLS: ToolDef[] = [
             if (sm.concepts && Array.isArray(sm.concepts) && sm.concepts.length > 0) {
               p += `- Concepts: ${sm.concepts.join(", ")}\n`;
             }
-            if (sm.project) p += `- Project: ${sm.project}\n`;
+            // Derive project from cwd if absent. Note: path.resolve does not follow symlinks.
+            const derivedProject = cwd ? path.basename(path.resolve(cwd)) : "";
+            const project =
+              sm.project !== undefined && sm.project !== ""
+                ? sm.project
+                : (derivedProject || undefined);
+            if (project) p += `- Project: ${project}\n`;
             if (sm.summary) p += `- Summary: ${sm.summary}\n`;
           } else if (typeof saveMemory === "string") {
             p += `- Guidance: ${saveMemory}\n`;

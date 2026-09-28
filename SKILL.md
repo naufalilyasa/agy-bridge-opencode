@@ -19,6 +19,16 @@ only the answers come back, never the intermediate files or tool spam.
 
 ---
 
+## ROUTING POLICY: AGY-BRIDGE ONLY
+
+**All 7 internal OMO sub-agents are disabled:** `oracle`, `librarian`, `explore`, `multimodal-looker`, `metis`, `momus`, `sisyphus-junior`. Route **ALL** delegation — heavy AND light — through agy-bridge MCP tools (`delegate`, `analyze_files`, `deep_search`, `web_lookup`, `adversarial_review`). Do NOT attempt or advise using local OMO sub-agents; they are disabled in configuration.
+
+- **4 Primary Agents stay ENABLED:** `sisyphus`, `hephaestus`, `prometheus`, and `atlas` remain enabled because OpenCode requires them for session execution and orchestration.
+- **Six Colliding Names (agy-bridge role always wins):** The roles `explore`, `oracle`, `librarian`, `metis`, `momus`, and `multimodal-looker` exist in both the OMO sub-agent catalog and agy-bridge's `OMO_ROLES`. Under the agy-bridge-only policy, there is no local OMO lane — the **agy-bridge role always wins**. Always dispatch them via agy-bridge (`delegate(role=...)`).
+- **`sisyphus-junior` Trade-off (ACCEPTED consequence):** The user deliberately chose to disable `sisyphus-junior`. In OMO (`tool-execute-before.ts:109-115`), every `task(category=...)` call is force-rewritten to `subagent_type: "sisyphus-junior"`, and team-mode lists `sisyphus-junior` as eligible. Disabling it means **category-based task delegation (`task(category=...)`) and team category members will NOT work**. This is an intentional, accepted consequence under the agy-bridge-only policy (delegation must go through agy-bridge tools). Future agents must NOT attempt to "fix" this by re-enabling `sisyphus-junior`.
+
+---
+
 ## MCP TOOL REFERENCE
 
 ### 1. `delegate` — autonomous execution (timeout 600s default, env-overridable)
@@ -42,9 +52,11 @@ web) in the given `cwd`. **The primary workhorse tool.**
 | `save_memory`                  | Instruction to persist findings to agentmemory BEFORE final answer.         |
 | `cwd`                          | Working directory for the subagent (defaults to server cwd).                |
 
-**Supported roles (19):** `git-master`, `oracle`, `librarian`, `explore`, `momus`, `metis`,
+**Supported roles (18):** `git-master`, `oracle`, `librarian`, `explore`, `momus`, `metis`,
 `multimodal-looker`, `ultrabrain`, `deep`, `visual-engineering`, `artistry`,
 `writing`, `quick`, `tester`, `reviewer`, `security`, `devops`, `product`.
+
+**Accepted aliases (9):** `git_master`/`git`→`git-master`, `looker`→`multimodal-looker`, `qa`→`tester`, `code-reviewer`→`reviewer`, `security-auditor`→`security`, `sisyphus`→`deep`, `atlas`→`ultrabrain`, `sisyphus-junior`→`quick` — note aliases resolve silently to their canonical role.
 
 **Recommended role by task:**
 
@@ -56,13 +68,25 @@ web) in the given `cwd`. **The primary workhorse tool.**
 | Plan / diff review (approval-biased, OKAY/REJECT)                | `momus`, `reviewer`    |
 | Goal-oriented deep research + implementation                     | `deep`                 |
 | UI / Compose / styling                                           | `visual-engineering`   |
+| Screenshots / images / chart reading                             | `multimodal-looker`    |
 | Security audit / vulnerability                                   | `security`             |
-| Unit / integration tests & QA                                    | `tester`, `qa`         |
+| Unit / integration tests & QA                                    | `tester` (alias: `qa`) |
 | Technical writing / ADR / PRD                                    | `writing`, `product`   |
 | Build / Gradle / CI-CD                                           | `devops`               |
 | Fast, low-effort task                                            | `quick`                |
 | Creative / unconventional solution                               | `artistry`             |
 | Broad repo exploration                                           | `explore`              |
+| Library / API docs, remote code lookup                           | `librarian`            |
+
+### Mixed task → split it
+
+If one task blends roles, split into separate delegations per role:
+
+| Subtask                         | Role                |
+| :------------------------------ | :------------------ |
+| API verification                | `tester`            |
+| Playwright / screenshot capture | `tester`            |
+| Chart / image interpretation    | `multimodal-looker` |
 
 **Canonical 6-section example:**
 
@@ -215,9 +239,21 @@ Find a session ID to pass to `follow_up`.
 
 ## SESSION TRAILER
 
-Every working tool response ends with a metadata trailer so you can resume:
-`[agy-bridge] model: <model> | session: <session_id>`
-Capture the `session_id` — pass it to `follow_up` for iterative work without resending context.
+Every working tool response ends with a metadata trailer summarizing execution details and session continuity:
+
+```
+[agy-bridge] model: <model> | chain: <a → b → c> | ⚠ downgraded from <model> | note: <note> | failover: <attempts> | out: <n> chars | session: <id> (use follow_up to continue)
+```
+
+**Trailer fields:**
+
+- `model: <model>` — The active model that produced the response (or `agy default`).
+- `chain: <a → b → c>` — The configured fallback chain evaluated for this role/tool.
+- `⚠ downgraded from <model>` — Emitted when the primary model hit quota/error and execution fell back.
+- `note: <note>` — Informational routing or environment notes (e.g. cooldown/override).
+- `failover: <attempts>` — Semicolon-delimited record of failed attempts prior to success.
+- `out: <n> chars` — Output character count.
+- `session: <id> (use follow_up to continue)` — Active session identifier. Capture this ID and pass it to `follow_up` for iterative work without resending context (hint: `follow_up` accepts `session_id: "latest"` to auto-continue the last session for the cwd).
 
 ## ERROR RECOVERY
 

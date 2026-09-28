@@ -26,9 +26,11 @@ export const AgyDelegateGuardPlugin = async () => {
         if (isHeavyBashCommand(cmd)) {
           output.message =
             '[agy-guard] NOTICE: Heavy exploration/git search detected in bash. ' +
-            'If you are an exploratory/analysis subagent (oracle, librarian, explore, momus, metis), ' +
-            'you are REQUIRED to use agy-bridge MCP tools (deep_search, analyze_files, web_lookup) ' +
-            'instead of running heavy shell commands in local context.';
+            'If you are the main agent, delegate heavy work to agy-bridge MCP tools ' +
+            '(deep_search, analyze_files, web_lookup, delegate) — all local OMO sub-agents ' +
+            'are disabled, so no local fallback exists. If you are an exploratory/analysis ' +
+            'subagent, you are REQUIRED to use agy-bridge MCP tools instead of running ' +
+            'heavy shell commands in local context.';
         }
       }
     },

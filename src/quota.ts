@@ -90,6 +90,24 @@ export function detectExecutionEcho(text: string): boolean {
   return true;
 }
 
+const PROGRESS_LINE_RE =
+  /^Waiting (?:for|on) .*(?:complete|notification|finished)[. …]*(?:\(.*\))?$/i;
+
+export function sanitizeProgress(text: string): string {
+  if (!text) return text;
+  const lines = text.split(/\r?\n/);
+  const kept = lines.filter((line) => {
+    const stripped = line.replace(ANSI_RE, "").replace(/\r/g, "").trim();
+    return !PROGRESS_LINE_RE.test(stripped);
+  });
+  const filtered = kept.join("\n").trim();
+  if (!filtered) {
+    return text;
+  }
+  return filtered;
+}
+
+
 export class QuotaError extends Error {
   readonly resetSeconds?: number;
   readonly resetText?: string;

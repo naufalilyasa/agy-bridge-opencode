@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Config } from "./config.js";
-import { detectQuota, detectQuotaEcho, QuotaError } from "./quota.js";
+import { detectQuota, detectQuotaEcho, QuotaError, sanitizeProgress } from "./quota.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -451,7 +451,7 @@ export async function runAgy(
     void deps.removeLog(logPath).catch(() => {});
   });
 
-  const { text, truncated } = truncate(stdout, cfg.maxOutputChars);
+  const { text, truncated } = truncate(sanitizeProgress(stdout), cfg.maxOutputChars);
 
   let sessionId: string | undefined;
   try {
